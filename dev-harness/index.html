@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tk-review harness</title>
+    <script>
+      // Surfaces failures into the page. Worker and highlighter problems tend to
+      // degrade quietly, so make them loud here. Stays invisible when clean.
+      window.__errors = [];
+      const record = (label, detail) => {
+        window.__errors.push(`${label}: ${detail}`);
+        const box = document.getElementById("errors");
+        if (!box) return;
+        box.textContent = window.__errors.join("\n---\n");
+        box.style.display = "block";
+      };
+      window.addEventListener("error", (event) =>
+        record("error", (event.error && (event.error.stack || event.error.message)) || event.message),
+      );
+      window.addEventListener("unhandledrejection", (event) =>
+        record(
+          "rejection",
+          (event.reason && (event.reason.stack || event.reason.message)) || String(event.reason),
+        ),
+      );
+      const originalError = console.error;
+      console.error = (...args) => {
+        record("console.error", args.map((arg) => arg?.stack || String(arg)).join(" "));
+        originalError.apply(console, args);
+      };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <pre
+      id="errors"
+      style="
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 9999;
+        display: none;
+        max-height: 30vh;
+        margin: 0;
+        overflow: auto;
+        color: #fff;
+        background: #a11;
+      "
+    ></pre>
+    <script type="module" src="/dev-harness/main.tsx"></script>
+  </body>
+</html>

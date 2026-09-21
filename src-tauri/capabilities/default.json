@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions needed by the review window: core APIs plus the folder picker.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-set-title", "dialog:allow-open"]
+}

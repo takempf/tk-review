@@ -1,0 +1,38 @@
+.stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+.files {
+  color: var(--text-dim);
+}
+
+.additions {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--added);
+}
+
+.deletions {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--deleted);
+}
+
+.bar {
+  display: block;
+  flex: none;
+  width: 44px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--deleted);
+  border-radius: 2px;
+}
+
+.barAdded {
+  display: block;
+  height: 100%;
+  background: var(--added);
+}

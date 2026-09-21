@@ -1,0 +1,77 @@
+.compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.repoName {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.button {
+  padding: 3px var(--space-3);
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.button:hover {
+  background: var(--bg-hover);
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Full-window state shown before any repository is chosen. */
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--space-5);
+  text-align: center;
+}
+
+.heroTitle {
+  margin: 0;
+  font-size: 22px;
+}
+
+.heroHint {
+  max-width: 34em;
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.heroButton {
+  padding: var(--space-2) var(--space-5);
+  font-size: 14px;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+}
+
+.heroButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.heroError {
+  max-width: 40em;
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+  color: var(--danger);
+  white-space: pre-wrap;
+  background: var(--danger-bg);
+  border-radius: var(--radius);
+}

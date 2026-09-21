@@ -1,0 +1,136 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.toolbarLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toggleGroup {
+  display: flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.toggleButton {
+  padding: 2px var(--space-2);
+  background: var(--bg);
+  border: none;
+}
+
+.toggleButton:hover {
+  background: var(--bg-hover);
+}
+
+.toggleButtonActive {
+  composes: toggleButton;
+  color: #fff;
+  background: var(--accent);
+}
+
+.toggleButtonActive:hover {
+  background: var(--accent);
+}
+
+/*
+ * CodeView mounts straight onto this element and treats it as its scroll root:
+ * it reads `scrollTop` from it and listens for `scroll` on it, but never sets
+ * `overflow` itself. Without a scrollable box here the whole review is stuck.
+ *
+ * Only the vertical axis: each file's code area handles its own horizontal
+ * scrolling, so allowing it here too would add a second, redundant scrollbar.
+ */
+.surface {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  /* The renderer draws into a shadow root, which its own styles cannot reach
+     from here — but custom properties do inherit across that boundary, and it
+     reads these two for its code and file-header fonts. */
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-ui);
+}
+
+/*
+ * Marks the file chosen in the sidebar with a border down its whole left edge.
+ *
+ * Item containers come from a recycled element pool and carry no identifying
+ * attribute, so they can't be selected by path. Instead `renderHeaderPrefix`
+ * renders a marker only for the selected file, the library wraps it in a
+ * `<div slot="header-prefix">` in the light DOM, and `:has()` styles the
+ * container holding it.
+ *
+ * Every item reserves the border as transparent so colouring it shifts nothing
+ * sideways as the selection moves. A border rather than an inset shadow because
+ * the border sits outside the padding box, where the diff's own row backgrounds
+ * can't paint over it.
+ */
+.surface diffs-container {
+  border-left: 3px solid transparent;
+}
+
+.surface diffs-container:has(> div[slot="header-prefix"]) {
+  border-left-color: var(--accent);
+}
+
+/* Sits in the file header, so it must stay clickable and compact. */
+.viewedToggle {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.viewedToggle:hover {
+  color: var(--text);
+}
+
+.viewedToggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The marker node itself never needs to paint — the container's border is the
+   whole effect — so keep the wrapper out of the header's layout. `:has()` still
+   matches it while it isn't rendered. */
+.surface div[slot="header-prefix"] {
+  display: none;
+}
+
+.message {
+  padding: var(--space-5);
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.binaryNote {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}

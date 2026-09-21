@@ -1,0 +1,188 @@
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.inputGroup {
+  display: flex;
+  align-items: center;
+  /* Callers that need another width set the variable on a wrapper. */
+  width: var(--combobox-width, 300px);
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.inputGroup:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: none;
+  border: none;
+}
+
+.input:focus {
+  outline: none;
+}
+
+.trigger {
+  display: flex;
+  flex: none;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  background: none;
+  border: none;
+}
+
+.trigger:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  transition: transform 120ms ease;
+}
+
+/* Width only: the viewBox aspect ratio supplies the height, keeping the triangle
+   equilateral. */
+.chevron {
+  display: block;
+  width: 9px;
+  fill: currentcolor;
+}
+
+/* Base UI marks the trigger while the list is open. */
+.trigger[data-popup-open] .icon {
+  transform: rotate(180deg);
+}
+
+.positioner {
+  z-index: 20;
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+
+  /*
+   * Sized to the longest ref rather than to the input: branch names vary wildly
+   * and truncating every one to the field's width hides the part that
+   * distinguishes them. Floored at the input's width so it never looks detached,
+   * and capped so one absurd name can't stretch it across the window — whichever
+   * of 500px and the room the positioner actually has is smaller. Past that,
+   * individual items ellipsize.
+   */
+  width: max-content;
+  min-width: var(--anchor-width);
+  max-width: min(500px, var(--available-width));
+
+  /* Never taller than the space the positioner actually has. */
+  max-height: min(320px, var(--available-height));
+  overflow: hidden;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  transform-origin: var(--transform-origin);
+}
+
+.popup[data-starting-style],
+.popup[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
+}
+
+.popup {
+  transition:
+    opacity 100ms ease,
+    transform 100ms ease;
+}
+
+.list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.groupLabel {
+  padding: var(--space-1) var(--space-3);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.group + .group .groupLabel {
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 3px var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+}
+
+/* Keyboard and pointer highlight share one appearance. */
+.item[data-highlighted] {
+  background: var(--bg-selected);
+}
+
+.itemText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.indicator {
+  flex: none;
+  color: var(--accent);
+}
+
+.empty {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+}
+
+.useRaw {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.useRaw:hover {
+  background: var(--bg-hover);
+}

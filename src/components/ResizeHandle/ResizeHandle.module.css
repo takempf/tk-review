@@ -1,0 +1,90 @@
+/* Rendered as an <hr>, hence the border/margin reset. */
+.handle {
+  position: absolute;
+  z-index: 1;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+
+.handle::after {
+  position: absolute;
+  content: "";
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.handle:hover::after,
+.handle:focus-visible::after {
+  opacity: 1;
+}
+
+.handle:focus-visible {
+  outline: none;
+}
+
+/* Changes a width: a vertical grab strip straddling a left or right edge. */
+.horizontal {
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+}
+
+.horizontal.end {
+  right: 0;
+  transform: translateX(50%);
+}
+
+.horizontal.start {
+  left: 0;
+  transform: translateX(-50%);
+}
+
+.horizontal::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+}
+
+/* Changes a height: a horizontal grab strip straddling a top or bottom edge. */
+.vertical {
+  right: 0;
+  left: 0;
+  height: 9px;
+  cursor: row-resize;
+}
+
+.vertical.end {
+  bottom: 0;
+  transform: translateY(50%);
+}
+
+.vertical.start {
+  top: 0;
+  transform: translateY(-50%);
+}
+
+.vertical::after {
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+/* Applied to <body> for the duration of a drag. `user-select` inherits, which
+   stops the pointer selecting text as it sweeps across the panes. */
+.resizingX {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.resizingY {
+  cursor: row-resize;
+  user-select: none;
+}

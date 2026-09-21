@@ -1,0 +1,17 @@
+.textarea {
+  /* Not covered by the global control reset, which predates this component. */
+  box-sizing: border-box;
+}
+
+/*
+ * An attribute rather than a second class: these have to beat the `resize` and
+ * `overflow` a call site's own stylesheet may set, and which of the two CSS
+ * modules the bundler emits first is not ours to decide. How tall the field may
+ * grow before it scrolls stays with the call site, as a `max-height` — that is
+ * a question about the space around the field, not about growing.
+ */
+.textarea[data-grow] {
+  /* The height is the script's to set; a drag handle would only fight it. */
+  resize: none;
+  overflow-y: auto;
+}

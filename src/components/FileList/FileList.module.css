@@ -1,0 +1,242 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+
+.progress {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Nesting is expressed by row padding, not by indenting the lists themselves,
+   so hover and selection still span the full width at every depth. */
+.list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+/*
+ * Only the outline of a folder is drawn — a rule above its header and one below
+ * its last file. Sibling groups would otherwise stack two rules on the seam
+ * between them, and a group ending in a nested group would double up the same
+ * way, so each of those drops the redundant edge.
+ */
+.group {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.group + .group {
+  border-top: none;
+}
+
+.group:has(> .list > .group:last-child) {
+  border-bottom: none;
+}
+
+/* The panel heading already draws the line the topmost group would repeat. */
+.scroll > .list > .group:first-child {
+  border-top: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+.itemSelected {
+  composes: item;
+  background: var(--bg-selected);
+}
+
+.itemSelected:hover {
+  background: var(--bg-selected);
+}
+
+.row {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-2);
+  overflow: hidden;
+  text-align: left;
+  background: none;
+  border: none;
+}
+
+.badge {
+  flex: none;
+  width: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  border-radius: 3px;
+}
+
+.badgeAdded {
+  composes: badge;
+  color: var(--added);
+  background: var(--added-bg);
+}
+
+.badgeModified {
+  composes: badge;
+  color: var(--modified);
+  background: var(--modified-bg);
+}
+
+.badgeDeleted {
+  composes: badge;
+  color: var(--deleted);
+  background: var(--deleted-bg);
+}
+
+.badgeRenamed {
+  composes: badge;
+  color: var(--renamed);
+  background: var(--renamed-bg);
+}
+
+.badgeOther {
+  composes: badge;
+  color: var(--text-dim);
+  background: var(--bg-sunken);
+}
+
+.dir {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  overflow: hidden;
+  color: var(--text-dim);
+  text-align: left;
+  background: none;
+  border: none;
+}
+
+.dir:hover {
+  background: var(--bg-hover);
+}
+
+/* Width only: the viewBox aspect ratio supplies the height, keeping the triangle
+   equilateral. */
+.chevron {
+  flex: none;
+  width: 9px;
+  fill: var(--text-faint);
+}
+
+.chevronShut {
+  composes: chevron;
+  transform: rotate(-90deg);
+}
+
+.folder {
+  flex: none;
+  width: 13px;
+  fill: var(--text-faint);
+}
+
+.dirLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Folded folders say how much is hidden, so nothing goes silently missing. */
+.hidden {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nameViewed {
+  composes: name;
+  opacity: 0.5;
+}
+
+.generated {
+  flex: none;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+
+.counts {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.additions {
+  color: var(--added);
+}
+
+.deletions {
+  color: var(--deleted);
+}
+
+.binary {
+  color: var(--text-faint);
+}
+
+.viewed {
+  flex: none;
+  margin: 0;
+  cursor: pointer;
+}
+
+.empty {
+  padding: var(--space-5) var(--space-3);
+  color: var(--text-dim);
+  text-align: center;
+}

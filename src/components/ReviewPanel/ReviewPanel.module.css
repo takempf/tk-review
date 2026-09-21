@@ -1,0 +1,766 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.section {
+  flex: none;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+}
+
+.sectionToggle {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: none;
+  border: none;
+}
+
+.sectionChevron {
+  flex: none;
+}
+
+.sectionBody {
+  min-width: 0;
+}
+
+/* Keep a busy PR's description and conversation usable without displacing the
+ * AI review below it. The header stays in view while the PR content scrolls.
+ * Open, the section's flex-basis is set inline from the dragged height; it may
+ * still shrink so the AI section below keeps its minimum. */
+.prSection {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.prSection .sectionBody {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The AI section owns the remaining panel height, keeping its findings
+ * scrollable even when a PR has a long conversation. */
+.section:last-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 160px;
+}
+
+.section:last-child .sectionBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.prTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refreshPr {
+  flex: none;
+  padding: 0 var(--space-1);
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: none;
+  border: none;
+}
+
+.refreshPr:disabled {
+  opacity: 0.6;
+}
+
+.prName,
+.subheading,
+.muted,
+.prMoved {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.prName {
+  padding: var(--space-2) var(--space-3) 0;
+  font-weight: 600;
+}
+
+.prDescription {
+  margin: var(--space-3);
+  overflow: hidden;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.muted {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+}
+
+.prMarkdown {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-dim);
+}
+
+.prCommentMarkdown {
+  margin-top: 2px;
+  color: var(--text-dim);
+}
+
+.prMarkdown,
+.prCommentMarkdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.prMarkdown > :first-child,
+.prCommentMarkdown > :first-child {
+  margin-top: 0;
+}
+
+.prMarkdown > :last-child,
+.prCommentMarkdown > :last-child {
+  margin-bottom: 0;
+}
+
+.prMarkdown p,
+.prMarkdown ul,
+.prMarkdown ol,
+.prMarkdown pre,
+.prMarkdown blockquote,
+.prMarkdown table,
+.prCommentMarkdown p,
+.prCommentMarkdown ul,
+.prCommentMarkdown ol,
+.prCommentMarkdown pre,
+.prCommentMarkdown blockquote,
+.prCommentMarkdown table {
+  margin: 0 0 var(--space-2);
+}
+
+.prMarkdown h1,
+.prMarkdown h2,
+.prMarkdown h3,
+.prMarkdown h4,
+.prMarkdown h5,
+.prMarkdown h6 {
+  margin: var(--space-3) 0 var(--space-1);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.prCommentMarkdown h1,
+.prCommentMarkdown h2,
+.prCommentMarkdown h3,
+.prCommentMarkdown h4,
+.prCommentMarkdown h5,
+.prCommentMarkdown h6 {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.prMarkdown code,
+.prCommentMarkdown code {
+  padding: 1px 3px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.prMarkdown pre,
+.prCommentMarkdown pre {
+  padding: var(--space-2);
+  overflow-x: auto;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+}
+
+.prMarkdown pre code,
+.prCommentMarkdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.prMarkdown a,
+.prCommentMarkdown a {
+  color: var(--accent);
+}
+
+.prMarkdown img,
+.prCommentMarkdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+.prMarkdown blockquote,
+.prCommentMarkdown blockquote {
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border-strong);
+}
+
+.prMarkdown details,
+.prCommentMarkdown details {
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.prMarkdown summary,
+.prCommentMarkdown summary {
+  cursor: pointer;
+}
+
+.prMarkdown .task-list-item-checkbox,
+.prCommentMarkdown .task-list-item-checkbox {
+  margin: 0 var(--space-1) 0 0;
+  pointer-events: none;
+}
+
+.prMarkdown table,
+.prCommentMarkdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.prMarkdown th,
+.prMarkdown td,
+.prCommentMarkdown th,
+.prCommentMarkdown td {
+  padding: 3px var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--border);
+}
+
+.prMoved {
+  padding: var(--space-2) var(--space-3) 0;
+  color: var(--modified);
+}
+
+.prDiscussion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.subheading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.prComment {
+  padding: var(--space-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.prAuthor {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.inlineGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.inlineGroup + .inlineGroup {
+  margin-top: var(--space-3);
+}
+
+.inlinePath {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  text-align: left;
+  background: none;
+  border: none;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewButton {
+  flex: none;
+  padding: 2px var(--space-2);
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+}
+
+.reviewButton:disabled {
+  opacity: 0.5;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Sits alongside the engine and model fields; a mode switch, not a command. */
+.explainToggle {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.explainToggle:hover {
+  color: var(--text);
+}
+
+.explainToggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.explainToggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.selectWrap {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.engineSelect {
+  min-width: 0;
+  padding: 3px var(--space-4) 3px var(--space-2);
+  color: var(--text);
+  appearance: none;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.engineSelect:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Mirrors the combobox trigger's equilateral triangle. */
+.selectChevron {
+  position: absolute;
+  right: var(--space-1);
+  width: 9px;
+  pointer-events: none;
+  fill: var(--text-dim);
+}
+
+/* The model combobox fills whatever the engine select leaves of the row. */
+.modelField {
+  flex: 1;
+  min-width: 0;
+  --combobox-width: 100%;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3);
+  overflow-y: auto;
+}
+
+.reviewedWith {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.status {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.summary {
+  margin: 0;
+}
+
+.prComposer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin: var(--space-2) 0;
+}
+
+.postButton,
+.composerCancel {
+  flex: none;
+  padding: 2px var(--space-2);
+  font: inherit;
+  border-radius: var(--radius);
+}
+
+.postButton {
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+}
+
+.postButton:disabled,
+.composerCancel:disabled {
+  opacity: 0.5;
+}
+
+.postedLink {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.composerEditor {
+  display: flex;
+  flex: 1 0 100%;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.composerInput {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 88px;
+  padding: var(--space-2);
+  resize: vertical;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.composerInput:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.composerNote,
+.composerWarning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.composerWarning {
+  color: var(--modified);
+}
+
+.composerActions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.composerCancel {
+  color: var(--text-dim);
+  background: none;
+  border: 1px solid var(--border-strong);
+}
+
+/* One conversation: comments, pending marker, then the ask box. */
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.commentUser,
+.commentAgent {
+  min-width: 0;
+}
+
+.commentAuthor {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.commentUser .commentAuthor {
+  color: var(--accent);
+}
+
+.commentAgent .commentAuthor {
+  color: var(--text-faint);
+}
+
+.commentText {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.commentAgent .commentText {
+  color: var(--text-dim);
+}
+
+.commentPending {
+  margin: 0;
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+.commentForm {
+  display: flex;
+  gap: var(--space-1);
+  /* The field grows downward, so the button rides its bottom edge and stays
+     beside the line being typed rather than drifting up with the box. */
+  align-items: flex-end;
+}
+
+.commentInput {
+  flex: 1;
+  min-width: 0;
+  padding: 2px var(--space-2);
+  line-height: 1.5;
+  /* Six lines, then it scrolls: long enough for a real paragraph, short enough
+     that the conversation above it stays on screen. Must match the padding. */
+  max-height: calc(6 * 1.5em + 4px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.commentInput:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.commentSend {
+  flex: none;
+  padding: 2px var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.commentSend:disabled {
+  opacity: 0.5;
+}
+
+.error {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius);
+}
+
+.errorText {
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.errorDismiss {
+  padding: 0 var(--space-2);
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: var(--radius);
+  opacity: 0.8;
+}
+
+.errorDismiss:hover {
+  opacity: 1;
+}
+
+.findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding {
+  padding: var(--space-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.findingMeta {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  margin-bottom: var(--space-1);
+}
+
+.severity {
+  flex: none;
+  padding: 0 var(--space-1);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius);
+}
+
+.severity_critical {
+  color: var(--deleted);
+  background: var(--deleted-bg);
+}
+
+.severity_warning {
+  color: var(--modified);
+  background: var(--modified-bg);
+}
+
+.severity_suggestion {
+  color: var(--renamed);
+  background: var(--renamed-bg);
+}
+
+.severity_nit,
+.severity_neutral {
+  color: var(--text-dim);
+  background: var(--bg-sunken);
+}
+
+/* Re-review verdicts on prior findings, worn on the same chip as a severity.
+   Green is deliberately reserved for "addressed" — nothing else in the panel
+   celebrates. An unrecognised status falls back to the neutral chip. */
+.status_addressed {
+  color: var(--added);
+  background: var(--added-bg);
+}
+
+.status_unaddressed {
+  color: var(--deleted);
+  background: var(--deleted-bg);
+}
+
+.status_partial {
+  color: var(--modified);
+  background: var(--modified-bg);
+}
+
+.status_obsolete,
+.status_neutral {
+  color: var(--text-dim);
+  background: var(--bg-sunken);
+}
+
+/* Explanations reuse the finding card — same column, same reading rhythm — and
+   are separated from the block of findings below them. */
+.explanations {
+  margin-bottom: var(--space-3);
+}
+
+/* What tells an explanation apart from a finding at a glance: every severity
+   chip is filled, so this one is outlined instead of competing for a colour. */
+.explainTag {
+  composes: severity;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid var(--border-strong);
+}
+
+.findingPath,
+.findingPathPlain {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.findingPath {
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.findingPath:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.findingTitle {
+  margin: 0 0 var(--space-1);
+  font-weight: 600;
+}
+
+.findingBody {
+  margin: 0;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
