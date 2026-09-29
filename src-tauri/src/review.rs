@@ -23,6 +23,60 @@ use crate::github::PrContext;
 /// diff.
 const MAX_TURNS: &str = "30";
 
+/// How every prose field the agent writes should read. Shared by all the
+/// prompts so the review, the explanation, and replies sound like one
+/// reviewer. The app renders these fields as GitHub Markdown, and findings can
+/// be posted to the pull request as-is, so Markdown is safe to ask for.
+const WRITING_GUIDANCE: &str = r#"How to write:
+
+Your readers are busy engineers fitting this in between other work. Most read the first one to three sentences of anything and skim the rest, so write for that. Saving the reader's time is the goal of every rule below:
+- Lead with the point. A reader who stops after the first sentence should still know what matters and what to do.
+- Keep every paragraph to one to three short sentences. When there is more to say, start a new paragraph or, usually better, a list.
+- Sentences that carry file paths, identifiers, or jargon are slower to read, so keep those shorter still. Move the specifics out of the sentence and into a list or code block rather than stringing them through the prose.
+- Prefer plain words. Say what happens to the user or the code ("uploads fail", "the cache never expires") before explaining the mechanism.
+- One idea per piece. Two unrelated problems are two findings, not one long one.
+- Cut what the reader can see for themselves: don't restate the diff, don't narrate how you investigated, don't hedge every sentence.
+- When deep technical detail is needed, keep it but make it skimmable: the claim first, then the specifics as a list or a small code block. Never bury the conclusion under the detail.
+
+Lists are the default for anything with more than one part, so use them liberally:
+- A numbered list for anything ordered: steps to reproduce, a call path, a sequence of events, the order to fix things in.
+- A bulleted list for parallel items: cases, conditions, affected files, options.
+- Keep each item to a line or two, and never nest more than one level deep.
+
+Your prose is rendered as GitHub-flavored Markdown. Beyond lists, use it where it makes the text easier to read, not as decoration:
+- `inline code` for identifiers, file paths, flags, and literal values.
+- A fenced code block with a language tag for a suggested fix or any snippet longer than a few tokens.
+- **Bold** sparingly, for the one phrase a skimmer must not miss.
+- No headings: these are comments, not documents.
+A single plain sentence is often the right answer. Don't force structure onto something short.
+
+For example, instead of one dense paragraph:
+
+> `fetchUser` in `src/api/client.ts` now retries on every error including 4xx responses, which means a request rejected for bad credentials is retried twice more with backoff by `withRetry`, so the login form hangs for about seven seconds before showing the error, and the extra attempts also count against the rate limit.
+
+write:
+
+> A wrong password now takes about seven seconds to report.
+>
+> `fetchUser` retries every failure, including 4xx responses that can never succeed:
+> 1. The login request is rejected with a 401.
+> 2. `withRetry` tries twice more, with backoff.
+> 3. The form shows the error only after the last attempt.
+>
+> The extra attempts also count against the rate limit. Retry only network errors and 5xx responses.
+
+Before you answer, reread every piece of prose you wrote. Split any paragraph longer than three sentences, and turn any sentence that lists three or more things into a list.
+
+Your prose may be posted as a GitHub pull request comment, where GitHub turns certain text patterns into links and notifications. Use this on purpose, and never by accident:
+- `#123` links to issue or pull request 123 in this repository. Never write `#1`, `#2`, etc. to mean "the first finding" or "item 2" — it links to an unrelated pull request. Refer to other findings by what they are about (e.g. "the null-check finding in `parser.ts`") or say "finding 1" without the `#`.
+- `@name` mentions and notifies that user or team. Only write `@name` when you mean to ping someone; wrap decorators, npm scopes, and similar in backticks (`@Injectable`, `@types/node`).
+- A 7+ character hex string that matches a commit becomes a link to that commit. Cite a commit by its short SHA when it helps the reader; don't write hex strings that aren't commit references outside backticks.
+- `owner/repo#123` and full GitHub URLs to issues, pull requests, commits, or lines also become links. Text inside `inline code` or fenced code blocks is never autolinked."#;
+
+/// The JSON prompts' addendum to `WRITING_GUIDANCE`: Markdown lives inside
+/// string values, and titles stay plain because the app shows them as labels.
+const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values, with newlines escaped as `\\n` as JSON requires. Titles are plain text: no Markdown in a `title`, and ideally no more than ten words.";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
@@ -200,7 +254,7 @@ You have two jobs, in order:
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
 {{
-  "summary": "Two or three sentences: how the earlier findings fared, and where the remaining risk is.",
+  "summary": "One to three short sentences: how the earlier findings fared, and where the remaining risk is.",
   "resolutions": [
     {{
       "index": 0,
@@ -220,6 +274,12 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 }}
 
 `resolutions` must have exactly one entry per numbered finding, using its number as `index`. `line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. Include new findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, and do not report style nits a formatter would catch. An empty findings array is a valid answer when nothing new is wrong.
+
+A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+
+{WRITING_GUIDANCE}
+
+{JSON_MARKDOWN_NOTE} Keep each `note` to a sentence or two.
 
 The diff:
 
@@ -320,11 +380,15 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ]
 }}
 
-For `overall`: what the change accomplishes, the shape of the approach, and how the pieces fit together — which files are the heart of the change and which are fallout (renames, plumbing, test updates). One or two paragraphs.
+For `overall`: what the change accomplishes, the shape of the approach, and how the pieces fit together — which files are the heart of the change and which are fallout (renames, plumbing, test updates). One to three sentences, or a sentence followed by a short list when the change has several distinct parts.
 
-For each file: open with a clause of context on what the file does in this codebase, then say what changed in it and why. Let length follow complexity — two to five sentences for a typical file, a short paragraph for a genuinely tricky one, a single line for a mechanical rename. Include every file in the diff that carries real meaning; group trivia (lockfiles, generated output) into a one-liner on one of them rather than padding. Skip binary files. Use the compare-side path exactly as the diff spells it.
+For each file: open with a clause of context on what the file does in this codebase, then say what changed in it and why. Let length follow complexity — one to three sentences for a typical file, a sentence and then a short list for a genuinely tricky one, a single line for a mechanical rename. Include every file in the diff that carries real meaning; group trivia (lockfiles, generated output) into a one-liner on one of them rather than padding. Skip binary files. Use the compare-side path exactly as the diff spells it.
 
 Write for someone competent who has not seen this code before. Prefer concrete nouns from the codebase over generic description.
+
+{WRITING_GUIDANCE}
+
+{JSON_MARKDOWN_NOTE}
 
 The diff:
 
@@ -477,7 +541,7 @@ fn build_reply_prompt(
     }
 
     prompt.push_str(&format!(
-        "The user's new comment:\n\n{comment}\n\nYou are running inside the repository — use your file reading and search tools when checking the code would improve your answer. Reply directly to the user's comment in plain text: no JSON, no headings, no restating the finding. Be concrete and concise, and if the user shows you were wrong, say so plainly."
+        "The user's new comment:\n\n{comment}\n\nYou are running inside the repository — use your file reading and search tools when checking the code would improve your answer. Reply directly to the user's comment: no JSON, no restating the finding, no preamble. Answer the question they asked first, and if the user shows you were wrong, say so plainly.\n\n{WRITING_GUIDANCE}"
     ));
     prompt
 }
@@ -495,7 +559,7 @@ You are running inside the repository the diff belongs to. Use your file reading
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
 {{
-  "summary": "Two or three sentences on the overall shape of the change and where the risk is.",
+  "summary": "One to three short sentences on the overall shape of the change and where the risk is.",
   "findings": [
     {{
       "path": "path/as/it/appears/in/the/diff",
@@ -508,6 +572,12 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 }}
 
 `line` is the new-file line number the finding anchors to, or null when it applies to the file as a whole. Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Include findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch. An empty findings array is a valid answer for a clean diff.
+
+A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+
+{WRITING_GUIDANCE}
+
+{JSON_MARKDOWN_NOTE}
 
 The diff:
 
@@ -1034,6 +1104,33 @@ mod tests {
         assert!(prompt.contains("diff --git a/src/a.ts"), "{prompt}");
     }
 
+    #[test]
+    fn every_prompt_carries_the_writing_guidance() {
+        let patch = "diff --git a/src/a.ts b/src/a.ts";
+        let finding = ReviewFinding {
+            path: "src/a.ts".into(),
+            line: Some(12),
+            severity: "warning".into(),
+            title: "Off-by-one in loop bound.".into(),
+            body: "The loop misses the last element.".into(),
+        };
+        let json_prompts = [
+            build_prompt(Some("feature"), patch, None),
+            build_re_review_prompt(Some("feature"), "Summary.", &[finding.clone()], patch, None),
+            build_explain_prompt(Some("feature"), patch, None),
+        ];
+        for prompt in &json_prompts {
+            assert!(prompt.contains(WRITING_GUIDANCE), "{prompt}");
+            assert!(prompt.contains(JSON_MARKDOWN_NOTE), "{prompt}");
+            // Guidance is framing, so it belongs ahead of the diff.
+            assert!(prompt.ends_with(patch), "{prompt}");
+        }
+
+        let reply = build_reply_prompt(Some("feature"), "Summary.", Some(&finding), &[], "Why?", patch, None);
+        assert!(reply.contains(WRITING_GUIDANCE), "{reply}");
+        assert!(!reply.contains("plain text"), "{reply}");
+    }
+
     fn sample_pr() -> PrContext {
         PrContext {
             url: "https://github.com/acme/widgets/pull/7".into(),
@@ -1222,9 +1319,9 @@ mod tests {
         );
         assert!(prompt.contains("No findings, no verdicts"), "{prompt}");
         // Length guidance is what keeps a complex file from getting one line.
-        assert!(prompt.contains("two to five sentences"), "{prompt}");
+        assert!(prompt.contains("one to three sentences for a typical file"), "{prompt}");
         assert!(
-            prompt.contains("short paragraph for a genuinely tricky one"),
+            prompt.contains("short list for a genuinely tricky one"),
             "{prompt}"
         );
         assert!(prompt.contains("diff --git a/a b/a"), "{prompt}");
