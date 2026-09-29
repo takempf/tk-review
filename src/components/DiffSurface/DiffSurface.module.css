@@ -73,6 +73,22 @@
 }
 
 /*
+ * The design system's reset gives every element a `scrollbar-color`, and that
+ * property inherits, shadow boundary included. WebKit ignores
+ * `::-webkit-scrollbar` styling on any element that has one, so inside the
+ * renderer each file's 6px, hover-only horizontal scrollbar became a native
+ * one: 17px tall with classic scrollbars, drawn as a bar under every file. The
+ * renderer's layout math fits that scrollbar inside the 8px under the code, so
+ * each open file also came out 9px taller than CodeView had computed, an error
+ * that compounded down the list.
+ *
+ * Resetting it on each file's host hands scrollbars back to the renderer.
+ */
+.surface diffs-container {
+  scrollbar-color: auto;
+}
+
+/*
  * Marks the file chosen in the sidebar with a border down its whole left edge.
  *
  * Item containers come from a recycled element pool and carry no identifying

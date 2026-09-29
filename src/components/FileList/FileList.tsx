@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Checkbox } from "tk-design-system";
 import type { ChangeStatus, FileChange } from "../../ipc/git";
 import type { TreeNode } from "../../lib/fileChange";
 import { buildFileTree, describeChange, STATUS_META, splitPath } from "../../lib/fileChange";
 import { useReviewStore } from "../../store/reviewStore";
+import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./FileList.module.css";
 
 // `satisfies` keeps every status accounted for while allowing the class values,
@@ -75,11 +77,10 @@ function Row({ file, depth, selected, viewed, onSelect, onToggleViewed }: RowPro
           )}
         </span>
       </button>
-      <input
-        type="checkbox"
+      <Checkbox
         className={css.viewed}
         checked={viewed}
-        onChange={onToggleViewed}
+        onCheckedChange={() => onToggleViewed()}
         title="Mark as viewed"
         aria-label={`Mark ${file.path} as viewed`}
       />
@@ -159,9 +160,45 @@ function countFiles(node: TreeNode): number {
   return node.children.reduce((total, child) => total + countFiles(child), 0);
 }
 
+/** Indent level and name width, in percent, for the placeholder tree. */
+const SKELETON_ROWS: [number, number][] = [
+  [0, 38],
+  [1, 62],
+  [1, 48],
+  [0, 30],
+  [1, 70],
+  [2, 54],
+  [2, 44],
+  [1, 58],
+];
+
+/** Stands in for the tree while a PR opens or the refs compare. */
+function FileListSkeleton() {
+  return (
+    <div className={css.skeletonWrap}>
+      <div className={css.heading}>
+        <span>Files</span>
+      </div>
+      <SkeletonGroup label="Loading files" className={css.skeletonRows}>
+        {SKELETON_ROWS.map(([depth, width], index) => (
+          <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, static list
+            key={index}
+            className={css.skeletonRow}
+            style={{ paddingLeft: `calc(var(--space-2) + ${depth} * var(--space-4))` }}
+          >
+            <Skeleton width="1em" />
+            <Skeleton width={`${width}%`} />
+          </div>
+        ))}
+      </SkeletonGroup>
+    </div>
+  );
+}
+
 export function FileList() {
   const summary = useReviewStore((state) => state.summary);
-  const loading = useReviewStore((state) => state.loadingDiff);
+  const loading = useReviewStore((state) => state.loadingDiff || state.openingPr);
   const selectedPath = useReviewStore((state) => state.selectedPath);
   const viewed = useReviewStore((state) => state.viewed);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -180,7 +217,7 @@ export function FileList() {
     });
   }, [selectedPath]);
 
-  if (loading && !summary) return <p className={css.empty}>Comparing…</p>;
+  if (loading && !summary) return <FileListSkeleton />;
   if (!summary) return null;
 
   if (summary.files.length === 0) {

@@ -1,0 +1,31 @@
+/* Delayed a beat before fading in: most loads finish before a placeholder is
+   worth showing, and those never flash one. */
+.group {
+  animation: group-in var(--screen-fade-in, 300ms) var(--ease-out-expo) 120ms both;
+}
+
+.instant {
+  animation: none;
+}
+
+/* Height follows the surrounding text, so a bar sits where its line will. */
+.bar {
+  display: block;
+  height: 0.8em;
+  background: color-mix(in oklab, var(--text) 9%, transparent);
+  border-radius: var(--radius);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes group-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Opacity only, so the pulse runs on the compositor. */
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}

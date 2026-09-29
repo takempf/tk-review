@@ -189,6 +189,8 @@ function DiffSurfaceInner() {
     () => ({
       diffStyle: layout,
       theme: DIFF_THEME,
+      // The app is dark-only; left to "system" the renderer would follow the OS.
+      themeType: "dark",
       stickyHeaders: true,
       // Hunks only, the way a pull request reads. `expandUnchanged` would swap
       // every partial diff for its whole file, which both pulls in contents for

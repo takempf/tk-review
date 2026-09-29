@@ -1,4 +1,6 @@
 .wrap {
+  /* Arrives with the diff's summary, after the screen: fade in like the rest. */
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -6,21 +8,56 @@
 
 .heading {
   display: flex;
-  align-items: baseline;
+  flex: none;
+  align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  min-height: var(--bar-height);
+  padding: 0 var(--space-3);
+  color: var(--tk-label);
+  font-family: var(--tk-label-font);
+  font-size: var(--tk-label-size);
+  font-weight: var(--tk-label-weight);
+  font-stretch: var(--tk-label-stretch);
+  letter-spacing: var(--tk-label-tracking);
+  text-transform: var(--tk-label-transform);
   border-bottom: 1px solid var(--border);
 }
 
 .progress {
-  font-weight: 400;
+  font-family: var(--tk-font-sans);
+  font-size: var(--tk-text-xs);
+  font-weight: var(--tk-weight-regular);
+  font-stretch: normal;
+  color: var(--text-dim);
   text-transform: none;
   letter-spacing: 0;
+}
+
+/* The placeholder tree takes the list's place without fading in itself: the
+   group inside does that, after a beat. */
+.skeletonWrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.skeletonRows {
+  flex: 1;
+  min-height: 0;
+  padding-top: var(--space-1);
+  overflow: hidden;
+}
+
+.skeletonRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  height: 2rem;
+  padding-right: var(--space-3);
+}
+
+.skeletonRow > :first-child {
+  flex: none;
 }
 
 .scroll {
@@ -239,4 +276,10 @@
   padding: var(--space-5) var(--space-3);
   color: var(--text-dim);
   text-align: center;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
 }

@@ -16,7 +16,11 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "tk-design-system": ["../tk-design-system/src/index.ts"],
+      "tk-design-system/*": ["../tk-design-system/src/*"]
+    }
   },
   "include": ["src", "dev-harness", "vite.config.ts"],
   // A standalone Node script, run manually via node's type stripping. It resolves

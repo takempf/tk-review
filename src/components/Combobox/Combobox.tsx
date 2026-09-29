@@ -1,5 +1,6 @@
 import { Combobox as BaseCombobox } from "@base-ui/react/combobox";
 import { useId, useState } from "react";
+import { Icon, usePortalContainer } from "tk-design-system";
 import css from "./Combobox.module.css";
 
 /** Base UI reads `items` from each group; the other keys are ours. */
@@ -58,6 +59,8 @@ export function Combobox({
   disabled = false,
 }: ComboboxProps) {
   const [query, setQuery] = useState("");
+  // Into the design system's themed portal, like its own popups.
+  const portal = usePortalContainer();
   // `Combobox.Label` labels the trigger, not the input, so the association has to
   // be made explicitly against the input that actually holds the value.
   const inputId = useId();
@@ -102,24 +105,20 @@ export function Combobox({
             aria-label={`Show ${label ?? ariaLabel ?? "options"}`}
           >
             <BaseCombobox.Icon className={css.icon}>
-              {/* Equilateral: the viewBox height is the side length × √3/2, so the
-                  triangle stays equilateral at whatever width the CSS gives it. */}
-              <svg className={css.chevron} viewBox="0 0 10 8.6603" aria-hidden="true">
-                <polygon points="0,0 10,0 5,8.6603" />
-              </svg>
+              <Icon name="chevron-down" />
             </BaseCombobox.Icon>
           </BaseCombobox.Trigger>
         </BaseCombobox.InputGroup>
       </div>
 
-      <BaseCombobox.Portal>
+      <BaseCombobox.Portal container={portal}>
         {/* Left-aligned rather than centred: the popup is usually wider than the
             field, and centring makes it spread out from under both edges. */}
-        <BaseCombobox.Positioner className={css.positioner} sideOffset={4} align="start">
-          <BaseCombobox.Popup className={css.popup}>
+        <BaseCombobox.Positioner className="tk-positioner" sideOffset={4} align="start">
+          <BaseCombobox.Popup className={`tk-popup tk-list-popup ${css.popup}`}>
             {/* Any typed value is acceptable, so offer to use text that matches
                 no suggestion rather than treating it as a dead end. */}
-            <BaseCombobox.Empty className={css.empty}>
+            <BaseCombobox.Empty className={`tk-list-empty ${css.empty}`}>
               {typed ? (
                 <button type="button" className={css.useRaw} onClick={() => onChange(typed)}>
                   Use “{typed}”
@@ -129,20 +128,24 @@ export function Combobox({
               )}
             </BaseCombobox.Empty>
 
-            <BaseCombobox.List className={css.list}>
+            <BaseCombobox.List className={`tk-list ${css.list}`}>
               <BaseCombobox.Collection>
                 {(group: ComboboxGroup) => (
                   <BaseCombobox.Group key={group.label} items={group.items} className={css.group}>
-                    <BaseCombobox.GroupLabel className={css.groupLabel}>
+                    <BaseCombobox.GroupLabel className="tk-list-group-label">
                       {group.label}
                     </BaseCombobox.GroupLabel>
                     <BaseCombobox.Collection>
                       {(item: string) => (
-                        <BaseCombobox.Item key={item} value={item} className={css.item}>
-                          <span className={css.itemText}>{item}</span>
-                          <BaseCombobox.ItemIndicator className={css.indicator}>
-                            ✓
+                        <BaseCombobox.Item
+                          key={item}
+                          value={item}
+                          className={`tk-list-item ${css.item}`}
+                        >
+                          <BaseCombobox.ItemIndicator className="tk-list-indicator">
+                            <Icon name="check" />
                           </BaseCombobox.ItemIndicator>
+                          <span className="tk-list-text">{item}</span>
                         </BaseCombobox.Item>
                       )}
                     </BaseCombobox.Collection>

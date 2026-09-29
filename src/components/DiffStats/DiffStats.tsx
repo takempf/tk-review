@@ -1,4 +1,5 @@
 import { useReviewStore } from "../../store/reviewStore";
+import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffStats.module.css";
 
 /** Proportion bar for the additions-to-deletions ratio, as a PR page shows. */
@@ -16,8 +17,16 @@ function ChangeBar({ additions, deletions }: { additions: number; deletions: num
 
 export function DiffStats() {
   const summary = useReviewStore((state) => state.summary);
-  const loading = useReviewStore((state) => state.loadingDiff);
+  const loading = useReviewStore((state) => state.loadingDiff || state.openingPr);
 
+  // Nothing to count yet: hold the space. A refresh keeps the old counts up.
+  if (loading && !summary) {
+    return (
+      <SkeletonGroup label="Counting changes" className={css.stats}>
+        <Skeleton width="11rem" />
+      </SkeletonGroup>
+    );
+  }
   if (loading) return <span className={css.files}>Comparing…</span>;
   if (!summary) return null;
 

@@ -1,4 +1,6 @@
+import { Checkbox, Icon } from "tk-design-system";
 import { useReviewStore } from "../../store/reviewStore";
+import { Spinner } from "../Spinner/Spinner";
 import { BranchCombobox } from "./BranchCombobox";
 import css from "./BranchSelector.module.css";
 
@@ -37,7 +39,7 @@ export function BranchSelector() {
         title="Swap base and compare"
         aria-label="Swap base and compare"
       >
-        ⇅
+        <Icon name="swap" />
       </button>
       <span className={css.refLabel}>Compare</span>
       <BranchCombobox
@@ -55,9 +57,10 @@ export function BranchSelector() {
           disabled={fetching}
           title="git fetch --all --prune — pull in new and deleted branches from every remote"
         >
+          {fetching ? <Spinner /> : <Icon name="download" />}
           {fetching ? "Fetching…" : "Fetch"}
         </button>
-        <label
+        <span
           className={css.uncommitted}
           title={
             onCheckedOutBranch
@@ -65,14 +68,14 @@ export function BranchSelector() {
               : "Available when compare is the checked-out branch"
           }
         >
-          <input
-            type="checkbox"
+          <Checkbox
             disabled={!onCheckedOutBranch}
             checked={includeUncommitted && onCheckedOutBranch}
-            onChange={(event) => void setIncludeUncommitted(event.target.checked)}
-          />
-          Include uncommitted changes
-        </label>
+            onCheckedChange={(checked) => void setIncludeUncommitted(checked)}
+          >
+            Include uncommitted changes
+          </Checkbox>
+        </span>
       </div>
     </div>
   );

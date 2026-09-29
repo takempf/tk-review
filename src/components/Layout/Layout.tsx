@@ -1,4 +1,5 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { Button, Icon } from "tk-design-system";
 import { ResizeHandle, useStoredSize } from "../ResizeHandle/ResizeHandle";
 import css from "./Layout.module.css";
 
@@ -57,13 +58,11 @@ export function Layout({ header, sidebar, main, aside, error, onDismissError }: 
       {error ? (
         <div className={css.banner} role="alert">
           <p className={css.bannerText}>{error}</p>
-          <button type="button" className={css.bannerDismiss} onClick={onDismissError}>
-            Dismiss
-          </button>
+          <Button variant="ghost" size="sm" onClick={onDismissError}>
+            <Icon name="close" /> Dismiss
+          </Button>
         </div>
-      ) : (
-        <div />
-      )}
+      ) : null}
       <div ref={body.ref} className={css.body} style={{ gridTemplateColumns: columns }}>
         <aside className={css.sidebar}>
           {sidebar}

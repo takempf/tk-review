@@ -1,4 +1,8 @@
-/** Shipped light/dark themes, given together so the renderer follows the OS. */
+/**
+ * Shipped light/dark themes. The surface pins `themeType` to dark, so only the
+ * dark one renders; the light one is named so a light app theme is one option
+ * away.
+ */
 export const DIFF_THEME = { light: "pierre-light", dark: "pierre-dark" } as const;
 
 /**
@@ -17,15 +21,15 @@ export const DIFF_THEME = { light: "pierre-light", dark: "pierre-dark" } as cons
  *   is `base, theme, rendered, unsafe`, so declarations here win.
  *
  * Values still come from the app tokens rather than being restated: custom
- * properties inherit into the shadow root, so `var(--bg)` resolves to whatever
+ * properties inherit into the shadow root, so `var(--bg-code)` resolves to whatever
  * `global.css` has set for the active colour scheme. Both the light and dark slots
- * get the same token on purpose — `--bg` is already the right colour for the
+ * get the same token on purpose — `--bg-code` is already the right colour for the
  * scheme in effect, so whichever branch `light-dark()` picks is correct.
  */
 export const DIFFS_THEME_CSS = `
 :host {
-  --diffs-light-bg: var(--bg);
-  --diffs-dark-bg: var(--bg);
+  --diffs-light-bg: var(--bg-code);
+  --diffs-dark-bg: var(--bg-code);
 
   /* The hunk separators — the "unmodified lines" bars and their expand
      buttons — default to lighter than the background. A gap in the file reads
@@ -33,14 +37,24 @@ export const DIFFS_THEME_CSS = `
   --diffs-bg-separator-override: var(--bg-sunken);
 }
 
+/* A code column only ever scrolls sideways, yet the renderer gives it
+   \`scrollbar-gutter: stable\`. WebKit reserves a native scrollbar's width for
+   that (17px with classic scrollbars) even though the renderer styles the
+   vertical scrollbar down to nothing, leaving a strip of dead space right of
+   every column: between the two sides of a split diff, and down the right edge. */
+[data-code] {
+  scrollbar-gutter: auto;
+}
+
 /* Each file's header reads as a bar over the code rather than blending into the
-   lines behind it, so it gets the raised-surface token. The renderer paints it
-   with plain --diffs-bg, hence the selector override.
+   lines behind it, so it gets the chrome's surface, a step lighter than the
+   code. The renderer paints it with plain --diffs-bg, hence the selector
+   override.
 
    Not keyed to [data-sticky]: explain mode turns stickiness off (its headers
    carry a paragraph), and the bar should look the same either way. */
 [data-diffs-header] {
-  background-color: var(--bg-raised);
+  background-color: var(--bg);
 }
 
 /* Custom-header mode contributes no layout of its own — the slotted content

@@ -10,30 +10,39 @@
   white-space: nowrap;
 }
 
+/* Drawn like the design system's small input: the field and its trigger share one box. */
 .inputGroup {
   display: flex;
   align-items: center;
   /* Callers that need another width set the variable on a wrapper. */
   width: var(--combobox-width, 300px);
+  min-height: var(--tk-control-h-sm);
   overflow: hidden;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  background: var(--tk-surface);
+  border: var(--tk-border-width) solid var(--tk-border);
+  border-radius: var(--tk-radius);
+  transition: border-color var(--tk-duration-1) var(--tk-ease-out);
+}
+
+.inputGroup:hover {
+  border-color: var(--tk-border-strong);
 }
 
 .inputGroup:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--tk-focus-color);
 }
 
 .input {
   flex: 1;
   min-width: 0;
-  padding: 3px var(--space-2);
-  font-family: var(--font-mono);
-  font-size: 12px;
+  padding: 0 var(--tk-space-3);
+  font-size: var(--tk-text-sm);
   background: none;
   border: none;
+}
+
+.input::placeholder {
+  color: var(--tk-fg-subtle);
 }
 
 .input:focus {
@@ -45,29 +54,20 @@
   flex: none;
   align-items: center;
   align-self: stretch;
-  padding: 0 var(--space-1);
-  color: var(--text-dim);
+  padding: 0 var(--tk-space-2);
+  color: var(--tk-fg-muted);
   background: none;
   border: none;
 }
 
 .trigger:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+  color: var(--tk-fg);
 }
 
 .icon {
   display: flex;
   align-items: center;
-  transition: transform 120ms ease;
-}
-
-/* Width only: the viewBox aspect ratio supplies the height, keeping the triangle
-   equilateral. */
-.chevron {
-  display: block;
-  width: 9px;
-  fill: currentcolor;
+  transition: transform var(--tk-duration-2) var(--tk-ease-out);
 }
 
 /* Base UI marks the trigger while the list is open. */
@@ -75,112 +75,53 @@
   transform: rotate(180deg);
 }
 
-.positioner {
-  z-index: 20;
-}
-
+/*
+ * Sized to the longest ref rather than to the input: branch names vary wildly
+ * and truncating every one to the field's width hides the part that
+ * distinguishes them. Floored at the input's width so it never looks detached,
+ * and capped so one absurd name can't stretch it across the window. Past that,
+ * individual items ellipsize.
+ */
 .popup {
   display: flex;
   flex-direction: column;
-
-  /*
-   * Sized to the longest ref rather than to the input: branch names vary wildly
-   * and truncating every one to the field's width hides the part that
-   * distinguishes them. Floored at the input's width so it never looks detached,
-   * and capped so one absurd name can't stretch it across the window — whichever
-   * of 500px and the room the positioner actually has is smaller. Past that,
-   * individual items ellipsize.
-   */
   width: max-content;
   min-width: var(--anchor-width);
   max-width: min(500px, var(--available-width));
-
-  /* Never taller than the space the positioner actually has. */
   max-height: min(320px, var(--available-height));
-  overflow: hidden;
-  color: var(--text);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
-  transform-origin: var(--transform-origin);
-}
-
-.popup[data-starting-style],
-.popup[data-ending-style] {
-  opacity: 0;
-  transform: scale(0.98);
-}
-
-.popup {
-  transition:
-    opacity 100ms ease,
-    transform 100ms ease;
 }
 
 .list {
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-1) 0;
 }
 
-.groupLabel {
-  padding: var(--space-1) var(--space-3);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.group + .group {
+  margin-top: var(--tk-space-1);
+  padding-top: var(--tk-space-1);
+  border-top: var(--tk-border-width) solid var(--tk-border-subtle);
 }
 
-.group + .group .groupLabel {
-  margin-top: var(--space-1);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-2);
-}
-
+/* Refs are code: set in the mono face, a size down, so long names fit. */
 .item {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  padding: 3px var(--space-3);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  cursor: default;
-  user-select: none;
-}
-
-/* Keyboard and pointer highlight share one appearance. */
-.item[data-highlighted] {
-  background: var(--bg-selected);
-}
-
-.itemText {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.indicator {
-  flex: none;
-  color: var(--accent);
+  min-height: var(--tk-control-h-sm);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
 }
 
 .empty {
-  padding: var(--space-2) var(--space-3);
-  color: var(--text-dim);
+  padding: var(--tk-space-2) var(--tk-space-3);
+  color: var(--tk-fg-muted);
 }
 
 .useRaw {
   width: 100%;
-  padding: var(--space-1) var(--space-2);
-  font-family: var(--font-mono);
+  padding: var(--tk-space-1) var(--tk-space-2);
+  font-family: var(--tk-font-mono);
   text-align: left;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  background: var(--tk-surface);
+  border: var(--tk-border-width) solid var(--tk-border);
+  border-radius: var(--tk-radius);
 }
 
 .useRaw:hover {

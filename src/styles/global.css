@@ -1,123 +1,108 @@
-/* Bundled locally rather than fetched, so the app is self-contained offline.
-   Both are variable fonts: one file each, every weight. */
+/* tk-design-system: its reset, tokens and component styles sit in `tk.*`
+   cascade layers, so everything unlayered below overrides it without
+   !important. Only the faces the base theme names are bundled; all are
+   variable fonts, one file each. */
+@import "tk-design-system/styles.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/archivo/wdth.css";
 
+/*
+ * App tokens, written on the design system's base theme. Components reference
+ * these names rather than `--tk-*` directly, so a later theme only has to
+ * retarget this block.
+ *
+ * Surface model, deliberately flat: `--bg` is the one surface shared by the
+ * header, the sidebar, the side panel and every column's toolbar row, with
+ * borders doing the separating. The code itself sits a step darker, on
+ * `--bg-code`, so the main pane reads as the content and the rest as chrome.
+ * `--bg-raised` is for things that sit a step above `--bg` (cards, popups).
+ * Anything that needs to match the diff should reference `--bg-code`; the
+ * bridge in `diffsTheme.ts` maps it into the renderer's own variables.
+ */
 :root {
-  --font-ui: "Geist Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "Geist Mono Variable", "SF Mono", Monaco, Consolas, monospace;
+  /* The base theme reads at 18px; a diff tool wants more on screen. Every tk
+     rem — control heights, spacing, type — scales from this one value. */
+  --tk-root-size: 16px;
 
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
+  --font-ui: var(--tk-font-sans);
+  --font-mono: var(--tk-font-mono);
 
-  --radius: 6px;
+  --space-1: var(--tk-space-1);
+  --space-2: var(--tk-space-2);
+  --space-3: var(--tk-space-3);
+  --space-4: var(--tk-space-4);
+  --space-5: var(--tk-space-6);
+  --space-6: var(--tk-space-8);
+  --space-7: var(--tk-space-12);
 
-  /*
-   * Surface model, deliberately flat: `--bg` is the one surface shared by the
-   * header, the sidebar, the main pane and the diff itself, with borders doing
-   * the separating. `--bg-raised` is only for things that genuinely float above
-   * it (popups, menus). Anything that needs the diff to match the rest of the app
-   * should reference `--bg`; the bridge in `diffsTheme.ts` maps it into the
-   * renderer's own variables.
-   */
+  --radius: var(--tk-radius);
 
-  /* Light theme. */
-  --bg: #ffffff;
-  --bg-raised: #f6f7f9;
-  --bg-sunken: #eceef1;
-  --bg-hover: #e8eaee;
-  --bg-selected: #dce6f7;
-  --border: #d7dae0;
-  --border-strong: #b9bec7;
-  --text: #14161a;
-  --text-dim: #62697a;
-  --text-faint: #8b929f;
+  /* The row under the header in every column: file list, diff toolbar and
+     review tabs share it, so their bottom rules line up across the window. */
+  --bar-height: 2.75rem;
 
-  --added: #1a7f37;
-  --added-bg: #dcfce0;
-  --deleted: #b3252b;
-  --deleted-bg: #ffe3e3;
-  --modified: #9a6700;
-  --modified-bg: #fdf1c8;
-  --renamed: #1f5fb8;
-  --renamed-bg: #ddebff;
+  --bg: var(--tk-bg);
+  /* Halfway between the chrome and the sunken surface, so the hunk separators
+     (`--bg-sunken`) still read as a recess below the code. */
+  --bg-code: color-mix(in oklab, var(--tk-bg), var(--tk-surface));
+  --bg-raised: var(--tk-surface-raised);
+  --bg-sunken: var(--tk-surface);
+  /* Not `--tk-surface-hover`: that is one step off `--tk-bg` (#202020 on
+     #1f1f1f), made for controls on the darker surfaces, and invisible on the
+     chrome, which is where most of this app's rows sit. A tint of the text
+     lifts visibly off any of the surfaces. */
+  --bg-hover: color-mix(in oklab, var(--tk-bg), var(--tk-fg) 8%);
+  --bg-selected: color-mix(in oklab, var(--tk-accent) 16%, var(--tk-bg));
+  --border: var(--tk-border-subtle);
+  --border-strong: var(--tk-border);
+  --text: var(--tk-fg);
+  --text-dim: var(--tk-fg-muted);
+  --text-faint: var(--tk-fg-subtle);
 
-  --accent: #2563eb;
-  --danger: #b3252b;
-  --danger-bg: #ffe3e3;
+  --accent: var(--tk-accent);
+  --danger: var(--tk-danger);
+  --danger-bg: var(--tk-danger-soft);
 
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1d2027;
-    --bg-raised: #24282f;
-    --bg-sunken: #171a1f;
-    --bg-hover: #2a2f38;
-    --bg-selected: #2f3f5c;
-    --border: #30353f;
-    --border-strong: #424854;
-    --text: #e6e8ec;
-    --text-dim: #9aa2b1;
-    --text-faint: #6b7381;
-
-    --added: #52c96a;
-    --added-bg: #16301d;
-    --deleted: #f0736c;
-    --deleted-bg: #3a1c1c;
-    --modified: #d9a92b;
-    --modified-bg: #332a10;
-    --renamed: #6fa8ff;
-    --renamed-bg: #16273f;
-
-    --accent: #5b8cff;
-    --danger: #f0736c;
-    --danger-bg: #3a1c1c;
-  }
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+  /* Diff colours have no design-system equivalent; tuned for the base theme's
+     neutral dark. */
+  --added: #52c96a;
+  --added-bg: #16301d;
+  --deleted: #f0736c;
+  --deleted-bg: #3a1c1c;
+  --modified: #d9a92b;
+  --modified-bg: #332a10;
+  --renamed: #6fa8ff;
+  --renamed-bg: #16273f;
 }
 
 html,
 body,
 #root {
   height: 100%;
-  margin: 0;
 }
 
 body {
-  font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
-  -webkit-font-smoothing: antialiased;
+  min-height: 0;
+  font-size: var(--tk-text-sm);
   /* The app manages its own scroll regions; the window itself never scrolls. */
   overflow: hidden;
 }
 
-button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
+/* In the design system's own reset layer, so a disabled `.tk-button` still
+   gets its own cursor. */
+@layer tk.reset {
+  button {
+    cursor: pointer;
+  }
 }
 
-select,
-input,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/*
+ * Links ease into their hover colour and underline rather than snapping, on the
+ * theme's own ease-out and the duration its text buttons use for the same job.
+ */
+a {
+  transition-property: color, text-decoration-color;
+  transition-duration: var(--tk-duration-2);
+  transition-timing-function: var(--tk-ease-out);
 }
