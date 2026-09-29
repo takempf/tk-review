@@ -81,6 +81,18 @@ const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values, w
 /// lines, or the whole file.
 const LOCATION_GUIDANCE: &str = "`line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
 
+/// How the review and re-review prompts pick `verdict` and write `conclusion`:
+/// the review the user would submit on GitHub, drafted for them to adjust.
+const VERDICT_GUIDANCE: &str = r#"`verdict` is the GitHub review you recommend submitting:
+- "approve": nothing needs to change before merging. Any findings are suggestions or nits the author can take or leave.
+- "request_changes": at least one problem must be fixed before this merges, such as a real bug, a security issue, or data loss.
+- "comment": somewhere in between. There are questions or concerns the author should answer, but you are not confident they block merging.
+
+`conclusion` is the body of that GitHub review, addressed to the author. The findings are posted separately, so don't repeat their detail:
+- Open with the bottom line in one sentence, e.g. "Good to merge." or "One bug to fix before this merges."
+- If anything needs doing, follow with a short list of what, most important first. Name each item by what it is about, not by a finding number.
+- Stop there: no praise padding, no sign-off, and at most about 60 words."#;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
@@ -134,6 +146,14 @@ pub struct ReviewResult {
     pub summary: String,
     #[serde(default)]
     pub findings: Vec<ReviewFinding>,
+    /// One of approve | comment | request_changes — the GitHub review the
+    /// agent recommends. The model writes it, so treat it as a label; empty
+    /// when it gave none.
+    #[serde(default)]
+    pub verdict: String,
+    /// A draft body for that GitHub review, addressed to the author.
+    #[serde(default)]
+    pub conclusion: String,
 }
 
 /// Reviews the whole comparison with the chosen engine and returns structured
@@ -203,6 +223,11 @@ pub struct ReReviewResult {
     /// New problems only — the prior findings are covered by `resolutions`.
     #[serde(default)]
     pub findings: Vec<ReviewFinding>,
+    /// As on `ReviewResult`, but weighing the prior findings still open too.
+    #[serde(default)]
+    pub verdict: String,
+    #[serde(default)]
+    pub conclusion: String,
 }
 
 /// Re-reviews the comparison against an earlier review: judges whether each
@@ -299,6 +324,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 
 {{
   "summary": "One to three short sentences: how the earlier findings fared, and where the remaining risk is.",
+  "verdict": "approve | comment | request_changes",
+  "conclusion": "The GitHub review body to submit with the verdict, addressed to the author.",
   "resolutions": [
     {{
       "index": 0,
@@ -321,6 +348,9 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 `resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} Include new findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, and do not report style nits a formatter would catch. An empty findings array is a valid answer when nothing new is wrong.
 
 A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+
+{VERDICT_GUIDANCE}
+Weigh the earlier findings that are still unaddressed or partial alongside the new ones. The conclusion should say what is left, not what was fixed.
 
 {WRITING_GUIDANCE}
 
@@ -605,6 +635,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 
 {{
   "summary": "One to three short sentences on the overall shape of the change and where the risk is.",
+  "verdict": "approve | comment | request_changes",
+  "conclusion": "The GitHub review body to submit with the verdict, addressed to the author.",
   "findings": [
     {{
       "path": "path/as/it/appears/in/the/diff",
@@ -620,6 +652,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 {LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Include findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch. An empty findings array is a valid answer for a clean diff.
 
 A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+
+{VERDICT_GUIDANCE}
 
 {WRITING_GUIDANCE}
 
@@ -879,6 +913,8 @@ const REVIEW_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "summary": {"type": "string"},
+    "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
+    "conclusion": {"type": "string"},
     "findings": {
       "type": "array",
       "items": {
@@ -896,7 +932,7 @@ const REVIEW_SCHEMA: &str = r#"{
       }
     }
   },
-  "required": ["summary", "findings"],
+  "required": ["summary", "verdict", "conclusion", "findings"],
   "additionalProperties": false
 }"#;
 
@@ -905,6 +941,8 @@ const RE_REVIEW_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "summary": {"type": "string"},
+    "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
+    "conclusion": {"type": "string"},
     "resolutions": {
       "type": "array",
       "items": {
@@ -935,7 +973,7 @@ const RE_REVIEW_SCHEMA: &str = r#"{
       }
     }
   },
-  "required": ["summary", "resolutions", "findings"],
+  "required": ["summary", "verdict", "conclusion", "resolutions", "findings"],
   "additionalProperties": false
 }"#;
 
@@ -1159,6 +1197,57 @@ mod tests {
     fn missing_findings_defaults_to_empty() {
         let review = parse_claude(envelope(r#"{"summary": "Clean."}"#).as_bytes()).expect("parse");
         assert!(review.findings.is_empty());
+    }
+
+    #[test]
+    fn parses_the_recommended_verdict_and_conclusion() {
+        let json = r#"{"summary": "Clean.", "verdict": "approve", "conclusion": "Good to merge.", "findings": []}"#;
+        let review = parse_claude(envelope(json).as_bytes()).expect("parse");
+        assert_eq!(review.verdict, "approve");
+        assert_eq!(review.conclusion, "Good to merge.");
+    }
+
+    /// Reviews stored before verdicts existed, and models that skip the field,
+    /// still parse; the app falls back to a plain comment.
+    #[test]
+    fn a_missing_verdict_defaults_to_empty() {
+        let review: ReviewResult = parse_agent_json(REVIEW_JSON).expect("parse");
+        assert_eq!(review.verdict, "");
+        assert_eq!(review.conclusion, "");
+    }
+
+    #[test]
+    fn review_prompts_ask_for_a_verdict_and_codex_schemas_require_it() {
+        let patch = "diff --git a/src/a.ts b/src/a.ts";
+        let finding = ReviewFinding {
+            path: "src/a.ts".into(),
+            line: Some(12),
+            end_line: None,
+            severity: "warning".into(),
+            title: "Off-by-one in loop bound.".into(),
+            body: "The loop misses the last element.".into(),
+        };
+        for prompt in [
+            build_prompt(Some("feature"), patch, None),
+            build_re_review_prompt(Some("feature"), "Summary.", &[finding], patch, None),
+        ] {
+            assert!(prompt.contains(VERDICT_GUIDANCE), "{prompt}");
+            assert!(
+                prompt.contains("\"verdict\": \"approve | comment | request_changes\""),
+                "{prompt}"
+            );
+        }
+
+        for schema in [REVIEW_SCHEMA, RE_REVIEW_SCHEMA] {
+            let schema: serde_json::Value = serde_json::from_str(schema).expect("valid schema");
+            let required = schema["required"].as_array().expect("required list");
+            assert!(required.contains(&"verdict".into()), "{schema}");
+            assert!(required.contains(&"conclusion".into()), "{schema}");
+            assert_eq!(
+                schema["properties"]["verdict"]["enum"],
+                serde_json::json!(["approve", "comment", "request_changes"])
+            );
+        }
     }
 
     #[test]

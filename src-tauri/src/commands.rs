@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use crate::error::GitError;
 use crate::git::{self, Branch, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
-    self, PostedPrComment, PrCommentDestination, PrContext, PrSummary, RefreshPrResult,
+    self, PostedPrComment, PrCommentDestination, PrContext, PrReviewVerdict, PrSummary,
+    RefreshPrResult,
 };
 use crate::models::{self, EngineModels};
 use crate::review::{self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment};
@@ -78,6 +79,16 @@ pub async fn post_pr_comment(
         )
     })
     .await
+}
+
+/// Finishes a review on GitHub: approve, comment, or request changes.
+#[tauri::command]
+pub async fn submit_pr_review(
+    pr: PrContext,
+    verdict: PrReviewVerdict,
+    body: String,
+) -> Result<PostedPrComment, GitError> {
+    blocking(move || github::submit_pr_review(&pr, verdict, &body)).await
 }
 
 /// Loads a GitHub-hosted Markdown attachment through the user's authenticated

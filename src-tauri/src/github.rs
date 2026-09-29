@@ -80,6 +80,27 @@ pub enum PrCommentDestination {
     TopLevel,
 }
 
+/// The three outcomes GitHub offers when finishing a review, in the spelling
+/// the review agent recommends them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrReviewVerdict {
+    Approve,
+    Comment,
+    RequestChanges,
+}
+
+impl PrReviewVerdict {
+    /// The `event` GitHub's create-review endpoint expects.
+    fn event(self) -> &'static str {
+        match self {
+            Self::Approve => "APPROVE",
+            Self::Comment => "COMMENT",
+            Self::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostedPrComment {
@@ -459,6 +480,64 @@ fn insert_line_span(
     fields.insert("side".into(), right());
 }
 
+/// Submits a review of the PR: approve, comment, or request changes, with the
+/// conclusion as its body. Anchored to the fetched head for the same reason as
+/// `post_pr_comment`: an approval must not land on commits nobody reviewed.
+pub fn submit_pr_review(
+    pr: &PrContext,
+    verdict: PrReviewVerdict,
+    body: &str,
+) -> Result<PostedPrComment, GitError> {
+    // GitHub rejects these two without a body; say so before the round trip.
+    if body.trim().is_empty() && verdict != PrReviewVerdict::Approve {
+        return Err(GitError::Command(
+            "A comment or a request for changes needs some text.".into(),
+        ));
+    }
+    let reference = parse_pr_ref(&pr.url)?;
+    let current = read_pr(&reference)?;
+    if current.head_ref_oid != pr.head_sha {
+        return Err(GitError::Command(
+            "This pull request has new commits. Refresh it and review them before submitting."
+                .into(),
+        ));
+    }
+
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "commit_id": pr.head_sha,
+        "event": verdict.event(),
+        "body": body,
+    }))
+    .map_err(|error| {
+        GitError::Command(format!("Could not encode the review for GitHub: {error}"))
+    })?;
+    let endpoint = format!(
+        "repos/{}/{}/pulls/{}/reviews",
+        reference.owner, reference.repo, reference.number
+    );
+    let raw = run_gh_with_input(
+        &[
+            "api",
+            "--hostname",
+            &reference.host,
+            "-X",
+            "POST",
+            "--input",
+            "-",
+            &endpoint,
+        ],
+        &payload,
+    )?;
+    let posted: GhPostedComment = serde_json::from_slice(&raw).map_err(|error| {
+        GitError::Command(format!(
+            "GitHub accepted the review but returned unreadable JSON: {error}"
+        ))
+    })?;
+    Ok(PostedPrComment {
+        url: posted.html_url,
+    })
+}
+
 fn read_comments(reference: &PrRef) -> Result<Vec<PrComment>, GitError> {
     let endpoint = format!(
         "repos/{}/{}/pulls/{}/comments",
@@ -740,6 +819,37 @@ mod tests {
                 serde_json::Value::Object(fields),
                 serde_json::json!({"line": 12, "side": "RIGHT"})
             );
+        }
+    }
+
+    #[test]
+    fn review_verdicts_map_to_githubs_review_events() {
+        let parse = |raw: &str| serde_json::from_str::<PrReviewVerdict>(raw).expect("verdict");
+        assert_eq!(parse(r#""approve""#).event(), "APPROVE");
+        assert_eq!(parse(r#""comment""#).event(), "COMMENT");
+        assert_eq!(parse(r#""request_changes""#).event(), "REQUEST_CHANGES");
+    }
+
+    /// Checked before any `gh` call, so this never reaches the network.
+    #[test]
+    fn only_an_approval_can_be_submitted_without_a_body() {
+        let pr = PrContext {
+            url: "https://github.com/acme/widgets/pull/7".into(),
+            number: 7,
+            title: "Avoid duplicate widgets".into(),
+            body: String::new(),
+            author: "octo".into(),
+            state: "open".into(),
+            is_draft: false,
+            base_ref: "main".into(),
+            base_remote: "origin".into(),
+            head_sha: "abc123".into(),
+            compare_ref: "tk-review/pr/7".into(),
+            comments: Vec::new(),
+        };
+        for verdict in [PrReviewVerdict::Comment, PrReviewVerdict::RequestChanges] {
+            let err = submit_pr_review(&pr, verdict, "  ").expect_err("needs a body");
+            assert!(err.to_string().contains("needs some text"), "{err}");
         }
     }
 

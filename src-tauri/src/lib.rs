@@ -17,6 +17,7 @@ pub fn run() {
             commands::open_pr,
             commands::refresh_pr,
             commands::post_pr_comment,
+            commands::submit_pr_review,
             commands::get_github_image,
             commands::diff_branches,
             commands::get_patch,
