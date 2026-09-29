@@ -7,6 +7,11 @@ pub mod review;
 
 use tauri::Manager;
 
+/// The page zoom the UI starts at, set before the first paint so it never
+/// flashes at 100%. `src/lib/zoom.ts` owns the level from there; keep the two
+/// in step.
+const DEFAULT_ZOOM: f64 = 0.8;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -14,6 +19,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                window.set_zoom(DEFAULT_ZOOM)?;
                 // A two-finger swipe walks the page's history, as in Safari.
                 // The page keeps history in step with its screens (see
                 // `src/lib/screenHistory.ts`), so this is back to the list.
