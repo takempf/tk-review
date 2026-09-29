@@ -279,6 +279,9 @@ export const VERSIONS: Record<string, FileVersions> = {
 export const REVIEW: ReviewResult = {
   summary:
     "A focused rework of the diff viewer's data flow, plus a schema migration. The riskiest part is the migration: it adds a non-null column without a backfill for existing rows.",
+  verdict: "request_changes",
+  conclusion:
+    "One blocker before this merges:\n\n1. The migration fails on any existing database — `merge_base` needs a default or a backfill.\n\nThe effect cleanup race is worth fixing in the same pass.",
   findings: [
     {
       path: "migrations/0007_add_reviews_table.sql",
@@ -321,6 +324,9 @@ export const REVIEW: ReviewResult = {
 export const RE_REVIEW: ReReviewResult = {
   summary:
     "The migration now backfills before tightening the constraint, and the stale docblock was rewritten. The effect cleanup got a guard but the store subscription still leaks, and the backfill update introduced an unindexed full-table scan.",
+  verdict: "comment",
+  conclusion:
+    "Close — the migration blocker is fixed. Two things left:\n\n- The store subscription still leaks when the file changes mid-fetch.\n- The backfill scans the whole table before its index exists.",
   resolutions: [
     {
       index: 0,
@@ -543,6 +549,27 @@ Run \`pnpm harness\` and open the pull request fixture.
       author: "octocat",
       body: "Please keep the review results **persistent** when switching files.",
       createdAt: "2026-08-06T18:20:00Z",
+      path: null,
+      line: null,
+      outdated: false,
+    },
+    // Vercel's deployment table, as its bot posts it: inline avatars and status
+    // images beside links, query strings with `&`, an unknown element, and a
+    // <picture> whose dark source is a 404.
+    {
+      id: 104,
+      author: "vercel[bot]",
+      body: [
+        "[vc]: #example:eyJpc01vbm9yZXBvIjp0cnVlfQ==",
+        "The latest updates on your projects. Learn more about [Vercel for GitHub](https://vercel.link/github-learn-more).",
+        "",
+        "| Project | Deployment | Actions | Updated |",
+        "| :--- | :----- | :------ | :------ |",
+        '| <a href="https://vercel.com/acme/web"><sup><img src="https://vercel.com/api/www/avatar?projectId=prj_example&teamId=team_example&s=32" width="16" height="16" align="middle" alt="" /></sup></a> [web](https://vercel.com/acme/web) | ![Ready](https://vercel.com/static/status/ready.svg) [Ready](https://vercel.com/acme/web/example) | [Preview](https://web-git-example-acme.vercel.app) | <relative-time datetime="2026-08-06T18:30:00.000Z">Aug 6, 2026 6:30pm UTC</relative-time> |',
+        "",
+        '<a href="https://vercel.com/vercel-agent/request-review?owner=acme&repo=web&pr=47" rel="noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://agents-vade-review.vercel.sh/request-review-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://agents-vade-review.vercel.sh/request-review-light.svg"><img src="https://agents-vade-review.vercel.sh/request-review-light.svg" alt="Request Review"></picture></a>',
+      ].join("\n"),
+      createdAt: "2026-08-06T18:30:00Z",
       path: null,
       line: null,
       outdated: false,

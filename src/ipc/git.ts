@@ -87,13 +87,34 @@ export interface ReviewFinding {
   postedAt?: string;
 }
 
+/** The three ways GitHub lets a review finish, spelled as the agent recommends them. */
+export type ReviewVerdict = "approve" | "comment" | "request_changes";
+
+/** A review submitted to GitHub from its conclusion. */
+export interface SubmittedReview {
+  url: string;
+  verdict: ReviewVerdict;
+  /** ISO timestamp of the submission. */
+  at: string;
+}
+
 export interface ReviewResult {
   summary: string;
   findings: ReviewFinding[];
+  /**
+   * The GitHub review the agent recommends — model-written, so anything but a
+   * `ReviewVerdict` is possible. Empty or absent on reviews from before it
+   * was asked for.
+   */
+  verdict?: string;
+  /** A draft body for that GitHub review, addressed to the author. */
+  conclusion?: string;
   /** GitHub URL after the review-level note was sent to the PR. */
   postedUrl?: string;
   /** ISO timestamp for the most recent review-level post. */
   postedAt?: string;
+  /** Set once the conclusion was submitted as a GitHub review. */
+  submitted?: SubmittedReview;
 }
 
 /** The re-review's verdict on one finding from the previous review. */
@@ -112,6 +133,9 @@ export interface ReReviewResult {
   resolutions: FindingResolution[];
   /** New problems only — the prior findings are covered by `resolutions`. */
   findings: ReviewFinding[];
+  /** As on `ReviewResult`, weighing the prior findings still open too. */
+  verdict?: string;
+  conclusion?: string;
 }
 
 /** Plain-language account of one file's part in the change. */
@@ -303,6 +327,10 @@ export const gitApi = {
     endLine: number | null;
     destination: PrCommentDestination;
   }) => invoke<PostedPrComment>("post_pr_comment", { ...args }),
+
+  /** Submits a GitHub review — approve, comment, or request changes — through `gh`. */
+  submitPrReview: (args: { pr: PrContext; verdict: ReviewVerdict; body: string }) =>
+    invoke<PostedPrComment>("submit_pr_review", { ...args }),
 
   /** Loads GitHub's auth-protected Markdown attachments for desktop rendering. */
   getGitHubImage: (url: string) => invoke<GitHubImage>("get_github_image", { url }),

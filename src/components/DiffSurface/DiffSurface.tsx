@@ -139,6 +139,7 @@ function DiffSurfaceInner() {
   const compare = useReviewStore((state) => state.compare);
   const worktree = useReviewStore(reviewsWorkingTree);
   const selectedPath = useReviewStore((state) => state.selectedPath);
+  const selectedLines = useReviewStore((state) => state.selectedLines);
   const selectionTick = useReviewStore((state) => state.selectionTick);
   const layout = useReviewStore((state) => state.layout);
   const setLayout = useReviewStore((state) => state.setLayout);
@@ -265,20 +266,45 @@ function DiffSurfaceInner() {
 
   // Selecting a file scrolls the shared surface to it rather than swapping panes,
   // and opens it if it was collapsed for being generated — choosing a file is a
-  // clear enough signal that you want to read it.
-  // Binary files have no item to scroll to, so leave the view where it is.
+  // clear enough signal that you want to read it. A selection that names lines
+  // — a finding's path, say — lands on them instead of the file header, and
+  // highlights them until the next selection. Binary files have no item to
+  // scroll to, so leave the view where it is.
   useEffect(() => {
     if (!selectedPath) return;
     // Wait for the item to exist, so the first selection still lands once the
     // patch has been parsed.
-    if (!items.some((item) => item.id === selectedPath)) return;
-    const selection = `${selectionTick}:${selectedPath}`;
+    const item = items.find((entry) => entry.id === selectedPath);
+    if (!item) return;
+    const selection = `${selectionTick}:${selectedPath}:${selectedLines ? `${selectedLines.start}-${selectedLines.end}` : ""}`;
     if (openedFor.current === selection) return;
 
+    // A collapsed file has no lines laid out, so opening it has to land before
+    // the scroll can resolve one. Expanding rebuilds `items`, which runs this
+    // effect again with the file open — and the selection still unspent.
+    if (item.collapsed) {
+      expandFile(selectedPath);
+      return;
+    }
+
     openedFor.current = selection;
-    expandFile(selectedPath);
-    viewRef.current?.scrollTo({ type: "item", id: selectedPath, align: "start" });
-  }, [selectedPath, selectionTick, items, expandFile]);
+    const view = viewRef.current;
+    if (!selectedLines) {
+      view?.clearSelectedLines();
+      view?.scrollTo({ type: "item", id: selectedPath, align: "start" });
+      return;
+    }
+    // Findings anchor to new-file line numbers.
+    const range = {
+      start: selectedLines.start,
+      end: selectedLines.end,
+      side: "additions",
+      endSide: "additions",
+    } as const;
+    view?.setSelectedLines({ id: selectedPath, range });
+    // Centred when it fits; a span taller than the view lands on its start.
+    view?.scrollTo({ type: "range", id: selectedPath, range, align: "center" });
+  }, [selectedPath, selectedLines, selectionTick, items, expandFile]);
 
   if (!summary) return null;
   if (summary.files.length === 0) {

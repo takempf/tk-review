@@ -54,6 +54,14 @@ mockIPC((command, payload) => {
       nextPostedComment += 1;
       return { url: `${PR.url}#issuecomment-${nextPostedComment}` };
     }
+    // Delayed like a real `gh` round-trip, so "Submitting…" is visible.
+    case "submit_pr_review":
+      return new Promise((resolve) =>
+        setTimeout(
+          () => resolve({ url: `${PR.url}#pullrequestreview-${++nextPostedComment}` }),
+          700,
+        ),
+      );
     case "diff_branches":
       return SUMMARY;
     case "get_patch":

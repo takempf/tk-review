@@ -11,7 +11,9 @@ import {
   type ReviewEngine,
   type ReviewFinding,
   type ReviewResult,
+  type ReviewVerdict,
 } from "../ipc/git";
+import type { LineSpan } from "../lib/lineSpan";
 import type { PrPostLocation } from "../lib/prComment";
 import { invalidatePrLists } from "../lib/queries";
 import { transitionScreen } from "../lib/screenTransition";
@@ -71,6 +73,9 @@ export interface StoredExplanation {
 
 /** Thread key for discussing the review as a whole rather than one finding. */
 export const REVIEW_THREAD_KEY = "review";
+
+/** `postingTo` while the conclusion is being submitted as a GitHub review. */
+export const CONCLUSION_POST_KEY = "conclusion";
 
 /** Thread key for one finding; matches how the panel identifies finding cards. */
 export const findingThreadKey = (finding: ReviewFinding): string =>
@@ -161,6 +166,12 @@ interface ReviewState {
   diffLoadId: number;
   selectedPath: string | null;
   /**
+   * New-file lines the selection points at, when it came from something
+   * anchored to them — a finding, a verdict. Null means the whole file, which
+   * is what choosing a file in the list means.
+   */
+  selectedLines: LineSpan | null;
+  /**
    * Bumped by every explicit `selectFile`, so re-choosing the file already open
    * still counts as a selection. The diff surface scrolls on this rather than on
    * `selectedPath`, which cannot distinguish "again" from "no change".
@@ -216,7 +227,10 @@ interface ReviewState {
   reviewEffort: string;
   /** Thread key currently waiting on an agent reply, or `null`. */
   replyingTo: string | null;
-  /** Review thread or finding currently being sent to GitHub. */
+  /**
+   * Review thread, finding, or conclusion (`CONCLUSION_POST_KEY`) currently
+   * being sent to GitHub.
+   */
   postingTo: string | null;
   /**
    * A PR opened from the list, from the click until it is fetched and checked
@@ -250,7 +264,7 @@ interface ReviewState {
    */
   openPr: (url: string, preview?: PrPreview) => Promise<boolean>;
   refreshPr: () => Promise<void>;
-  selectFile: (path: string | null) => void;
+  selectFile: (path: string | null, lines?: LineSpan | null) => void;
   moveSelection: (offset: number) => void;
   setLayout: (layout: DiffLayout) => void;
   setIncludeUncommitted: (include: boolean) => Promise<void>;
@@ -270,6 +284,8 @@ interface ReviewState {
     body: string,
     location: PrPostLocation,
   ) => Promise<boolean>;
+  /** Submits the conclusion as a GitHub review with the chosen verdict. */
+  submitPrReview: (verdict: ReviewVerdict, body: string) => Promise<boolean>;
   setReviewEngine: (engine: ReviewEngine) => void;
   setReviewModel: (model: string) => void;
   setReviewEffort: (effort: string) => void;
@@ -450,6 +466,9 @@ export const useReviewStore = create<ReviewState>((set, get) => {
             : (summary.files.find((file) => !file.isBinary)?.path ??
               summary.files[0]?.path ??
               null),
+        // A reload is not a jump: the file stays open, but any line a finding
+        // scrolled to belongs to the diff that was just replaced.
+        selectedLines: null,
       });
     } catch (error) {
       set({
@@ -457,6 +476,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         summary: null,
         patch: null,
         selectedPath: null,
+        selectedLines: null,
         expanded: new Set(),
         reviews: {},
         explanation: null,
@@ -535,6 +555,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         summary: null,
         patch: null,
         selectedPath: null,
+        selectedLines: null,
         includeUncommitted: false,
         reviews: {},
         explanation: null,
@@ -572,6 +593,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
     patch: null,
     diffLoadId: 0,
     selectedPath: null,
+    selectedLines: null,
     selectionTick: 0,
     layout: "split",
     includeUncommitted: false,
@@ -629,6 +651,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         summary: null,
         patch: null,
         selectedPath: null,
+        selectedLines: null,
         includeUncommitted: false,
         reviews: {},
         explanation: null,
@@ -779,11 +802,11 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       await loadDiff();
     },
 
-    selectFile(path) {
+    selectFile(path, lines = null) {
       // The counter, not the path, is what the diff surface watches: choosing
       // the file you are already on is a request to go back to it, so it has to
       // register as a new selection rather than as no change at all.
-      set({ selectedPath: path, selectionTick: get().selectionTick + 1 });
+      set({ selectedPath: path, selectedLines: lines, selectionTick: get().selectionTick + 1 });
     },
 
     moveSelection(offset) {
@@ -794,7 +817,9 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       const current = files.findIndex((file) => file.path === selectedPath);
       const next = Math.min(Math.max(current + offset, 0), files.length - 1);
       const target = files[current === -1 ? 0 : next];
-      if (target) set({ selectedPath: target.path });
+      // Stepping through files is a whole-file move, so any line a finding
+      // pinned the selection to no longer applies.
+      if (target) set({ selectedPath: target.path, selectedLines: null });
     },
 
     setLayout(layout) {
@@ -1007,7 +1032,12 @@ export const useReviewStore = create<ReviewState>((set, get) => {
           if (old?.length) threads[resolutionThreadKey(resolution.finding)] = old;
         }
         const stored: StoredReview = {
-          review: { summary: result.summary, findings: result.findings },
+          review: {
+            summary: result.summary,
+            findings: result.findings,
+            verdict: result.verdict,
+            conclusion: result.conclusion,
+          },
           resolutions,
           engine: reviewEngine,
           model,
@@ -1133,6 +1163,44 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         });
         const updated = withPostedComment(stored, finding, posted.url, new Date().toISOString());
         const next = persist(updated);
+        set(stillCurrent() ? { reviews: next, postingTo: null } : { postingTo: null });
+        return true;
+      } catch (error) {
+        set(
+          stillCurrent()
+            ? { postingTo: null, reviewError: errorMessage(error) }
+            : { postingTo: null },
+        );
+        return false;
+      }
+    },
+
+    async submitPrReview(verdict, body) {
+      const { repo, base, compare, reviews, reviewEngine, pr, postingTo } = get();
+      const stored = reviews[reviewEngine];
+      if (!repo || !base || !compare || !pr || !stored || postingTo) return false;
+      // GitHub takes a bare approval, but nothing else without a body.
+      if (verdict !== "approve" && !body.trim()) return false;
+
+      const worktree = reviewsWorkingTree(get());
+      const scope = viewedScope(compare, worktree);
+      const stillCurrent = () =>
+        get().compare === compare && reviewsWorkingTree(get()) === worktree;
+
+      set({ postingTo: CONCLUSION_POST_KEY, reviewError: null });
+      try {
+        const posted = await gitApi.submitPrReview({ pr, verdict, body: body.trim() });
+        // A submitted review moves the PR's decision, and off "Review requested".
+        void invalidatePrLists(repo.root);
+        const updated: StoredReview = {
+          ...stored,
+          review: {
+            ...stored.review,
+            submitted: { url: posted.url, verdict, at: new Date().toISOString() },
+          },
+        };
+        const next = { ...readReviews(repo.root, base, scope), [stored.engine]: updated };
+        writeReviews(repo.root, base, scope, next);
         set(stillCurrent() ? { reviews: next, postingTo: null } : { postingTo: null });
         return true;
       } catch (error) {

@@ -1,0 +1,17 @@
+/* Smaller than a small button: it sits at the end of a line of print, and
+   stays faint so a column of them doesn't compete with what they copy. */
+.copy {
+  flex: none;
+  width: 1.5rem;
+  min-height: 1.5rem;
+  color: var(--text-faint);
+}
+
+.copy:hover,
+.copy:focus-visible {
+  color: var(--text);
+}
+
+.copy[data-copied] {
+  color: var(--tk-success);
+}

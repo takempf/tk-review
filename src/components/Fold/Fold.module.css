@@ -1,0 +1,41 @@
+/* One grid row, which the animations size between nothing and the content's
+   own height: a height transition without having to measure anything. */
+.fold {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+/* Free to shrink below its content, which it clips while the row is short. */
+.content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.opening {
+  animation: fold-open var(--fold-open) var(--ease-out-expo) both;
+}
+
+.closing {
+  pointer-events: none;
+  animation: fold-close var(--fold-close) var(--ease-out-expo) both;
+}
+
+/* The block's own padding and border fold with the row, so nothing is left to
+   jump when it unmounts. */
+@keyframes fold-open {
+  from {
+    grid-template-rows: 0fr;
+    padding-block: 0;
+    border-block-width: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes fold-close {
+  to {
+    grid-template-rows: 0fr;
+    padding-block: 0;
+    border-block-width: 0;
+    opacity: 0;
+  }
+}

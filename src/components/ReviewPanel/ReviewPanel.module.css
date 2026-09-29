@@ -1,106 +1,90 @@
+/* Both tabs are flat, like the diff beside them: rules divide the sections,
+ * not cards. One inset for all of them, so their text shares a left edge. */
 .panel {
+  --panel-inset: var(--space-5);
+
   display: flex;
   flex-direction: column;
+  gap: 0;
   min-height: 0;
   height: 100%;
 }
 
-.section {
+/*
+ * A notch above the rest of the app. This column is the one place holding
+ * paragraphs to actually read rather than labels to scan, so its prose — and
+ * the fields you write prose into — run a step above the UI size. Deliberately
+ * not set on `.panel`: the toolbar's selects and comboboxes would inherit it
+ * and the row has no width to spare.
+ */
+.status,
+.findingTitle,
+.commentText,
+.commentInput,
+.composerInput,
+.prMarkdown,
+.prCommentMarkdown,
+.agentMarkdown {
+  font-size: var(--tk-text-md);
+  line-height: var(--tk-leading-reading);
+}
+
+/* The tabs and the active tab's action share one row; the row carries the
+ * rule, so the list's own border would double it. */
+.tabBar {
+  display: flex;
   flex: none;
-  min-width: 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.sectionHeader {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-bottom: 1px solid var(--border);
-}
-
-.sectionToggle {
-  display: flex;
-  flex: 1;
-  gap: var(--space-1);
+  gap: var(--space-3);
   align-items: center;
   min-width: 0;
-  padding: 0;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  text-transform: inherit;
-  letter-spacing: inherit;
-  background: none;
-  border: none;
+  height: var(--bar-height);
+  padding: 0 var(--space-3) 0 var(--space-1);
+  border-bottom: 1px solid var(--border);
 }
 
-.sectionChevron {
-  flex: none;
-}
-
-.sectionBody {
-  min-width: 0;
-}
-
-/* Keep a busy PR's description and conversation usable without displacing the
- * AI review below it. The header stays in view while the PR content scrolls.
- * Open, the section's flex-basis is set inline from the dragged height; it may
- * still shrink so the AI section below keeps its minimum. */
-.prSection {
-  position: relative;
-  display: flex;
+.tabList {
   flex: 0 1 auto;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+/* Both tabs' icons fit beside the review button's longest label
+   ("Re-reviewing…") down to about this width, which the panel's default
+   clears. Dragged narrower, the tabs let their icons go rather than wrap
+   their labels. */
+.tabBar {
+  container-type: inline-size;
+}
+
+@container (width < 325px) {
+  .tabIcon {
+    display: none;
+  }
+}
+
+.tabActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* Each panel owns the full remaining height and scrolls on its own. */
+.tabPanel {
+  display: flex;
+  flex: 1;
   flex-direction: column;
   min-height: 0;
 }
 
-.prSection .sectionBody {
+.tabPanel[hidden] {
+  display: none;
+}
+
+.prBody {
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
-}
-
-/* The AI section owns the remaining panel height, keeping its findings
- * scrollable even when a PR has a long conversation. */
-.section:last-child {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 160px;
-}
-
-.section:last-child .sectionBody {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.prTitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.refreshPr {
-  flex: none;
-  padding: 0 var(--space-1);
-  font: inherit;
-  color: inherit;
-  text-transform: inherit;
-  letter-spacing: inherit;
-  background: none;
-  border: none;
-}
-
-.refreshPr:disabled {
-  opacity: 0.6;
 }
 
 .prName,
@@ -111,47 +95,76 @@
   white-space: pre-wrap;
 }
 
-.prName {
-  padding: var(--space-2) var(--space-3) 0;
-  font-weight: 600;
+.prHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--panel-inset);
+  border-bottom: 1px solid var(--border);
 }
 
-.prDescription {
-  margin: var(--space-3);
-  overflow: hidden;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+/* Above the description's own headings (18px), so it reads as the page's title. */
+.prName {
+  font-size: var(--tk-text-xl);
+  font-weight: 600;
+  line-height: var(--tk-leading-tight);
+}
+
+/* The underline is always there, in a transparent colour, so hovering can fade
+   it in: whether a line is drawn at all cannot transition. */
+.prLink {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--accent);
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+}
+
+.prLink:hover {
+  text-decoration-color: currentColor;
+}
+
+.prSkeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--panel-inset);
 }
 
 .muted {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--panel-inset);
   color: var(--text-dim);
 }
 
 .prMarkdown {
-  padding: var(--space-2) var(--space-3);
-  color: var(--text-dim);
+  padding: var(--panel-inset);
+  color: var(--text);
 }
 
-.prCommentMarkdown {
+.prCommentMarkdown,
+.agentMarkdown {
   margin-top: 2px;
-  color: var(--text-dim);
+  color: var(--text);
 }
 
 .prMarkdown,
-.prCommentMarkdown {
+.prCommentMarkdown,
+.agentMarkdown {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .prMarkdown > :first-child,
-.prCommentMarkdown > :first-child {
+.prCommentMarkdown > :first-child,
+.agentMarkdown > :first-child {
   margin-top: 0;
 }
 
 .prMarkdown > :last-child,
-.prCommentMarkdown > :last-child {
+.prCommentMarkdown > :last-child,
+.agentMarkdown > :last-child {
   margin-bottom: 0;
 }
 
@@ -162,11 +175,17 @@
 .prMarkdown blockquote,
 .prMarkdown table,
 .prCommentMarkdown p,
+.agentMarkdown p,
 .prCommentMarkdown ul,
+.agentMarkdown ul,
 .prCommentMarkdown ol,
+.agentMarkdown ol,
 .prCommentMarkdown pre,
+.agentMarkdown pre,
 .prCommentMarkdown blockquote,
-.prCommentMarkdown table {
+.agentMarkdown blockquote,
+.prCommentMarkdown table,
+.agentMarkdown table {
   margin: 0 0 var(--space-2);
 }
 
@@ -178,22 +197,29 @@
 .prMarkdown h6 {
   margin: var(--space-3) 0 var(--space-1);
   color: var(--text);
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .prCommentMarkdown h1,
+.agentMarkdown h1,
 .prCommentMarkdown h2,
+.agentMarkdown h2,
 .prCommentMarkdown h3,
+.agentMarkdown h3,
 .prCommentMarkdown h4,
+.agentMarkdown h4,
 .prCommentMarkdown h5,
-.prCommentMarkdown h6 {
+.agentMarkdown h5,
+.prCommentMarkdown h6,
+.agentMarkdown h6 {
   margin: var(--space-2) 0 var(--space-1);
   color: var(--text);
-  font-size: 13px;
+  font-size: 17px;
 }
 
 .prMarkdown code,
-.prCommentMarkdown code {
+.prCommentMarkdown code,
+.agentMarkdown code {
   padding: 1px 3px;
   font-family: var(--font-mono);
   font-size: 0.9em;
@@ -203,7 +229,8 @@
 }
 
 .prMarkdown pre,
-.prCommentMarkdown pre {
+.prCommentMarkdown pre,
+.agentMarkdown pre {
   padding: var(--space-2);
   overflow-x: auto;
   background: var(--bg-sunken);
@@ -211,30 +238,38 @@
 }
 
 .prMarkdown pre code,
-.prCommentMarkdown pre code {
+.prCommentMarkdown pre code,
+.agentMarkdown pre code {
   padding: 0;
   background: none;
 }
 
 .prMarkdown a,
-.prCommentMarkdown a {
+.prCommentMarkdown a,
+.agentMarkdown a {
   color: var(--accent);
 }
 
+/* Inline, as on GitHub, where the design system's reset makes images blocks:
+   bots put avatars and status badges on the line beside their text. */
 .prMarkdown img,
-.prCommentMarkdown img {
+.prCommentMarkdown img,
+.agentMarkdown img {
+  display: inline;
   max-width: 100%;
   height: auto;
 }
 
 .prMarkdown blockquote,
-.prCommentMarkdown blockquote {
+.prCommentMarkdown blockquote,
+.agentMarkdown blockquote {
   padding-left: var(--space-2);
   border-left: 2px solid var(--border-strong);
 }
 
 .prMarkdown details,
-.prCommentMarkdown details {
+.prCommentMarkdown details,
+.agentMarkdown details {
   padding: var(--space-2);
   margin-bottom: var(--space-2);
   border: 1px solid var(--border);
@@ -242,18 +277,21 @@
 }
 
 .prMarkdown summary,
-.prCommentMarkdown summary {
+.prCommentMarkdown summary,
+.agentMarkdown summary {
   cursor: pointer;
 }
 
 .prMarkdown .task-list-item-checkbox,
-.prCommentMarkdown .task-list-item-checkbox {
+.prCommentMarkdown .task-list-item-checkbox,
+.agentMarkdown .task-list-item-checkbox {
   margin: 0 var(--space-1) 0 0;
   pointer-events: none;
 }
 
 .prMarkdown table,
-.prCommentMarkdown table {
+.prCommentMarkdown table,
+.agentMarkdown table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
@@ -263,23 +301,27 @@
 .prMarkdown th,
 .prMarkdown td,
 .prCommentMarkdown th,
-.prCommentMarkdown td {
+.agentMarkdown th,
+.prCommentMarkdown td,
+.agentMarkdown td {
   padding: 3px var(--space-2);
   text-align: left;
   vertical-align: top;
+  /* Whole words, unlike the prose around it: a table too wide for the panel
+     scrolls sideways, as GitHub's do, rather than splitting "Project". */
+  overflow-wrap: normal;
   border: 1px solid var(--border);
 }
 
 .prMoved {
-  padding: var(--space-2) var(--space-3) 0;
   color: var(--modified);
 }
 
 .prDiscussion {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-4);
+  padding: var(--panel-inset);
   border-top: 1px solid var(--border);
 }
 
@@ -291,13 +333,6 @@
   letter-spacing: 0.04em;
 }
 
-.prComment {
-  padding: var(--space-2);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
 .prAuthor {
   font-size: 12px;
   font-weight: 600;
@@ -307,11 +342,11 @@
 .inlineGroup {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .inlineGroup + .inlineGroup {
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
 }
 
 .inlinePath {
@@ -325,90 +360,70 @@
   border: none;
 }
 
-.title {
+.controls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  /* The trigger is a ghost button, whose own padding makes up the rest of the
+     inset, so its icon lines up with the text below. The right edge matches
+     the tab bar's, where the row is short of width for the summary. */
+  padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--panel-inset) - var(--space-3));
+  border-bottom: 1px solid var(--border);
+}
+
+/* One line that reads back the agent settings; the popover behind it edits them. */
+.settingsTrigger {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.settingsSummary {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.reviewButton {
-  flex: none;
-  padding: 2px var(--space-2);
-  color: #fff;
-  background: var(--accent);
-  border: none;
-  border-radius: var(--radius);
-}
-
-.reviewButton:disabled {
-  opacity: 0.5;
-}
-
-.controls {
+.settingsPopup {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 20rem;
+  padding: var(--space-4);
+}
+
+.settingsTitle {
+  color: var(--tk-label);
+  font-family: var(--tk-label-font);
+  font-size: var(--tk-label-size);
+  font-weight: var(--tk-label-weight);
+  font-stretch: var(--tk-label-stretch);
+  letter-spacing: var(--tk-label-tracking);
+  text-transform: var(--tk-label-transform);
+}
+
+.settingsField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settingsLabel {
+  font-size: var(--tk-text-xs);
+  color: var(--text-dim);
+}
+
+.settingsHint {
+  font-size: var(--tk-text-xs);
+  color: var(--text-faint);
 }
 
 /* Sits alongside the engine and model fields; a mode switch, not a command. */
 .explainToggle {
   display: flex;
   flex: none;
-  gap: var(--space-1);
-  align-items: center;
-  color: var(--text-dim);
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
-}
-
-.explainToggle:hover {
-  color: var(--text);
-}
-
-.explainToggle input {
-  margin: 0;
-  cursor: pointer;
-}
-
-.explainToggle:has(input:disabled) {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.selectWrap {
-  position: relative;
-  display: flex;
-  flex: none;
-  align-items: center;
-}
-
-.engineSelect {
-  min-width: 0;
-  padding: 3px var(--space-4) 3px var(--space-2);
-  color: var(--text);
-  appearance: none;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.engineSelect:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-/* Mirrors the combobox trigger's equilateral triangle. */
-.selectChevron {
-  position: absolute;
-  right: var(--space-1);
-  width: 9px;
-  pointer-events: none;
-  fill: var(--text-dim);
 }
 
 /* The model combobox fills whatever the engine select leaves of the row. */
@@ -421,12 +436,62 @@
 .body {
   flex: 1;
   min-height: 0;
-  padding: var(--space-3);
   overflow-y: auto;
 }
 
-.reviewedWith {
-  margin: 0 0 var(--space-2);
+.section {
+  padding: var(--space-4) var(--panel-inset) var(--panel-inset);
+}
+
+/* Loading and empty states: text in the column, without a section heading. */
+.notice {
+  padding: var(--space-4) var(--panel-inset);
+}
+
+.section + .section,
+.section + .notice,
+.notice + .section {
+  border-top: 1px solid var(--border);
+}
+
+/* Styled like the PR tab's subheadings, plus the chevron that folds it. */
+.sectionHeading {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.sectionHeading:hover {
+  color: var(--text-dim);
+}
+
+.sectionCount {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.sectionBody[hidden] {
+  display: none;
+}
+
+.provenance {
+  margin: 0;
   font-size: 12px;
   color: var(--text-faint);
 }
@@ -436,40 +501,89 @@
   color: var(--text-dim);
 }
 
-.summary {
-  margin: 0;
+/* The loader's caption goes first when a run ends, while the shapes leave. */
+.statusLeaving {
+  opacity: 0;
+  transition: opacity 200ms var(--ease-out-expo);
 }
 
-.prComposer {
+/* A finished run's previous review fades out while the loader leaves, and the
+   new one is rendered in its place unseen (`REPLACE_FADE_MS`). The transition
+   is only here, so on the way out of this state nothing fades back in:
+   useRevealInOrder brings the new review in instead. */
+.replacing [data-reveal-frame] {
+  opacity: 0;
+  transition: opacity 240ms var(--ease-out-expo);
+}
+
+/* The row under an item: "Ask", "Send to PR", and the posted link. Wraps so
+   an open PR composer can take a line of its own. */
+.itemActions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
-  margin: var(--space-2) 0;
 }
 
-.postButton,
-.composerCancel {
-  flex: none;
-  padding: 2px var(--space-2);
-  font: inherit;
-  border-radius: var(--radius);
+.actionsEnd {
+  margin-left: auto;
 }
 
-.postButton {
-  color: var(--accent);
-  background: var(--bg);
-  border: 1px solid var(--accent);
+/* An item's first line, with its copy button at the far end. */
+.itemHead {
+  display: flex;
+  align-self: stretch;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
 }
 
-.postButton:disabled,
-.composerCancel:disabled {
-  opacity: 0.5;
+.itemHead > :first-child {
+  min-width: 0;
+}
+
+/* The button is taller than a line of small print; it overhangs the line
+   rather than pushing it and its neighbours apart. */
+.itemHead > :last-child:not(:first-child) {
+  margin-block: calc(-1 * var(--space-1));
+}
+
+/* A title can wrap, and the button stays with its first line, which is
+   already as tall as the button. */
+.titleHead {
+  align-items: flex-start;
+}
+
+.titleHead > :last-child:not(:first-child) {
+  margin-block: 0;
+}
+
+/* The composer adds no box of its own; its pieces sit in the action row. */
+.prComposer {
+  display: contents;
+}
+
+/* A ghost button shows no edge until hovered, so leading the row it is pulled
+   out by its own padding: its label lines up with the text above, and the
+   hover fill spills into the inset instead. */
+.askButton:first-child {
+  margin-left: calc(-1 * var(--space-3));
 }
 
 .postedLink {
-  font-size: 12px;
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  font-size: var(--tk-text-sm);
   color: var(--accent);
+  /* Faded in on hover, like `.prLink`'s. */
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+}
+
+.postedLink:hover {
+  text-decoration-color: currentColor;
 }
 
 .composerEditor {
@@ -487,9 +601,8 @@
 .composerInput {
   box-sizing: border-box;
   width: 100%;
-  min-height: 88px;
   padding: var(--space-2);
-  resize: vertical;
+  --textarea-padding-and-border: calc(var(--space-2) + 1px);
   color: var(--text);
   font: inherit;
   line-height: 1.4;
@@ -519,20 +632,14 @@
   gap: var(--space-1);
 }
 
-.composerCancel {
-  color: var(--text-dim);
-  background: none;
-  border: 1px solid var(--border-strong);
-}
-
-/* One conversation: comments, pending marker, then the ask box. */
+/* One conversation: comments, pending marker, then the ask box. Hung off a
+   rule down its left, so it reads as a reply to the item above it. */
 .thread {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 var(--space-3);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
+  gap: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
 }
 
 .commentUser,
@@ -561,10 +668,6 @@
   white-space: pre-wrap;
 }
 
-.commentAgent .commentText {
-  color: var(--text-dim);
-}
-
 .commentPending {
   margin: 0;
   font-style: italic;
@@ -583,10 +686,8 @@
   flex: 1;
   min-width: 0;
   padding: 2px var(--space-2);
+  --textarea-padding-and-border: 3px;
   line-height: 1.5;
-  /* Six lines, then it scrolls: long enough for a real paragraph, short enough
-     that the conversation above it stays on screen. Must match the padding. */
-  max-height: calc(6 * 1.5em + 4px);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -598,7 +699,10 @@
 }
 
 .commentSend {
+  display: inline-flex;
   flex: none;
+  gap: var(--space-1);
+  align-items: center;
   padding: 2px var(--space-2);
   background: var(--bg);
   border: 1px solid var(--border-strong);
@@ -613,7 +717,7 @@
   display: flex;
   gap: var(--space-2);
   align-items: flex-start;
-  margin-bottom: var(--space-3);
+  margin: var(--space-3) var(--panel-inset) 0;
   padding: var(--space-2);
   color: var(--danger);
   background: var(--danger-bg);
@@ -626,141 +730,178 @@
   white-space: pre-wrap;
 }
 
-.errorDismiss {
-  padding: 0 var(--space-2);
-  background: none;
-  border: 1px solid currentColor;
-  border-radius: var(--radius);
-  opacity: 0.8;
-}
-
-.errorDismiss:hover {
-  opacity: 1;
-}
-
 .findings {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .finding {
-  padding: var(--space-2);
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.findingMeta {
   display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  align-items: center;
   min-width: 0;
-  margin-bottom: var(--space-1);
 }
 
+.finding + .finding {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* The chip is the title's first word: the title is what identifies a finding,
+   so it is what the severity labels, and a long title wraps back under the chip
+   rather than hanging in a column beside it. Its own short line, centred on the
+   title's x-height, keeps it inside the line box instead of stretching it. */
 .severity {
-  flex: none;
+  display: inline-block;
+  margin-right: var(--space-1);
   padding: 0 var(--space-1);
   font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--tone);
+  background: var(--tone-bg);
   border-radius: var(--radius);
 }
 
+/* Each severity is a tone, set on the title: the whole title is written in
+   it, and the chip inside wears it as a tint. */
 .severity_critical {
-  color: var(--deleted);
-  background: var(--deleted-bg);
+  --tone: var(--deleted);
+  --tone-bg: var(--deleted-bg);
 }
 
 .severity_warning {
-  color: var(--modified);
-  background: var(--modified-bg);
+  --tone: var(--modified);
+  --tone-bg: var(--modified-bg);
 }
 
 .severity_suggestion {
-  color: var(--renamed);
-  background: var(--renamed-bg);
+  --tone: var(--renamed);
+  --tone-bg: var(--renamed-bg);
 }
 
 .severity_nit,
 .severity_neutral {
-  color: var(--text-dim);
-  background: var(--bg-sunken);
+  --tone: var(--text-dim);
+  --tone-bg: var(--bg-sunken);
 }
 
-/* Re-review verdicts on prior findings, worn on the same chip as a severity.
+/* Re-review verdicts on prior findings, toned the same way as a severity.
    Green is deliberately reserved for "addressed" — nothing else in the panel
-   celebrates. An unrecognised status falls back to the neutral chip. */
+   celebrates. An unrecognised status falls back to the neutral tone. */
 .status_addressed {
-  color: var(--added);
-  background: var(--added-bg);
+  --tone: var(--added);
+  --tone-bg: var(--added-bg);
 }
 
 .status_unaddressed {
-  color: var(--deleted);
-  background: var(--deleted-bg);
+  --tone: var(--deleted);
+  --tone-bg: var(--deleted-bg);
 }
 
 .status_partial {
-  color: var(--modified);
-  background: var(--modified-bg);
+  --tone: var(--modified);
+  --tone-bg: var(--modified-bg);
 }
 
 .status_obsolete,
 .status_neutral {
-  color: var(--text-dim);
-  background: var(--bg-sunken);
+  --tone: var(--text-dim);
+  --tone-bg: var(--bg-sunken);
 }
 
-/* Explanations reuse the finding card — same column, same reading rhythm — and
-   are separated from the block of findings below them. */
-.explanations {
-  margin-bottom: var(--space-3);
+/* A file's explanation: its path, as a finding shows one, over the text. */
+.explainFile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
 }
 
-/* What tells an explanation apart from a finding at a glance: every severity
-   chip is filled, so this one is outlined instead of competing for a colour. */
-.explainTag {
-  composes: severity;
-  color: var(--text-faint);
-  background: none;
-  border: 1px solid var(--border-strong);
+/* Its own row, so the path is never the thing a long title squeezes out. Flex
+   rather than a plain block: the item shrinks to fit, which keeps a short path
+   against the left edge while letting a long one take the width it has. */
+.findingLocation {
+  display: flex;
+  min-width: 0;
 }
 
+/* Clipped at the start, not the end. A path is identified by its tail — the
+   file name and the line — so that is the part that has to survive a narrow
+   panel, and the leading directories are what the ellipsis eats. `direction:
+   rtl` is what moves the overflow to the left edge; the path still reads left
+   to right, because every character in it resolves as left-to-right text. */
 .findingPath,
 .findingPathPlain {
+  min-width: 0;
   overflow: hidden;
-  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-dim);
   text-overflow: ellipsis;
   white-space: nowrap;
+  direction: rtl;
 }
 
 .findingPath {
   padding: 0;
-  text-align: left;
+  /* Right within an rtl box, which is where the un-clipped end of the path
+     sits. A button's centred default would put the ellipsis back on the right. */
+  text-align: right;
   cursor: pointer;
   background: none;
   border: none;
+  /* A button, so the global link transition does not reach it. */
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  transition-property: color, text-decoration-color;
+  transition-duration: var(--tk-duration-2);
+  transition-timing-function: var(--tk-ease-out);
 }
 
 .findingPath:hover {
   color: var(--accent);
-  text-decoration: underline;
+  text-decoration-color: currentColor;
+}
+
+/* The file list's split: folders dim, the file name at full strength. */
+.pathName {
+  color: var(--text);
+  transition: color var(--tk-duration-2) var(--tk-ease-out);
+}
+
+/* Named rather than inherited: inheriting would first snap it to the path's
+   dim starting colour, then follow that up to the accent. */
+.findingPath:hover .pathName {
+  color: var(--accent);
 }
 
 .findingTitle {
-  margin: 0 0 var(--space-1);
+  min-width: 0;
+  margin: 0;
   font-weight: 600;
+  color: var(--tone);
 }
 
-.findingBody {
-  margin: 0;
-  color: var(--text-dim);
-  white-space: pre-wrap;
+/* The conclusion's verdicts, side by side like GitHub's; they wrap when the
+   panel is too narrow for all three. */
+.verdicts {
+  flex-flow: row wrap;
+  gap: var(--space-2) var(--space-5);
+}
+
+/* Marks the verdict the agent recommended, so choosing another stays visible. */
+.suggested {
+  margin-left: var(--space-2);
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
