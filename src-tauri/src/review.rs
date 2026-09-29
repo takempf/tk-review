@@ -665,13 +665,55 @@ fn run_cli(
         .map_err(|err| GitError::Command(err.to_string()))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr);
         // On failure these CLIs often write the explanation to stdout instead.
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let log = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
+        let detail = failure_detail(&log, prompt);
         return Err(GitError::Command(format!("{name} failed: {detail}")));
     }
     Ok(output)
+}
+
+/// Lines of a failed CLI's log kept when no explicit error line is found.
+const FAILURE_TAIL_LINES: usize = 20;
+
+/// The part of a failed CLI's log worth showing. Codex's stderr is its whole
+/// session log, which echoes the prompt (patch included) before the error, so
+/// the raw log buries a one-line explanation under the diff. Codex reports each
+/// failure as an `ERROR: ` line, often a JSON API error, so those come first;
+/// failing that, the tail of the log with the prompt echo cut out.
+fn failure_detail(log: &str, prompt: &str) -> String {
+    let mut errors: Vec<String> = Vec::new();
+    for line in log.lines() {
+        let Some(rest) = line.strip_prefix("ERROR: ") else {
+            continue;
+        };
+        let message = serde_json::from_str::<serde_json::Value>(rest)
+            .ok()
+            .and_then(|error| error["error"]["message"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| rest.trim().to_owned());
+        // Codex retries once, so the same error usually shows up twice.
+        if !errors.contains(&message) {
+            errors.push(message);
+        }
+    }
+    if !errors.is_empty() {
+        return errors.join("\n");
+    }
+
+    let prompt = prompt.trim();
+    let log = if prompt.is_empty() {
+        log.to_owned()
+    } else {
+        log.replace(prompt, "")
+    };
+    let lines: Vec<&str> = log.trim().lines().collect();
+    lines[lines.len().saturating_sub(FAILURE_TAIL_LINES)..].join("\n")
 }
 
 /// Runs `claude -p` and unwraps the CLI's JSON envelope down to the model's
@@ -1200,5 +1242,55 @@ mod tests {
         assert!(prompt.contains("The API should remain backward compatible."));
         assert!(prompt.contains("@reviewer (src/api.rs:12): Please keep the old endpoint."));
         assert!(!prompt.contains("do not repeat points already raised"));
+    }
+
+    /// Trimmed from a real `codex exec` run with an unsupported model.
+    const CODEX_FAILURE_LOG: &str = r#"OpenAI Codex v0.146.1
+--------
+model: gpt-6-sol
+--------
+user
+Review this change.
+diff --git a/a b/a
++    },
+
+warning: Model metadata for `gpt-6-sol` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+2026-09-28T15:44:45.015150Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed
+ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account."}}
+ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account."}}
+"#;
+
+    #[test]
+    fn a_codex_failure_shows_only_its_error_message() {
+        let detail = failure_detail(CODEX_FAILURE_LOG, "Review this change.\ndiff --git a/a b/a");
+
+        assert_eq!(
+            detail,
+            "The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account."
+        );
+    }
+
+    #[test]
+    fn a_plain_error_line_is_kept_as_written() {
+        let detail = failure_detail(
+            "user\nprompt\nERROR: stream disconnected before completion\n",
+            "prompt",
+        );
+
+        assert_eq!(detail, "stream disconnected before completion");
+    }
+
+    #[test]
+    fn without_error_lines_the_log_tail_omits_the_prompt_echo() {
+        let prompt = (0..50)
+            .map(|n| format!("patch line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let log = format!("header\nuser\n{prompt}\n\nsomething went wrong\n");
+
+        let detail = failure_detail(&log, &prompt);
+
+        assert!(!detail.contains("patch line"), "{detail}");
+        assert!(detail.ends_with("something went wrong"), "{detail}");
     }
 }
