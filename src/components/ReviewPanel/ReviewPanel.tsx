@@ -638,7 +638,7 @@ function PrCommentComposer({
       setConfirming(true);
       return;
     }
-    void postPrComment(finding, body, location.destination).then((posted) => {
+    void postPrComment(finding, body, location).then((posted) => {
       // Failures stay visible in the review panel and leave the editable draft
       // intact; a successful response leaves behind the GitHub permalink.
       if (posted) close();

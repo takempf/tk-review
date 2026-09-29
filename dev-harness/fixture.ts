@@ -275,7 +275,7 @@ export const VERSIONS: Record<string, FileVersions> = {
   "migrations/0007_add_reviews_table.sql": sided(SQL_OLD, SQL_NEW),
 };
 
-/** Stand-in Claude review; exercises every severity plus a path outside the diff. */
+/** Stand-in Claude review; exercises every severity, a line span, and a path outside the diff. */
 export const REVIEW: ReviewResult = {
   summary:
     "A focused rework of the diff viewer's data flow, plus a schema migration. The riskiest part is the migration: it adds a non-null column without a backfill for existing rows.",
@@ -289,7 +289,9 @@ export const REVIEW: ReviewResult = {
     },
     {
       path: "src/components/DiffViewer/DiffViewer.tsx",
+      // A span, so the harness shows one highlighted and posted as a range.
       line: 11,
+      endLine: 18,
       severity: "warning",
       title: "Effect cleanup races the in-flight fetch.",
       body: "`cancelled` is checked after the promise resolves, but the store subscription set up above is never torn down when the file changes mid-fetch.",

@@ -66,12 +66,17 @@ export interface FileVersions {
   new: string | null;
 }
 
-/** One problem the reviewer found, anchored to a file (and line, when it has one). */
+/** One problem the reviewer found, anchored to a file (and lines, when it has them). */
 export interface ReviewFinding {
   /** Path as it appears in the diff's compare side. */
   path: string;
-  /** New-file line number, or `null` for whole-file findings. */
+  /** New-file line number — the first, for a span — or `null` for whole-file findings. */
   line: number | null;
+  /**
+   * Last new-file line of a finding that spans several; `null` (or absent, on
+   * reviews stored before spans existed) for a single line or the whole file.
+   */
+  endLine?: number | null;
   /** critical | warning | suggestion | nit — written by the model, so treat as a label. */
   severity: string;
   title: string;
@@ -279,6 +284,8 @@ export const gitApi = {
     body: string;
     path: string | null;
     line: number | null;
+    /** Where an inline comment's span ends; `null` for a single line. */
+    endLine: number | null;
     destination: PrCommentDestination;
   }) => invoke<PostedPrComment>("post_pr_comment", { ...args }),
 

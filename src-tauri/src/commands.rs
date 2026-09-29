@@ -63,6 +63,7 @@ pub async fn post_pr_comment(
     body: String,
     path: Option<String>,
     line: Option<u32>,
+    end_line: Option<u32>,
     destination: PrCommentDestination,
 ) -> Result<PostedPrComment, GitError> {
     blocking(move || {
@@ -72,6 +73,7 @@ pub async fn post_pr_comment(
             &body,
             path.as_deref(),
             line,
+            end_line,
             destination,
         )
     })

@@ -77,19 +77,55 @@ Your prose may be posted as a GitHub pull request comment, where GitHub turns ce
 /// string values, and titles stay plain because the app shows them as labels.
 const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values, with newlines escaped as `\\n` as JSON requires. Titles are plain text: no Markdown in a `title`, and ideally no more than ten words.";
 
+/// How the review and re-review prompts anchor a finding: one line, a span of
+/// lines, or the whole file.
+const LOCATION_GUIDANCE: &str = "`line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
     /// Path as it appears in the diff's compare side.
     pub path: String,
-    /// New-file line number the finding anchors to, when there is one.
+    /// New-file line number the finding anchors to, when there is one: the
+    /// first line, for a finding that spans several.
     #[serde(default)]
     pub line: Option<u32>,
+    /// Last new-file line of the span, for a finding that covers a range of
+    /// lines; `None` for a single line or the whole file. See `tidy_span`.
+    #[serde(default, alias = "end_line")]
+    pub end_line: Option<u32>,
     /// One of critical | warning | suggestion | nit — but the model writes it,
     /// so treat it as a label rather than an enum.
     pub severity: String,
     pub title: String,
     pub body: String,
+}
+
+impl ReviewFinding {
+    /// Settles what the model wrote into one shape per kind of location: a span
+    /// that ends where it starts is a single line, one written backwards is
+    /// turned around, and a span with no start is the whole file.
+    fn tidy_span(&mut self) {
+        match (self.line, self.end_line) {
+            (None, _) => self.end_line = None,
+            (Some(start), Some(end)) if end == start => self.end_line = None,
+            (Some(start), Some(end)) if end < start => {
+                self.line = Some(end);
+                self.end_line = Some(start);
+            }
+            _ => {}
+        }
+    }
+
+    /// Where the finding points, for the prompts that list findings back to the
+    /// agent: `line: 12`, `lines: 12-18`, or `line: whole file`.
+    fn location_label(&self) -> String {
+        match (self.line, self.end_line) {
+            (Some(start), Some(end)) => format!("lines: {start}-{end}"),
+            (Some(line), None) => format!("line: {line}"),
+            (None, _) => "line: whole file".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +172,11 @@ pub fn review_diff(
     } else {
         codex_result_text(root, &prompt, model, effort, Some(REVIEW_SCHEMA))?
     };
-    parse_agent_json(&result_text)
+    let mut result: ReviewResult = parse_agent_json(&result_text)?;
+    for finding in &mut result.findings {
+        finding.tidy_span();
+    }
+    Ok(result)
 }
 
 /// The re-review's verdict on one finding from the previous review.
@@ -206,7 +246,11 @@ pub fn re_review_diff(
     } else {
         codex_result_text(root, &prompt, model, effort, Some(RE_REVIEW_SCHEMA))?
     };
-    parse_agent_json(&result_text)
+    let mut result: ReReviewResult = parse_agent_json(&result_text)?;
+    for finding in &mut result.findings {
+        finding.tidy_span();
+    }
+    Ok(result)
 }
 
 fn build_re_review_prompt(
@@ -223,13 +267,13 @@ fn build_re_review_prompt(
 
     let mut findings_list = String::new();
     for (index, finding) in prior_findings.iter().enumerate() {
-        let line = finding
-            .line
-            .map(|line| line.to_string())
-            .unwrap_or_else(|| "whole file".to_owned());
         findings_list.push_str(&format!(
-            "{index}. [{}] {} (line: {line}) — {}\n   {}\n",
-            finding.severity, finding.path, finding.title, finding.body
+            "{index}. [{}] {} ({}) — {}\n   {}\n",
+            finding.severity,
+            finding.path,
+            finding.location_label(),
+            finding.title,
+            finding.body
         ));
     }
 
@@ -266,6 +310,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
     {{
       "path": "path/as/it/appears/in/the/diff",
       "line": 123,
+      "endLine": null,
       "severity": "critical | warning | suggestion | nit",
       "title": "One short sentence naming the problem.",
       "body": "What is wrong, why it matters, and what to do instead."
@@ -273,7 +318,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ]
 }}
 
-`resolutions` must have exactly one entry per numbered finding, using its number as `index`. `line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. Include new findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, and do not report style nits a formatter would catch. An empty findings array is a valid answer when nothing new is wrong.
+`resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} Include new findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, and do not report style nits a formatter would catch. An empty findings array is a valid answer when nothing new is wrong.
 
 A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
 
@@ -512,13 +557,13 @@ fn build_reply_prompt(
 
     match finding {
         Some(finding) => {
-            let line = finding
-                .line
-                .map(|line| line.to_string())
-                .unwrap_or_else(|| "whole file".to_owned());
             prompt.push_str(&format!(
-                "This conversation is about one finding from your review:\n- file: {} (line: {line})\n- severity: {}\n- {}\n- {}\n\nThe diff for that file:\n\n{patch}\n\n",
-                finding.path, finding.severity, finding.title, finding.body
+                "This conversation is about one finding from your review:\n- file: {} ({})\n- severity: {}\n- {}\n- {}\n\nThe diff for that file:\n\n{patch}\n\n",
+                finding.path,
+                finding.location_label(),
+                finding.severity,
+                finding.title,
+                finding.body
             ));
         }
         None => {
@@ -564,6 +609,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
     {{
       "path": "path/as/it/appears/in/the/diff",
       "line": 123,
+      "endLine": null,
       "severity": "critical | warning | suggestion | nit",
       "title": "One short sentence naming the problem.",
       "body": "What is wrong, why it matters, and what to do instead."
@@ -571,7 +617,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ]
 }}
 
-`line` is the new-file line number the finding anchors to, or null when it applies to the file as a whole. Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Include findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch. An empty findings array is a valid answer for a clean diff.
+{LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Include findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch. An empty findings array is a valid answer for a clean diff.
 
 A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
 
@@ -840,11 +886,12 @@ const REVIEW_SCHEMA: &str = r#"{
         "properties": {
           "path": {"type": "string"},
           "line": {"type": ["integer", "null"]},
+          "endLine": {"type": ["integer", "null"]},
           "severity": {"type": "string"},
           "title": {"type": "string"},
           "body": {"type": "string"}
         },
-        "required": ["path", "line", "severity", "title", "body"],
+        "required": ["path", "line", "endLine", "severity", "title", "body"],
         "additionalProperties": false
       }
     }
@@ -878,11 +925,12 @@ const RE_REVIEW_SCHEMA: &str = r#"{
         "properties": {
           "path": {"type": "string"},
           "line": {"type": ["integer", "null"]},
+          "endLine": {"type": ["integer", "null"]},
           "severity": {"type": "string"},
           "title": {"type": "string"},
           "body": {"type": "string"}
         },
-        "required": ["path", "line", "severity", "title", "body"],
+        "required": ["path", "line", "endLine", "severity", "title", "body"],
         "additionalProperties": false
       }
     }
@@ -1046,6 +1094,68 @@ mod tests {
     }
 
     #[test]
+    fn a_finding_can_span_a_range_of_lines() {
+        let json = r#"{"summary": "One span.", "findings": [
+            {"path": "src/a.ts", "line": 12, "endLine": 18, "severity": "warning",
+             "title": "Loop body mutates its bound.", "body": "Hoist the length."}
+        ]}"#;
+        let review: ReviewResult = parse_agent_json(json).expect("parse");
+        assert_eq!(review.findings[0].line, Some(12));
+        assert_eq!(review.findings[0].end_line, Some(18));
+        // Findings from before spans existed carry no end.
+        let review: ReviewResult = parse_agent_json(REVIEW_JSON).expect("parse");
+        assert_eq!(review.findings[0].end_line, None);
+    }
+
+    #[test]
+    fn the_snake_case_spelling_of_end_line_is_accepted() {
+        let json = r#"{"summary": "", "findings": [
+            {"path": "a", "line": 3, "end_line": 5, "severity": "nit", "title": "t", "body": "b"}
+        ]}"#;
+        let review: ReviewResult = parse_agent_json(json).expect("parse");
+        assert_eq!(review.findings[0].end_line, Some(5));
+    }
+
+    #[test]
+    fn tidy_span_settles_what_the_model_wrote() {
+        let finding = |line, end_line| ReviewFinding {
+            path: "a".into(),
+            line,
+            end_line,
+            severity: "nit".into(),
+            title: "t".into(),
+            body: "b".into(),
+        };
+        let tidied = |mut finding: ReviewFinding| {
+            finding.tidy_span();
+            (finding.line, finding.end_line)
+        };
+        assert_eq!(tidied(finding(Some(4), Some(9))), (Some(4), Some(9)));
+        assert_eq!(tidied(finding(Some(4), Some(4))), (Some(4), None));
+        assert_eq!(tidied(finding(Some(9), Some(4))), (Some(4), Some(9)));
+        assert_eq!(tidied(finding(None, Some(4))), (None, None));
+        assert_eq!(tidied(finding(Some(4), None)), (Some(4), None));
+    }
+
+    #[test]
+    fn review_prompts_and_codex_schemas_ask_for_an_end_line() {
+        let patch = "diff --git a/src/a.ts b/src/a.ts";
+        assert!(build_prompt(None, patch, None).contains(LOCATION_GUIDANCE));
+        assert!(
+            build_re_review_prompt(None, "Summary.", &[], patch, None).contains(LOCATION_GUIDANCE)
+        );
+        for schema in [REVIEW_SCHEMA, RE_REVIEW_SCHEMA] {
+            let schema: serde_json::Value = serde_json::from_str(schema).expect("schema");
+            let finding = &schema["properties"]["findings"]["items"];
+            assert!(finding["properties"]["endLine"].is_object());
+            assert!(finding["required"]
+                .as_array()
+                .expect("required")
+                .contains(&"endLine".into()));
+        }
+    }
+
+    #[test]
     fn missing_findings_defaults_to_empty() {
         let review = parse_claude(envelope(r#"{"summary": "Clean."}"#).as_bytes()).expect("parse");
         assert!(review.findings.is_empty());
@@ -1070,6 +1180,7 @@ mod tests {
         let finding = ReviewFinding {
             path: "src/a.ts".into(),
             line: Some(12),
+            end_line: None,
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
@@ -1110,6 +1221,7 @@ mod tests {
         let finding = ReviewFinding {
             path: "src/a.ts".into(),
             line: Some(12),
+            end_line: None,
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
@@ -1241,6 +1353,7 @@ mod tests {
             ReviewFinding {
                 path: "src/a.ts".into(),
                 line: Some(12),
+                end_line: Some(14),
                 severity: "warning".into(),
                 title: "Off-by-one in loop bound.".into(),
                 body: "The loop misses the last element.".into(),
@@ -1248,6 +1361,7 @@ mod tests {
             ReviewFinding {
                 path: "src/b.ts".into(),
                 line: None,
+                end_line: None,
                 severity: "nit".into(),
                 title: "Stale comment.".into(),
                 body: "The comment describes removed behavior.".into(),
@@ -1263,7 +1377,7 @@ mod tests {
 
         assert!(prompt.contains("Small, focused change."), "{prompt}");
         assert!(
-            prompt.contains("0. [warning] src/a.ts (line: 12) — Off-by-one in loop bound."),
+            prompt.contains("0. [warning] src/a.ts (lines: 12-14) — Off-by-one in loop bound."),
             "{prompt}"
         );
         assert!(

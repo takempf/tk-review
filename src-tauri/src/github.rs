@@ -346,12 +346,17 @@ fn read_pr(reference: &PrRef) -> Result<GhPr, GitError> {
 ///
 /// A review is anchored to the fetched PR commit. Re-read the current head
 /// first so an otherwise-valid inline line cannot land on a newer commit.
+///
+/// An inline comment with an `end_line` spans `line` through `end_line`, the
+/// way a multi-line selection does on GitHub; the caller has checked that both
+/// ends fall in one hunk of the patch, which GitHub requires.
 pub fn post_pr_comment(
     root: &Path,
     pr: &PrContext,
     body: &str,
     path: Option<&str>,
     line: Option<u32>,
+    end_line: Option<u32>,
     destination: PrCommentDestination,
 ) -> Result<PostedPrComment, GitError> {
     let _ = root;
@@ -391,8 +396,7 @@ pub fn post_pr_comment(
                 serde_json::Value::String(pr.head_sha.clone()),
             );
             fields.insert("path".into(), serde_json::Value::String(path.into()));
-            fields.insert("line".into(), serde_json::Value::from(line));
-            fields.insert("side".into(), serde_json::Value::String("RIGHT".into()));
+            insert_line_span(&mut fields, line, end_line);
         }
         PrCommentDestination::File => {
             let path =
@@ -432,6 +436,27 @@ pub fn post_pr_comment(
     Ok(PostedPrComment {
         url: posted.html_url,
     })
+}
+
+/// Anchors an inline comment to the new side of the diff. GitHub's `line` is
+/// where a comment ends; a span also names where it starts.
+fn insert_line_span(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    line: u32,
+    end_line: Option<u32>,
+) {
+    let right = || serde_json::Value::String("RIGHT".into());
+    match end_line {
+        Some(end) if end > line => {
+            fields.insert("start_line".into(), serde_json::Value::from(line));
+            fields.insert("start_side".into(), right());
+            fields.insert("line".into(), serde_json::Value::from(end));
+        }
+        _ => {
+            fields.insert("line".into(), serde_json::Value::from(line));
+        }
+    }
+    fields.insert("side".into(), right());
 }
 
 fn read_comments(reference: &PrRef) -> Result<Vec<PrComment>, GitError> {
@@ -697,6 +722,26 @@ pub fn remote_matches(remote: &str, reference: &PrRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_span_anchors_from_its_first_line_to_its_last_on_the_new_side() {
+        let mut fields = serde_json::Map::new();
+        insert_line_span(&mut fields, 12, Some(18));
+        assert_eq!(
+            serde_json::Value::Object(fields),
+            serde_json::json!({"start_line": 12, "start_side": "RIGHT", "line": 18, "side": "RIGHT"})
+        );
+
+        // No span, or one that ends where it starts: a single line.
+        for end_line in [None, Some(12)] {
+            let mut fields = serde_json::Map::new();
+            insert_line_span(&mut fields, 12, end_line);
+            assert_eq!(
+                serde_json::Value::Object(fields),
+                serde_json::json!({"line": 12, "side": "RIGHT"})
+            );
+        }
+    }
 
     #[test]
     fn parses_web_and_shorthand_references() {

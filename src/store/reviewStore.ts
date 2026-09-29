@@ -5,7 +5,6 @@ import {
   type ExplainResult,
   errorMessage,
   gitApi,
-  type PrCommentDestination,
   type PrContext,
   type RepoInfo,
   type ReviewComment,
@@ -13,6 +12,7 @@ import {
   type ReviewFinding,
   type ReviewResult,
 } from "../ipc/git";
+import type { PrPostLocation } from "../lib/prComment";
 
 /** One prior finding paired with the re-review's verdict on it. */
 export interface ResolvedFinding {
@@ -218,7 +218,7 @@ interface ReviewState {
   postPrComment: (
     finding: ReviewFinding | null,
     body: string,
-    destination: PrCommentDestination,
+    location: PrPostLocation,
   ) => Promise<boolean>;
   setReviewEngine: (engine: ReviewEngine) => void;
   setReviewModel: (model: string) => void;
@@ -976,7 +976,8 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       }
     },
 
-    async postPrComment(finding, body, destination) {
+    async postPrComment(finding, body, location) {
+      const { destination } = location;
       const { repo, base, compare, reviews, reviewEngine, pr, postingTo } = get();
       const stored = reviews[reviewEngine];
       const targetKey = finding ? findingThreadKey(finding) : REVIEW_THREAD_KEY;
@@ -998,8 +999,9 @@ export const useReviewStore = create<ReviewState>((set, get) => {
           root: repo.root,
           pr,
           body: body.trim(),
-          path: destination === "topLevel" ? null : (finding?.path ?? null),
-          line: destination === "inline" ? (finding?.line ?? null) : null,
+          path: destination === "topLevel" ? null : location.path,
+          line: destination === "inline" ? location.line : null,
+          endLine: destination === "inline" ? location.endLine : null,
           destination,
         });
         const updated = withPostedComment(stored, finding, posted.url, new Date().toISOString());
