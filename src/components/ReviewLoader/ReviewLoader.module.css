@@ -1,0 +1,18 @@
+.loader {
+  display: flex;
+  justify-content: center;
+  margin: var(--space-4) 0;
+}
+
+/*
+ * Width and height are set inline, snapped to whole device pixels per dither
+ * cell. The background is transparent, so the panel shows through; the shapes
+ * are shaded with three strengths of the text colour, dimmest to brightest.
+ */
+.canvas {
+  --loader-ink-1: color-mix(in oklab, var(--text) 22%, transparent);
+  --loader-ink-2: color-mix(in oklab, var(--text) 55%, transparent);
+  --loader-ink-3: var(--text);
+
+  image-rendering: pixelated;
+}

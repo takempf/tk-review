@@ -1,0 +1,18 @@
+/*
+ * Sized like a design system icon inside a button. The canvas inside is snapped
+ * down to whole device pixels per dither cell, and centred in what's left.
+ */
+.spinner {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  aspect-ratio: 1;
+  vertical-align: middle;
+}
+
+.canvas {
+  display: block;
+  image-rendering: pixelated;
+}
