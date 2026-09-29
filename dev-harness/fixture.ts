@@ -391,18 +391,31 @@ export const EXPLANATION: ExplainResult = {
   ],
 };
 
+const HOUR = 60 * 60 * 1000;
+
 /**
- * What the picker lists. Includes the PR the harness opens (`#47`, so the
- * selected row shows its tick), a draft, and titles distinct enough to tell
- * number-matching from title-matching while typing.
+ * What the pull request picker lists. Includes the PR the harness opens (`#47`), a
+ * draft, one per review decision, and titles distinct enough to tell
+ * number-matching from title-matching while searching. `#124 ← #127 ← #131` is
+ * a stack whose members are split across the filters. `requested` and `mine`
+ * drive the mocked `gh` filters.
  */
-export const PR_LIST: PrSummary[] = [
+export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = [
   {
     number: 47,
     title: "Render review findings in the PR workflow",
     author: "octocat",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/47",
+    headRef: "feature/diff-viewer",
+    baseRef: "main",
+    isCrossRepository: false,
+    headSha: "2f6a1e4f5de7c0d0d6e0f1a4b9c8d7e6f5a4b3c2",
+    updatedAt: new Date(Date.now() - 2 * HOUR).toISOString(),
+    additions: 52,
+    deletions: 19,
+    reviewDecision: "REVIEW_REQUIRED",
+    requested: true,
   },
   {
     number: 52,
@@ -410,6 +423,15 @@ export const PR_LIST: PrSummary[] = [
     author: "hubot",
     isDraft: true,
     url: "https://github.com/example/tk-review/pull/52",
+    headRef: "explain-mode",
+    baseRef: "main",
+    isCrossRepository: false,
+    headSha: "52aa",
+    updatedAt: new Date(Date.now() - 26 * HOUR).toISOString(),
+    additions: 410,
+    deletions: 38,
+    reviewDecision: null,
+    mine: true,
   },
   {
     number: 118,
@@ -417,6 +439,79 @@ export const PR_LIST: PrSummary[] = [
     author: "octocat",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/118",
+    headRef: "fix/force-push",
+    baseRef: "main",
+    isCrossRepository: false,
+    headSha: "118b",
+    updatedAt: new Date(Date.now() - 5 * HOUR).toISOString(),
+    additions: 12,
+    deletions: 40,
+    reviewDecision: "APPROVED",
+    requested: true,
+  },
+  {
+    number: 121,
+    title: "Keyboard navigation between findings",
+    author: "mona",
+    isDraft: false,
+    url: "https://github.com/example/tk-review/pull/121",
+    headRef: "findings-keys",
+    baseRef: "main",
+    isCrossRepository: false,
+    headSha: "121c",
+    updatedAt: new Date(Date.now() - 50 * HOUR).toISOString(),
+    additions: 88,
+    deletions: 7,
+    reviewDecision: "CHANGES_REQUESTED",
+    requested: true,
+  },
+  {
+    number: 124,
+    title: "Persist reviews to the app data directory instead of localStorage",
+    author: "tkempf",
+    isDraft: false,
+    url: "https://github.com/example/tk-review/pull/124",
+    headRef: "reviews-on-disk",
+    baseRef: "main",
+    isCrossRepository: false,
+    headSha: "124d",
+    updatedAt: new Date(Date.now() - 0.3 * HOUR).toISOString(),
+    additions: 230,
+    deletions: 115,
+    reviewDecision: "REVIEW_REQUIRED",
+    mine: true,
+  },
+  {
+    number: 127,
+    title: "Migrate reviews saved in localStorage on first launch",
+    author: "tkempf",
+    isDraft: false,
+    url: "https://github.com/example/tk-review/pull/127",
+    headRef: "reviews-migration",
+    baseRef: "reviews-on-disk",
+    isCrossRepository: false,
+    headSha: "127e",
+    updatedAt: new Date(Date.now() - 1 * HOUR).toISOString(),
+    additions: 64,
+    deletions: 3,
+    reviewDecision: "REVIEW_REQUIRED",
+    mine: true,
+  },
+  {
+    number: 131,
+    title: "Show where each stored review lives on disk",
+    author: "tkempf",
+    isDraft: true,
+    url: "https://github.com/example/tk-review/pull/131",
+    headRef: "reviews-location",
+    baseRef: "reviews-migration",
+    isCrossRepository: false,
+    headSha: "131f",
+    updatedAt: new Date(Date.now() - 30 * HOUR).toISOString(),
+    additions: 21,
+    deletions: 2,
+    reviewDecision: null,
+    requested: true,
   },
 ];
 

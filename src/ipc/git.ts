@@ -154,14 +154,28 @@ export interface PrContext {
   comments: PrComment[];
 }
 
-/** One row of the pull-request picker: enough to recognise and to search. */
+/** One row of the pull-request list: enough to recognise, search and choose between. */
 export interface PrSummary {
   number: number;
   title: string;
   author: string;
   isDraft: boolean;
   url: string;
+  headRef: string;
+  baseRef: string;
+  /** The head branch lives in a fork, so it cannot be another PR's base. */
+  isCrossRepository: boolean;
+  headSha: string;
+  /** ISO 8601. */
+  updatedAt: string;
+  additions: number;
+  deletions: number;
+  /** `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `null` when no review is required. */
+  reviewDecision: string | null;
 }
+
+/** Which open pull requests to list, relative to the signed-in `gh` account. */
+export type PrListFilter = "all" | "reviewRequested" | "mine";
 
 export interface RefreshPrResult {
   pr: PrContext;
@@ -269,7 +283,8 @@ export const gitApi = {
   fetchRemotes: (root: string) => invoke<void>("fetch_remotes", { root }),
 
   /** Open PRs on the repository this checkout's remotes point at, through `gh`. */
-  listPrs: (root: string) => invoke<PrSummary[]>("list_prs", { root }),
+  listPrs: (root: string, filter: PrListFilter = "all") =>
+    invoke<PrSummary[]>("list_prs", { root, filter }),
 
   /** Opens a GitHub PR and fetches its head to a stable local review ref. */
   openPr: (root: string, url: string) => invoke<PrContext>("open_pr", { root, url }),

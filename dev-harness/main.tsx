@@ -34,9 +34,16 @@ mockIPC((command, payload) => {
     // Delayed so the "Fetching…" state is visible in the harness.
     case "fetch_remotes":
       return new Promise((resolve) => setTimeout(() => resolve(null), 800));
-    // Delayed like a real `gh` call, so the picker's loading label is visible.
-    case "list_prs":
-      return new Promise((resolve) => setTimeout(() => resolve(PR_LIST), 700));
+    // Delayed like a real `gh` call, so the loading and refreshing states are
+    // visible. Lists are cached across reloads (src/lib/queries.ts): remove
+    // `tk-review:query-cache` from localStorage to see a cold load again.
+    case "list_prs": {
+      const filter = (payload as { filter?: string }).filter ?? "all";
+      const listed = PR_LIST.filter((pr) =>
+        filter === "reviewRequested" ? pr.requested : filter === "mine" ? pr.mine : true,
+      );
+      return new Promise((resolve) => setTimeout(() => resolve(listed), 700));
+    }
     case "open_pr":
       return PR;
     // Delayed like a real `gh` round-trip, so both Refresh buttons can be seen

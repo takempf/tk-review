@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use crate::error::GitError;
 use crate::git::{self, Branch, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
-    self, PostedPrComment, PrCommentDestination, PrContext, PrReviewVerdict, PrSummary,
-    RefreshPrResult,
+    self, PostedPrComment, PrCommentDestination, PrContext, PrListFilter, PrReviewVerdict,
+    PrSummary, RefreshPrResult,
 };
 use crate::models::{self, EngineModels};
 use crate::review::{self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment};
@@ -43,8 +43,8 @@ pub async fn fetch_remotes(root: String) -> Result<(), GitError> {
 
 /// Talks to GitHub through `gh`, so it costs a network round trip.
 #[tauri::command]
-pub async fn list_prs(root: String) -> Result<Vec<PrSummary>, GitError> {
-    blocking(move || github::list_prs(&PathBuf::from(root))).await
+pub async fn list_prs(root: String, filter: PrListFilter) -> Result<Vec<PrSummary>, GitError> {
+    blocking(move || github::list_prs(&PathBuf::from(root), filter)).await
 }
 
 #[tauri::command]

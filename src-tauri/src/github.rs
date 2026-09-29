@@ -51,8 +51,8 @@ pub struct PrContext {
     pub comments: Vec<PrComment>,
 }
 
-/// One row of the pull-request picker: enough to recognise and to search, not
-/// enough to review. Opening one fetches the rest.
+/// One row of the pull-request list: enough to recognise, search and choose
+/// between, not enough to review. Opening one fetches the rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrSummary {
@@ -61,6 +61,30 @@ pub struct PrSummary {
     pub author: String,
     pub is_draft: bool,
     pub url: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    /// Whether the head branch lives in a fork. A fork's branch names say
+    /// nothing about this repository's, so only same-repository PRs can be
+    /// the one another PR is stacked on.
+    pub is_cross_repository: bool,
+    /// The head commit, so a stored review can tell it is out of date.
+    pub head_sha: String,
+    /// ISO 8601, as GitHub reports it.
+    pub updated_at: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` when the
+    /// repository asks for no review.
+    pub review_decision: Option<String>,
+}
+
+/// Which open pull requests to list, in `gh`'s own terms of the signed-in user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PrListFilter {
+    All,
+    ReviewRequested,
+    Mine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -138,6 +162,18 @@ struct GhPrSummary {
     author: GhAuthor,
     is_draft: bool,
     url: String,
+    head_ref_name: String,
+    base_ref_name: String,
+    #[serde(default)]
+    is_cross_repository: bool,
+    head_ref_oid: String,
+    updated_at: String,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
+    #[serde(default)]
+    review_decision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,19 +304,23 @@ pub fn open_pr(root: &Path, url: &str) -> Result<PrContext, GitError> {
     })
 }
 
-/// How many pull requests the picker offers. Enough to cover what is actually
-/// in flight on a busy repository, while still being one quick `gh` call —
+/// How many pull requests one list shows. Enough to cover what is actually in
+/// flight on a busy repository, while still being one quick `gh` call —
 /// anything older is reached by pasting its URL, the way it always was.
 const PR_LIST_LIMIT: &str = "50";
 
-/// Open pull requests on the repository this checkout's remotes point at.
+const PR_LIST_FIELDS: &str =
+    "number,title,author,isDraft,url,headRefName,baseRefName,isCrossRepository,headRefOid,updatedAt,additions,deletions,reviewDecision";
+
+/// Open pull requests on the repository this checkout's remotes point at,
+/// most recently updated first.
 ///
 /// Listing is a convenience, not the way in: a repository with no GitHub remote,
-/// a missing `gh`, or an expired login all report as an error the picker shows
-/// in place of its list, and pasting a URL keeps working regardless.
-pub fn list_prs(root: &Path) -> Result<Vec<PrSummary>, GitError> {
+/// a missing `gh`, or an expired login all report as an error the list shows
+/// in its place, and pasting a URL keeps working regardless.
+pub fn list_prs(root: &Path, filter: PrListFilter) -> Result<Vec<PrSummary>, GitError> {
     let target = list_target(root)?;
-    let raw = run_gh(&[
+    let mut args = vec![
         "pr",
         "list",
         "--repo",
@@ -290,15 +330,26 @@ pub fn list_prs(root: &Path) -> Result<Vec<PrSummary>, GitError> {
         "--limit",
         PR_LIST_LIMIT,
         "--json",
-        "number,title,author,isDraft,url",
-    ])?;
+        PR_LIST_FIELDS,
+    ];
+    // `gh` resolves `@me` to the signed-in account itself.
+    match filter {
+        PrListFilter::All => {}
+        PrListFilter::ReviewRequested => args.extend(["--search", "review-requested:@me"]),
+        PrListFilter::Mine => args.extend(["--author", "@me"]),
+    }
+    let raw = run_gh(&args)?;
+    parse_pr_list(&raw)
+}
+
+fn parse_pr_list(raw: &[u8]) -> Result<Vec<PrSummary>, GitError> {
     if raw.iter().all(u8::is_ascii_whitespace) {
         return Ok(Vec::new());
     }
-    let listed: Vec<GhPrSummary> = serde_json::from_slice(&raw).map_err(|error| {
+    let listed: Vec<GhPrSummary> = serde_json::from_slice(raw).map_err(|error| {
         GitError::Command(format!("Could not read pull requests from gh: {error}"))
     })?;
-    Ok(listed
+    let mut prs: Vec<PrSummary> = listed
         .into_iter()
         .map(|pr| PrSummary {
             number: pr.number,
@@ -306,8 +357,19 @@ pub fn list_prs(root: &Path) -> Result<Vec<PrSummary>, GitError> {
             author: pr.author.login,
             is_draft: pr.is_draft,
             url: pr.url,
+            head_ref: pr.head_ref_name,
+            base_ref: pr.base_ref_name,
+            is_cross_repository: pr.is_cross_repository,
+            head_sha: pr.head_ref_oid,
+            updated_at: pr.updated_at,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            review_decision: pr.review_decision.filter(|decision| !decision.is_empty()),
         })
-        .collect())
+        .collect();
+    // ISO 8601 in one zone sorts as text.
+    prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(prs)
 }
 
 /// The `host/owner/repo` to list from. Remotes are searched in `gh`'s own order
@@ -851,6 +913,26 @@ mod tests {
             let err = submit_pr_review(&pr, verdict, "  ").expect_err("needs a body");
             assert!(err.to_string().contains("needs some text"), "{err}");
         }
+    }
+
+    #[test]
+    fn parses_pr_list_newest_first_and_drops_empty_review_decisions() {
+        let raw = br#"[
+            {"number":1,"title":"Old","author":{"login":"a"},"isDraft":false,"url":"u1",
+             "headRefName":"one","baseRefName":"main","headRefOid":"aaa","updatedAt":"2026-09-01T10:00:00Z",
+             "additions":3,"deletions":1,"reviewDecision":""},
+            {"number":2,"title":"New","author":{"login":"b"},"isDraft":true,"url":"u2",
+             "headRefName":"two","baseRefName":"main","isCrossRepository":true,"headRefOid":"bbb","updatedAt":"2026-09-20T10:00:00Z",
+             "additions":10,"deletions":0,"reviewDecision":"APPROVED"}
+        ]"#;
+        let prs = parse_pr_list(raw).unwrap();
+        assert_eq!(prs.iter().map(|pr| pr.number).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!(prs[0].review_decision.as_deref(), Some("APPROVED"));
+        assert_eq!(prs[1].review_decision, None);
+        assert_eq!(prs[0].head_ref, "two");
+        assert!(prs[0].is_cross_repository);
+        assert!(!prs[1].is_cross_repository);
+        assert!(parse_pr_list(b"  \n").unwrap().is_empty());
     }
 
     #[test]
