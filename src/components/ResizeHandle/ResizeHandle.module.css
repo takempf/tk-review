@@ -78,13 +78,16 @@
 }
 
 /* Applied to <body> for the duration of a drag. `user-select` inherits, which
-   stops the pointer selecting text as it sweeps across the panes. */
+   stops the pointer selecting text as it sweeps across the panes. WebKit, which
+   Tauri renders with on macOS, only reads the prefixed property. */
 .resizingX {
   cursor: col-resize;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .resizingY {
   cursor: row-resize;
   user-select: none;
+  -webkit-user-select: none;
 }

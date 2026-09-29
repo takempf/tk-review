@@ -115,6 +115,8 @@ export function ResizeHandle({
       onDoubleClick={onReset}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        // Stops the press from starting a text selection before the body class lands.
+        event.preventDefault();
         const start = horizontal ? event.clientX : event.clientY;
         drag.current = { start, startSize: size, latest: size };
         // Capture keeps move events coming even when the pointer outruns the
