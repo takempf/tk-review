@@ -13,6 +13,9 @@ import {
   type ReviewResult,
 } from "../ipc/git";
 import type { PrPostLocation } from "../lib/prComment";
+import { invalidatePrLists } from "../lib/queries";
+import { transitionScreen } from "../lib/screenTransition";
+import { forgetRepo, recordReview, rememberRepo } from "./history";
 
 /** One prior finding paired with the re-review's verdict on it. */
 export interface ResolvedFinding {
@@ -108,7 +111,39 @@ const viewedKey = (root: string, base: string, compare: string) =>
 
 export type DiffLayout = "split" | "unified";
 
+/** Home is the pull-request list; review is a comparison open in the diff. */
+export type AppView = "home" | "review";
+
+/** What the list already knows about a PR: enough to head the review while it opens. */
+export interface PrPreview {
+  number: number;
+  title: string;
+}
+
+export interface NavigateOptions {
+  /**
+   * Run the screen transition. Off when something else already animated the
+   * change — the system's swipe-back gesture slides its own snapshot.
+   */
+  animate?: boolean;
+}
+
+/** Everything that belongs to one comparison, emptied for the next. */
+const NO_COMPARISON = {
+  summary: null,
+  patch: null,
+  pr: null,
+  prHeadMoved: false,
+  reviews: {},
+  explanation: null,
+  reviewError: null,
+  explainError: null,
+  replyingTo: null,
+  postingTo: null,
+} satisfies Partial<ReviewState>;
+
 interface ReviewState {
+  view: AppView;
   repo: RepoInfo | null;
   branches: Branch[];
   base: string | null;
@@ -183,6 +218,12 @@ interface ReviewState {
   replyingTo: string | null;
   /** Review thread or finding currently being sent to GitHub. */
   postingTo: string | null;
+  /**
+   * A PR opened from the list, from the click until it is fetched and checked
+   * out. The review shows it straight away — number and title from the list,
+   * everything else as loading — rather than the list waiting on `gh`.
+   */
+  pendingPr: (PrPreview & { url: string }) | null;
   /** PR metadata only while its refs remain the active comparison. */
   pr: PrContext | null;
   /** True after refreshing detected a different PR head commit. */
@@ -193,12 +234,21 @@ interface ReviewState {
   openRepo: (path: string) => Promise<void>;
   restoreLastRepo: () => Promise<void>;
   closeRepo: () => void;
+  /** Back to the pull-request list, keeping the open comparison as it is. */
+  goHome: (options?: NavigateOptions) => void;
+  /** Into the diff for the current base and compare refs, loading it if needed. */
+  showReview: (options?: NavigateOptions) => Promise<void>;
   setBase: (base: string) => Promise<void>;
   setCompare: (compare: string) => Promise<void>;
   swapRefs: () => Promise<void>;
   refresh: () => Promise<void>;
   fetchRemotes: () => Promise<void>;
-  openPr: (url: string) => Promise<boolean>;
+  /**
+   * Opens a PR by URL or reference. With a `preview` from the list, the review
+   * screen shows at once and fills in as the PR loads; without one, the screen
+   * changes once it has.
+   */
+  openPr: (url: string, preview?: PrPreview) => Promise<boolean>;
   refreshPr: () => Promise<void>;
   selectFile: (path: string | null) => void;
   moveSelection: (offset: number) => void;
@@ -436,6 +486,29 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       base: `${result.pr.baseRemote}/${result.pr.baseRef}`,
       compare: result.pr.compareRef,
     });
+    // The list's row for this PR still carries the old head, and would show a
+    // review of the new one as having "New commits" until it next refetched.
+    if (result.headMoved) void invalidatePrLists(root);
+  }
+
+  /** Counts `openPr` calls, so a superseded one knows to drop its result. */
+  let openRequest = 0;
+
+  /**
+   * Applies `patch` and moves to `view`, inside the screen transition when the
+   * screen actually changes. Resolves once the store holds the new state.
+   */
+  function showView(
+    view: AppView,
+    patch: Partial<ReviewState> = {},
+    { animate = true }: NavigateOptions = {},
+  ): Promise<void> {
+    const update = () => set({ ...patch, view });
+    if (!animate || get().view === view) {
+      update();
+      return Promise.resolve();
+    }
+    return transitionScreen(update);
   }
 
   async function open(path: string, { remember }: { remember: boolean }): Promise<void> {
@@ -454,6 +527,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
           : (branches.find((branch) => branch.name !== compare)?.name ?? preferredBase);
 
       set({
+        view: "home",
         repo,
         branches,
         base,
@@ -468,20 +542,28 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         explainError: null,
         replyingTo: null,
         postingTo: null,
+        pendingPr: null,
         pr: null,
         viewed: new Set(),
         expanded: new Set(),
         loadingRepo: false,
       });
-      if (remember) localStorage.setItem(LAST_REPO_KEY, repo.root);
-      await loadDiff();
+      if (remember) {
+        localStorage.setItem(LAST_REPO_KEY, repo.root);
+        rememberRepo(repo);
+      }
+      // The diff waits until a comparison is chosen from the home screen.
     } catch (error) {
       set({ loadingRepo: false, error: errorMessage(error) });
-      if (remember) localStorage.removeItem(LAST_REPO_KEY);
+      if (remember) {
+        localStorage.removeItem(LAST_REPO_KEY);
+        forgetRepo(path);
+      }
     }
   }
 
   return {
+    view: "home",
     repo: null,
     branches: [],
     base: null,
@@ -512,6 +594,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
     reviewEffort: readReviewEffort(readReviewEngine()),
     replyingTo: null,
     postingTo: null,
+    pendingPr: null,
     pr: null,
     prHeadMoved: false,
     openingPr: false,
@@ -538,6 +621,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
     closeRepo() {
       localStorage.removeItem(LAST_REPO_KEY);
       set({
+        view: "home",
         repo: null,
         branches: [],
         base: null,
@@ -552,12 +636,22 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         explainError: null,
         replyingTo: null,
         postingTo: null,
+        pendingPr: null,
         pr: null,
         prHeadMoved: false,
         viewed: new Set(),
         expanded: new Set(),
         error: null,
       });
+    },
+
+    goHome(options) {
+      void showView("home", { error: null }, options);
+    },
+
+    async showReview(options) {
+      await showView("review", { error: null }, options);
+      if (!get().summary) await loadDiff();
     },
 
     async setBase(base) {
@@ -593,27 +687,46 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       await get().refresh();
     },
 
-    async openPr(url) {
-      const { repo, openingPr } = get();
-      if (!repo || openingPr) return false;
+    async openPr(url, preview) {
+      const { repo } = get();
+      if (!repo) return false;
+      // The latest request wins: a PR opened while another is still loading
+      // replaces it rather than being refused.
+      const request = ++openRequest;
 
       set({ openingPr: true, error: null });
+      if (preview) {
+        await showView("review", {
+          ...NO_COMPARISON,
+          pendingPr: { url, number: preview.number, title: preview.title },
+        });
+      }
       try {
         const pr = await gitApi.openPr(repo.root, url);
         const branches = await gitApi.listBranches(repo.root);
-        set({
+        if (request !== openRequest) return false;
+        const opened: Partial<ReviewState> = {
+          // Nothing of the previous comparison lingers while this one loads.
+          ...NO_COMPARISON,
           branches,
           base: `${pr.baseRemote}/${pr.baseRef}`,
           compare: pr.compareRef,
           includeUncommitted: false,
           pr,
-          prHeadMoved: false,
+          pendingPr: null,
           openingPr: false,
-        });
+        };
+        // From the list, the review is showing already — or was left while the
+        // PR loaded, and stays left; its Continue card picks it up.
+        if (preview) set(opened);
+        else await showView("review", opened);
         await loadDiff();
         return true;
       } catch (error) {
-        set({ openingPr: false, error: errorMessage(error) });
+        if (request !== openRequest) return false;
+        set({ openingPr: false, pendingPr: null, error: errorMessage(error) });
+        // A review of nothing is a dead end: back to the list, which shows why.
+        if (preview) await showView("home");
         return false;
       }
     },
@@ -636,8 +749,8 @@ export const useReviewStore = create<ReviewState>((set, get) => {
       // Refs move under the app whenever the user fetches, pulls, or switches
       // branches in a terminal, so a refresh re-reads the repo and its branch
       // list rather than only re-running the diff.
-      const { repo, pr, refreshingPr, loadingDiff } = get();
-      if (!repo || refreshingPr || loadingDiff) return;
+      const { repo, pr, refreshingPr, loadingDiff, openingPr } = get();
+      if (!repo || refreshingPr || loadingDiff || openingPr) return;
 
       if (pr) {
         // Re-reading the PR is a network round-trip through `gh`, and nothing
@@ -776,6 +889,13 @@ export const useReviewStore = create<ReviewState>((set, get) => {
           // changed while this review ran.
           const next = { ...readReviews(repo.root, base, scope), [reviewEngine]: stored };
           writeReviews(repo.root, base, scope, next);
+          if (pr) {
+            recordReview(repo.root, pr, {
+              engine: reviewEngine,
+              createdAt: stored.createdAt,
+              findings: result.findings.length,
+            });
+          }
           set(stillCurrent() ? { reviews: next, reviewing: false } : { reviewing: false });
         } catch (error) {
           set(
@@ -898,6 +1018,13 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         };
         const next = { ...readReviews(repo.root, base, scope), [reviewEngine]: stored };
         writeReviews(repo.root, base, scope, next);
+        if (pr) {
+          recordReview(repo.root, pr, {
+            engine: reviewEngine,
+            createdAt: stored.createdAt,
+            findings: result.findings.length,
+          });
+        }
         set(stillCurrent() ? { reviews: next, reReviewing: false } : { reReviewing: false });
       } catch (error) {
         set(

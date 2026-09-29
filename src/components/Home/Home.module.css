@@ -1,0 +1,388 @@
+.home {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.error {
+  display: flex;
+  gap: var(--tk-space-3);
+  align-items: center;
+  margin: var(--tk-space-5) var(--tk-space-8) 0;
+  padding: var(--tk-space-2) var(--tk-space-2) var(--tk-space-2) var(--tk-space-4);
+  color: var(--tk-danger);
+  background: var(--tk-danger-soft);
+
+  & p {
+    flex: 1;
+    white-space: pre-wrap;
+  }
+}
+
+.browser {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  max-width: 96rem;
+  min-height: 0;
+  margin: 0 auto;
+  padding: var(--tk-space-8) var(--tk-space-8) 0;
+}
+
+.browserHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-4);
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: var(--tk-space-6);
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-1);
+}
+
+.title {
+  font-size: var(--tk-text-2xl);
+}
+
+.headerActions {
+  display: flex;
+  gap: var(--tk-space-2);
+}
+
+/* Back into whatever comparison is already loaded. */
+.resume {
+  display: flex;
+  gap: var(--tk-space-3);
+  align-items: center;
+  margin-bottom: var(--tk-space-6);
+  padding: var(--tk-space-3) var(--tk-space-4);
+  color: var(--tk-fg);
+  text-align: left;
+  background: var(--tk-surface-raised);
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius-lg);
+  transition:
+    background-color var(--tk-duration-1) var(--tk-ease-fade),
+    border-color var(--tk-duration-1) var(--tk-ease-fade);
+
+  &:hover {
+    background: var(--bg-hover);
+    border-color: var(--tk-border);
+  }
+
+  & > :global(.tk-icon) {
+    flex: none;
+    color: var(--tk-fg-muted);
+  }
+}
+
+/* Number and title are set like a row's, so the review header morphs into
+   either one at true size. */
+.resumeHeading {
+  display: flex;
+  flex: 1;
+  gap: var(--tk-space-3);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.resumeNumber {
+  flex: none;
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-sm);
+  color: var(--tk-fg-subtle);
+}
+
+.resumeTitle {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--tk-text-md);
+  font-weight: var(--tk-weight-medium);
+  line-height: var(--tk-leading-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-3) var(--tk-space-6);
+  align-items: flex-end;
+  justify-content: space-between;
+  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+
+/* The toolbar carries the rule, so the list's own border would double it. */
+.tabList {
+  flex: 0 1 auto;
+  border-bottom: 0;
+}
+
+.tab {
+  gap: var(--tk-space-2);
+}
+
+.count {
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-subtle);
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: min(100%, 18rem);
+  margin-bottom: var(--tk-space-2);
+}
+
+.searchIcon {
+  position: absolute;
+  left: var(--tk-space-3);
+  color: var(--tk-fg-subtle);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  padding-left: calc(var(--tk-space-3) * 2 + 1em);
+}
+
+.listScroll {
+  flex: 1;
+  min-height: 0;
+  margin: 0 calc(var(--tk-space-3) * -1);
+  padding: var(--tk-space-3) var(--tk-space-3) var(--tk-space-8);
+  overflow-y: auto;
+}
+
+/* On a cold load, rows arrive with the `gh` round trip, well after the screen:
+   fade them in rather than let them pop over the loading message. */
+.list {
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  gap: var(--tk-space-4);
+  align-items: center;
+  width: 100%;
+  padding: var(--tk-space-3) var(--tk-space-3);
+  color: var(--tk-fg);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--tk-radius);
+  transition: background-color var(--tk-duration-1) var(--tk-ease-fade);
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &:disabled:not([aria-busy]) {
+    opacity: 0.6;
+  }
+}
+
+.number {
+  align-self: start;
+  padding-top: 0.1em;
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-sm);
+  color: var(--tk-fg-subtle);
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-1);
+  min-width: 0;
+}
+
+.rowTitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-2);
+  align-items: center;
+  font-size: var(--tk-text-md);
+  font-weight: var(--tk-weight-medium);
+  line-height: var(--tk-leading-tight);
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--tk-space-4);
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-muted);
+}
+
+.branch {
+  display: inline-flex;
+  gap: var(--tk-space-1);
+  align-items: center;
+  max-width: 24rem;
+  overflow: hidden;
+  font-family: var(--tk-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  & :global(.tk-icon) {
+    flex: none;
+    color: var(--tk-fg-subtle);
+  }
+}
+
+.rowSide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-1);
+  align-items: flex-end;
+}
+
+.reviewState {
+  display: flex;
+  gap: var(--tk-space-2);
+  align-items: center;
+}
+
+.reviewMeta {
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-subtle);
+  white-space: nowrap;
+}
+
+.stats {
+  display: flex;
+  gap: var(--tk-space-2);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+}
+
+.added {
+  color: var(--added);
+}
+
+.deleted {
+  color: var(--deleted);
+}
+
+.message {
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
+  padding: var(--tk-space-8) var(--tk-space-3);
+  color: var(--tk-fg-muted);
+  text-align: center;
+}
+
+/* A refresh that failed over rows already shown: a line above them, not the
+   full message in their place, since the rows are still worth reading. */
+.refreshFailed {
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
+  margin-bottom: var(--tk-space-2);
+  padding: 0 var(--tk-space-3);
+  font-size: var(--tk-text-xs);
+  color: var(--tk-warning);
+  white-space: pre-wrap;
+}
+
+/* Shown above the list when the search box holds a PR link. */
+.pasted {
+  display: flex;
+  gap: var(--tk-space-3);
+  align-items: center;
+  width: 100%;
+  margin-bottom: var(--tk-space-2);
+  padding: var(--tk-space-3);
+  color: var(--tk-fg);
+  text-align: left;
+  background: var(--tk-accent-soft);
+  border: 0;
+  border-radius: var(--tk-radius);
+
+  & > span:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.pastedHint {
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-muted);
+}
+
+/* Welcome ---------------------------------------------------------------- */
+
+.welcome {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: var(--tk-space-8);
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--tk-space-4);
+  width: min(100%, 52rem);
+  min-height: 26rem;
+  padding: clamp(var(--tk-space-6), 5vw, var(--tk-space-12));
+  color: var(--tk-fg-bright);
+  text-shadow: 1px 1px 0 oklch(0% 0 0 / 0.6);
+}
+
+.heroTitle {
+  max-width: 14ch;
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: var(--tk-weight-bold);
+  line-height: 0.95;
+  letter-spacing: var(--tk-tracking-display);
+}
+
+.heroText {
+  max-width: 40ch;
+  font-size: var(--tk-text-lg);
+  color: var(--tk-fg);
+}
+
+/* A PR stacked on the one above it: indented one step per level, with a rule
+   tying it to its stack. */
+.stacked {
+  margin-left: calc(min(var(--stack-depth), 4) * var(--tk-space-6));
+  border-left: var(--tk-border-width) solid var(--tk-border);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}

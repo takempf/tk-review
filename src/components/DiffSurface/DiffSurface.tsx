@@ -7,8 +7,12 @@ import {
   type FileDiffContentsLoader,
 } from "@pierre/diffs/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Checkbox, Icon, Toggle, ToggleGroup } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
+import { useScreenSettled } from "../../lib/screenTransition";
+import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, reviewsWorkingTree, useReviewStore } from "../../store/reviewStore";
+import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffSurface.module.css";
 import { DIFF_THEME, DIFFS_THEME_CSS } from "./diffsTheme";
 
@@ -42,39 +46,87 @@ function Toolbar({
       <span className={css.toolbarLabel}>
         {fileCount} {fileCount === 1 ? "file" : "files"} in this review
       </span>
-      <div className={css.toggleGroup}>
-        {(["split", "unified"] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            className={layout === option ? css.toggleButtonActive : css.toggleButton}
-            onClick={() => onLayoutChange(option)}
-          >
-            {option === "split" ? "Split" : "Unified"}
-          </button>
-        ))}
+      <ToggleGroup
+        size="sm"
+        aria-label="Diff layout"
+        value={[layout]}
+        onValueChange={(value) => {
+          const next = value[0] as DiffLayout | undefined;
+          if (next) onLayoutChange(next);
+        }}
+      >
+        <Toggle value="split">
+          <Icon name="columns" /> Split
+        </Toggle>
+        <Toggle value="unified">
+          <Icon name="rows" /> Unified
+        </Toggle>
+      </ToggleGroup>
+    </div>
+  );
+}
+
+/** Line widths, in percent, for the placeholder files: ragged, like code. */
+const SKELETON_FILES = [
+  [58, 44, 71, 36, 80, 52, 64],
+  [42, 67, 55, 74],
+  [69, 38, 61, 50, 46],
+];
+
+/** Stands in for the files while the diff loads, shaped like them. */
+function FilesSkeleton({ instant }: { instant?: boolean }) {
+  return (
+    <SkeletonGroup label="Loading the diff" instant={instant} className={css.skeletonFiles}>
+      {SKELETON_FILES.map((lines, file) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, static list
+        <div key={file} className={css.skeletonFile}>
+          <div className={css.skeletonHeader}>
+            <Skeleton width={`${24 + file * 9}%`} />
+          </div>
+          {lines.map((width, line) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, static list
+            <div key={line} className={css.skeletonLine}>
+              <Skeleton width="1.5em" className={css.skeletonGutter} />
+              <Skeleton width={`${width}%`} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </SkeletonGroup>
+  );
+}
+
+/** The diff area before there is a diff: while a PR opens, or the refs compare. */
+export function DiffSkeleton() {
+  return (
+    <div className={css.wrap}>
+      <div className={css.toolbar}>
+        <Skeleton width="9rem" />
       </div>
+      <FilesSkeleton />
     </div>
   );
 }
 
 /** Preloads the themes once so the first paint is not an empty surface. */
-function useThemesReady(): boolean {
+function useThemesReady(start: boolean): boolean {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    if (!start) return;
     let cancelled = false;
     const settle = () => {
       if (!cancelled) setReady(true);
     };
-    preloadHighlighter({ themes: [DIFF_THEME.light, DIFF_THEME.dark], langs: [] }).then(
-      settle,
-      settle,
-    );
+    preloadHighlighter({
+      themes: [DIFF_THEME.light, DIFF_THEME.dark],
+      langs: [],
+      preferredHighlighter: HIGHLIGHTER,
+    }).then(settle, settle);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [start]);
 
   return ready;
 }
@@ -97,7 +149,11 @@ function DiffSurfaceInner() {
   const expandFile = useReviewStore((state) => state.expandFile);
 
   const viewRef = useRef<CodeViewHandle<undefined>>(null);
-  const themesReady = useThemesReady();
+  // Parsing, highlighting and laying out the diff is the heaviest work in the
+  // app, all on the main thread. Arriving with the review screen, it waits for
+  // the screen's transition to land rather than freezing it halfway.
+  const settled = useScreenSettled();
+  const themesReady = useThemesReady(settled);
   // Which selection has already been acted on. CodeView has no expand affordance
   // of its own, so opening happens here — but only when the selection actually
   // changes, not every time the item list is rebuilt. Keyed on the tick as well
@@ -120,7 +176,7 @@ function DiffSurfaceInner() {
   // Binary files are left out: there is no text to diff, and including them makes
   // the renderer ask the loader below for contents it cannot supply.
   const items = useMemo<CodeViewItem<undefined>[]>(() => {
-    if (!patch || !mergeBase || !compare) return [];
+    if (!settled || !patch || !mergeBase || !compare) return [];
     const files = summary?.files ?? [];
     const binaryPaths = new Set(files.filter((file) => file.isBinary).map((file) => file.path));
     const generatedPaths = new Set(
@@ -147,7 +203,7 @@ function DiffSurfaceInner() {
           version: diffLoadId * 2 + (collapsed ? 0 : 1),
         };
       });
-  }, [patch, mergeBase, compare, revision, diffLoadId, summary, viewed, expanded]);
+  }, [settled, patch, mergeBase, compare, revision, diffLoadId, summary, viewed, expanded]);
 
   /**
    * Supplies whole-file contents when the reader expands context past what the
@@ -198,6 +254,7 @@ function DiffSurfaceInner() {
       // scroll position. `loadDiffFiles` supplies the contents on demand instead,
       // when someone actually expands a gap.
       loadDiffFiles,
+      preferredHighlighter: HIGHLIGHTER,
       tokenizeMaxLineLength: MAX_LINE_LENGTH,
       tokenizeMaxLength: MAX_HIGHLIGHT_LINES,
       // Injected into the renderer's last cascade layer; see diffsTheme.ts.
@@ -237,15 +294,14 @@ function DiffSurfaceInner() {
         // which file the sidebar has selected, and the Viewed checkbox.
         <CodeView
           /*
-           * Highlighting stays on the main thread. In a worker the renderer uses
-           * Shiki's JavaScript regex engine, which cannot compile every TextMate
-           * grammar — SQL is one it silently gives up on, rendering the file as
-           * plain text while JS/TS (whose grammars are JS-engine compatible) look
-           * fine, so the failure is easy to miss. Asking the worker for the
-           * Oniguruma engine instead (`preferredHighlighter: "shiki-wasm"`) makes
-           * it worse: the WASM binary doesn't resolve there and nothing renders at
-           * all. Virtualization, which is the far bigger win, is unaffected by
-           * this, and the preload below keeps the first paint from being empty.
+           * Highlighting stays on the main thread, on the Oniguruma engine (see
+           * `HIGHLIGHTER`). In a worker the renderer can't use it — the WASM
+           * binary doesn't resolve there and nothing renders at all — and falls
+           * back to Shiki's JavaScript regex engine, which cannot compile every
+           * TextMate grammar: SQL is one it silently gives up on, rendering the
+           * file as plain text while JS/TS look fine, so the failure is easy to
+           * miss. Virtualization, the far bigger win, is unaffected by this, and
+           * the preload below keeps the first paint from being empty.
            */
           disableWorkerPool
           ref={viewRef}
@@ -258,18 +314,16 @@ function DiffSurfaceInner() {
             item.id === selectedPath ? <span aria-hidden="true" /> : null
           }
           renderHeaderMetadata={(item) => (
-            <label className={css.viewedToggle}>
-              <input
-                type="checkbox"
-                checked={viewed.has(item.id)}
-                onChange={() => toggleViewed(item.id)}
-              />
-              Viewed
-            </label>
+            <span className={css.viewedToggle}>
+              <Checkbox checked={viewed.has(item.id)} onCheckedChange={() => toggleViewed(item.id)}>
+                Viewed
+              </Checkbox>
+            </span>
           )}
         />
       ) : (
-        <p className={css.message}>Loading…</p>
+        // Takes over from the screen's own skeleton without fading in again.
+        <FilesSkeleton instant />
       )}
     </div>
   );

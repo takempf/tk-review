@@ -394,7 +394,7 @@ export const EXPLANATION: ExplainResult = {
 const HOUR = 60 * 60 * 1000;
 
 /**
- * What the pull request picker lists. Includes the PR the harness opens (`#47`), a
+ * What the home screen lists. Includes the PR the harness opens (`#47`), a
  * draft, one per review decision, and titles distinct enough to tell
  * number-matching from title-matching while searching. `#124 ← #127 ← #131` is
  * a stack whose members are split across the filters. `requested` and `mine`

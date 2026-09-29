@@ -6,7 +6,7 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "../src/App";
+import { Root } from "../src/Root";
 import "../src/styles/global.css";
 import {
   BRANCHES,
@@ -91,6 +91,47 @@ mockIPC((command, payload) => {
 
 // Skips the folder picker: the store opens whatever repo it remembers.
 localStorage.setItem("tk-review:last-repo", REPO.root);
+localStorage.setItem(
+  "tk-review:recent-repos",
+  JSON.stringify([
+    { root: REPO.root, name: REPO.name, openedAt: new Date().toISOString() },
+    {
+      root: "/Users/example/work/api",
+      name: "api",
+      openedAt: new Date(Date.now() - 864e5).toISOString(),
+    },
+  ]),
+);
+
+// Two reviewed PRs: #118 at its current head, #47 with commits pushed since, so
+// the home screen shows both states. Plus a merged one only history knows about.
+{
+  const reviewed = (
+    number: number,
+    title: string,
+    headSha: string,
+    hoursAgo: number,
+    findings: number,
+  ) => ({
+    root: REPO.root,
+    number,
+    title,
+    url: `https://github.com/example/tk-review/pull/${number}`,
+    author: "octocat",
+    headSha,
+    engine: "claude",
+    createdAt: new Date(Date.now() - hoursAgo * 36e5).toISOString(),
+    findings,
+  });
+  localStorage.setItem(
+    "tk-review:review-index",
+    JSON.stringify({
+      [`${REPO.root}#118`]: reviewed(118, "Fix stale diffs after a force push", "118b", 4, 0),
+      [`${REPO.root}#47`]: reviewed(47, "Render review findings in the PR workflow", "old", 30, 3),
+      [`${REPO.root}#96`]: reviewed(96, "Split the review panel into tabs", "96z", 120, 2),
+    }),
+  );
+}
 
 // Explain mode on, with a result already on record, so the middle column's
 // explanations render on load rather than only after a mocked agent run.
@@ -113,6 +154,6 @@ if (!container) throw new Error("missing #root element");
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <Root />
   </StrictMode>,
 );

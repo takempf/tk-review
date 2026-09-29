@@ -5,11 +5,30 @@ pub mod github;
 pub mod models;
 pub mod review;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                // A two-finger swipe walks the page's history, as in Safari.
+                // The page keeps history in step with its screens (see
+                // `src/lib/screenHistory.ts`), so this is back to the list.
+                #[cfg(target_os = "macos")]
+                window.with_webview(|webview| {
+                    // SAFETY: on macOS the handle is the window's live WKWebView,
+                    // and `with_webview` runs this on the main thread.
+                    unsafe {
+                        let view = &*webview.inner().cast::<objc2_web_kit::WKWebView>();
+                        view.setAllowsBackForwardNavigationGestures(true);
+                    }
+                })?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::select_repo,
             commands::list_branches,

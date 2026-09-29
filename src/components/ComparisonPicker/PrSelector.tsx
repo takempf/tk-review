@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
-import { errorMessage, gitApi, type PrSummary } from "../../ipc/git";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { errorMessage } from "../../ipc/git";
+import { prListQuery } from "../../lib/queries";
 import { useReviewStore } from "../../store/reviewStore";
 import { Combobox } from "../Combobox/Combobox";
 
@@ -30,40 +32,28 @@ export function PrSelector({
   const openingPr = useReviewStore((state) => state.openingPr);
   const openPr = useReviewStore((state) => state.openPr);
 
-  const [prs, setPrs] = useState<PrSummary[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "failed">("idle");
-  const [failure, setFailure] = useState<string | null>(null);
-
   const root = repo?.root ?? null;
 
-  // Listing costs a `gh` round trip, so it waits until someone opens the popup.
-  // Re-listed on each open: PRs are raised and merged while the app is running.
+  // The home screen's "All open" list, from the same cache, so the popup opens
+  // on whatever that last listed. Listing costs a `gh` round trip, so it never
+  // fetches by itself: it re-lists each time the popup opens, since PRs are
+  // raised and merged while the app is running.
+  const listing = useQuery({ ...prListQuery(root ?? "", "all"), enabled: false });
+  const prs = listing.data;
+
   function load(open: boolean) {
-    if (!open || !root) return;
-    setStatus("loading");
-    gitApi
-      .listPrs(root)
-      .then((listed) => {
-        setPrs(listed);
-        setStatus("ready");
-        setFailure(null);
-      })
-      .catch((error: unknown) => {
-        setPrs([]);
-        setStatus("failed");
-        setFailure(errorMessage(error));
-      });
+    if (open && root) void listing.refetch();
   }
 
-  const byLabel = useMemo(() => new Map(prs.map((item) => [prLabel(item), item])), [prs]);
+  const byLabel = useMemo(() => new Map((prs ?? []).map((item) => [prLabel(item), item])), [prs]);
   const label =
-    status === "loading"
+    listing.isFetching && !prs
       ? "Loading pull requests…"
-      : status === "failed"
-        ? `Could not list pull requests — paste a URL instead. ${failure ?? ""}`
-        : prs.length > 0
+      : listing.isError && !prs
+        ? `Could not list pull requests — paste a URL instead. ${errorMessage(listing.error)}`
+        : prs && prs.length > 0
           ? "Open pull requests"
-          : status === "ready"
+          : prs
             ? "No open pull requests"
             : "Pull requests";
 

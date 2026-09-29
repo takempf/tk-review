@@ -7,9 +7,11 @@
 
 .toolbar {
   display: flex;
+  flex: none;
   gap: var(--space-3);
   align-items: center;
-  padding: var(--space-2) var(--space-3);
+  min-height: var(--bar-height);
+  padding: 0 var(--space-2) 0 var(--space-3);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -21,34 +23,6 @@
   color: var(--text-dim);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.toggleGroup {
-  display: flex;
-  flex: none;
-  overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.toggleButton {
-  padding: 2px var(--space-2);
-  background: var(--bg);
-  border: none;
-}
-
-.toggleButton:hover {
-  background: var(--bg-hover);
-}
-
-.toggleButtonActive {
-  composes: toggleButton;
-  color: #fff;
-  background: var(--accent);
-}
-
-.toggleButtonActive:hover {
-  background: var(--accent);
 }
 
 /*
@@ -64,6 +38,9 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  /* Mounts once a screen change has settled; fading in keeps it from popping.
+     Timed like the screen's own fade (src/lib/screenTransition.tsx). */
+  animation: surface-in var(--screen-fade-in) var(--ease-out-expo) both;
 
   /* The renderer draws into a shadow root, which its own styles cannot reach
      from here — but custom properties do inherit across that boundary, and it
@@ -139,6 +116,49 @@
   display: none;
 }
 
+/* Placeholder files, drawn like the renderer's: a card per file, a header,
+   then gutter and code for each line. */
+.skeletonFiles {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-3) var(--space-2);
+  overflow: hidden;
+}
+
+.skeletonFile {
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.skeletonHeader {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.skeletonLine {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  height: 1.5rem;
+  padding: 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--tk-text-sm);
+}
+
+.skeletonGutter {
+  flex: none;
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+}
+
 .message {
   padding: var(--space-5);
   color: var(--text-dim);
@@ -149,4 +169,10 @@
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
   color: var(--text-dim);
+}
+
+@keyframes surface-in {
+  from {
+    opacity: 0;
+  }
 }

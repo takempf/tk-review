@@ -1,0 +1,84 @@
+.bar {
+  /* The scenery fills the bar from behind its contents. */
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tk-space-3);
+  /* The traffic lights are native, so page zoom neither moves nor scales them.
+     Sizes they depend on are screen pixels, `--zoom` undoing the zoom (see
+     `lib/zoom.ts`): never shorter than the 40px `trafficLightPosition` in
+     `tauri.conf.json` centres them in, though zoomed-in content may grow it. */
+  min-height: max(2.5rem, calc(40px / var(--zoom, 1)));
+  min-width: 0;
+  padding: 0 var(--tk-space-3);
+  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+  background: var(--bg);
+  user-select: none;
+  -webkit-user-select: none;
+
+  /* Clear of the traffic lights, which end 70px in. Both sides, so the
+     contents stay centred on the window. */
+  &[data-inset] {
+    padding-inline: calc(84px / var(--zoom, 1));
+  }
+}
+
+.brand {
+  display: flex;
+  flex: none;
+  /* The mark stands on the name's baseline, a letter's height tall. */
+  align-items: baseline;
+  gap: var(--tk-space-2);
+  color: var(--tk-fg-bright);
+  font-weight: var(--tk-weight-bold);
+  /* The hero's shadow, for the same reason: it sits on the scenery. */
+  text-shadow: 1px 1px 0 oklch(0% 0 0 / 0.6);
+  cursor: default;
+}
+
+.mark {
+  height: 1cap;
+  color: var(--tk-label);
+  /* Text shadows don't reach SVG, so the mark casts the same one itself. */
+  filter: drop-shadow(1px 1px 0 oklch(0% 0 0 / 0.6));
+}
+
+/* The design system's select trigger, sized down to sit in a title bar. */
+.divider {
+  flex: none;
+  width: var(--tk-border-width);
+  height: 1rem;
+  background: var(--tk-border);
+}
+
+.trigger {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 10rem;
+  max-width: 20rem;
+  min-height: 1.75rem;
+  cursor: default;
+}
+
+.popup {
+  min-width: max(var(--anchor-width, 0px), 16rem);
+  max-width: min(32rem, var(--available-width));
+}
+
+.repoName {
+  font-weight: var(--tk-weight-medium);
+}
+
+.repoPath {
+  margin-left: var(--tk-space-2);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-subtle);
+
+  [data-highlighted] & {
+    color: inherit;
+    opacity: 0.75;
+  }
+}

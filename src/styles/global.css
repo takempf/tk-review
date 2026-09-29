@@ -98,6 +98,42 @@ body {
 }
 
 /*
+ * Screen changes (src/lib/screenTransition.tsx). The screens crossfade on
+ * ease-out expo; the PR's number and title glide on a spring.
+ */
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  /* A critically damped spring, so it never overshoots: x(t) = 1 − (1 + ωt)e^(−ωt)
+     with ω = 30 rad/s, sampled every 10ms and settled (to 0.03%) by 350ms. */
+  /* biome-ignore format: one sample per line buries the curve */
+  --spring-snappy: linear(
+    0, 0.0369, 0.1219, 0.2275, 0.3374, 0.4422, 0.5372, 0.6204, 0.6916, 0.7513, 0.8009, 0.8414,
+    0.8743, 0.9008, 0.922, 0.9389, 0.9523, 0.9628, 0.9711, 0.9776, 0.9826, 0.9866, 0.9897,
+    0.992, 0.9939, 0.9953, 0.9964, 0.9972, 0.9979, 0.9984, 0.9988, 0.9991, 0.9993, 0.9995,
+    0.9996, 1
+  );
+  --spring-snappy-duration: 350ms;
+}
+
+::view-transition-group(screen-pr-number),
+::view-transition-group(screen-pr-title) {
+  animation-duration: var(--spring-snappy-duration);
+  animation-timing-function: var(--spring-snappy);
+}
+
+/* Both ends are the same text at the same size, so the crossfade only shows
+   where they differ (a title ellipsized in one place and not the other).
+   Adding the two, rather than layering them, keeps it from dimming midway. */
+::view-transition-old(screen-pr-number),
+::view-transition-new(screen-pr-number),
+::view-transition-old(screen-pr-title),
+::view-transition-new(screen-pr-title) {
+  animation-duration: 160ms;
+  animation-timing-function: var(--ease-out-expo);
+  mix-blend-mode: plus-lighter;
+}
+
+/*
  * Links ease into their hover colour and underline rather than snapping, on the
  * theme's own ease-out and the duration its text buttons use for the same job.
  */

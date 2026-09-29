@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
 import { installExternalLinks } from "./lib/externalLinks";
+import { Root } from "./Root";
 import "./styles/global.css";
 
 const container = document.getElementById("root");
@@ -11,6 +11,6 @@ installExternalLinks();
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <Root />
   </StrictMode>,
 );

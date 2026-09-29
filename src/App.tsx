@@ -1,13 +1,18 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
+import { Button, Icon } from "tk-design-system";
 import css from "./App.module.css";
 import { ComparisonPicker } from "./components/ComparisonPicker/ComparisonPicker";
 import { DiffStats } from "./components/DiffStats/DiffStats";
-import { DiffSurface } from "./components/DiffSurface/DiffSurface";
+import { DiffSkeleton, DiffSurface } from "./components/DiffSurface/DiffSurface";
 import { FileList } from "./components/FileList/FileList";
+import { Home } from "./components/Home/Home";
 import { Layout } from "./components/Layout/Layout";
-import { RepoPicker, RepoPickerHero } from "./components/RepoPicker/RepoPicker";
 import { ReviewPanel } from "./components/ReviewPanel/ReviewPanel";
+import { Spinner } from "./components/Spinner/Spinner";
+import { TitleBar } from "./components/TitleBar/TitleBar";
+import { useScreenHistory } from "./lib/screenHistory";
+import { ScreenMorph, ScreenStack } from "./lib/screenTransition";
 import { reviewsWorkingTree, useReviewStore } from "./store/reviewStore";
 
 /** `j`/`k` move through the file list, the way a pager would. */
@@ -53,26 +58,39 @@ function useWindowTitle() {
   }, [name, base, compare, worktree]);
 }
 
-export function App() {
+/** The pull request under review, set like its row in the list so the two can morph. */
+function PrHeading() {
+  // While it opens, the list's number and title stand in for the fetched ones.
+  const pr = useReviewStore((state) => state.pr ?? state.pendingPr);
+  if (!pr) return null;
+  return (
+    <h1 className={css.prHeading} title={pr.title}>
+      <ScreenMorph part="prNumber">
+        <span className={css.prNumber}>#{pr.number}</span>
+      </ScreenMorph>
+      <ScreenMorph part="prTitle">
+        <span className={css.prTitle}>{pr.title}</span>
+      </ScreenMorph>
+    </h1>
+  );
+}
+
+/** A comparison open in the diff, with the file list and the review beside it. */
+function ReviewScreen() {
   const repo = useReviewStore((state) => state.repo);
+  const hasPr = useReviewStore((state) => state.pr != null || state.pendingPr != null);
+  const openingPr = useReviewStore((state) => state.openingPr);
   const error = useReviewStore((state) => state.error);
   const summary = useReviewStore((state) => state.summary);
   const loadingDiff = useReviewStore((state) => state.loadingDiff);
   // With a PR open, refreshing re-reads it from GitHub before the diff reloads;
   // the button stays busy for that leg too, not only for the diff.
   const refreshingPr = useReviewStore((state) => state.refreshingPr);
-  const restoreLastRepo = useReviewStore((state) => state.restoreLastRepo);
   const refresh = useReviewStore((state) => state.refresh);
   const dismissError = useReviewStore((state) => state.dismissError);
+  const goHome = useReviewStore((state) => state.goHome);
 
-  useFileKeyboardNav();
-  useWindowTitle();
-
-  useEffect(() => {
-    void restoreLastRepo();
-  }, [restoreLastRepo]);
-
-  if (!repo) return <RepoPickerHero />;
+  if (!repo) return null;
 
   return (
     <Layout
@@ -81,20 +99,36 @@ export function App() {
       header={
         <>
           <div className={css.headerGroup}>
-            <RepoPicker />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => goHome()}
+              title="Back to pull requests"
+            >
+              <Icon name="arrow-left" />
+              Pull requests
+            </Button>
             <span className={css.divider} />
-            <ComparisonPicker key={repo.root} />
+            {/* A PR is chosen from the list; only a branch comparison is picked here. */}
+            {hasPr ? <PrHeading /> : <ComparisonPicker key={repo.root} />}
           </div>
           <span className={css.spacer} />
           <DiffStats />
-          <button
-            type="button"
-            className={css.refresh}
+          <Button
+            size="sm"
             onClick={() => void refresh()}
-            disabled={loadingDiff || refreshingPr}
+            disabled={loadingDiff || refreshingPr || openingPr}
           >
-            {loadingDiff || refreshingPr ? "Refreshing…" : "Refresh"}
-          </button>
+            {loadingDiff || refreshingPr ? (
+              <>
+                <Spinner /> Refreshing…
+              </>
+            ) : (
+              <>
+                <Icon name="refresh" /> Refresh
+              </>
+            )}
+          </Button>
         </>
       }
       sidebar={<FileList />}
@@ -102,12 +136,36 @@ export function App() {
       main={
         summary ? (
           <DiffSurface />
+        ) : loadingDiff || openingPr ? (
+          <DiffSkeleton />
         ) : (
-          <p className={css.placeholder}>
-            {loadingDiff ? "Comparing…" : "Choose two refs to compare."}
-          </p>
+          <p className={css.placeholder}>Choose two refs to compare.</p>
         )
       }
     />
+  );
+}
+
+export function App() {
+  const view = useReviewStore((state) => state.view);
+  const repo = useReviewStore((state) => state.repo);
+  const restoreLastRepo = useReviewStore((state) => state.restoreLastRepo);
+
+  useFileKeyboardNav();
+  useWindowTitle();
+  useScreenHistory();
+
+  useEffect(() => {
+    void restoreLastRepo();
+  }, [restoreLastRepo]);
+
+  return (
+    <div className={css.window}>
+      <TitleBar />
+      <ScreenStack
+        screen={!repo || view === "home" ? "home" : "review"}
+        render={(screen) => (screen === "home" ? <Home /> : <ReviewScreen />)}
+      />
+    </div>
   );
 }
