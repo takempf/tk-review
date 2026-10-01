@@ -27,6 +27,8 @@
 .agentMarkdown {
   font-size: var(--tk-text-md);
   line-height: var(--tk-leading-reading);
+  /* Prose: figures at their own widths, not the app's tabular ones. */
+  font-variant-numeric: normal;
 }
 
 /* The tabs and the active tab's action share one row; the row carries the

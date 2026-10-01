@@ -3,9 +3,26 @@
    !important. Only the faces the base theme names are bundled; all are
    variable fonts, one file each. */
 @import "tk-design-system/styles.css";
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/archivo/wdth.css";
+
+/* Geist and Geist Mono from Vercel's own build (the `geist` package, 1.7.2),
+   under the names the theme asks for. Fontsource's builds drop the stylistic
+   sets, ss09 among them (see `body`). Upright only, as before. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist Mono Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+}
 
 /*
  * App tokens, written on the design system's base theme. Components reference
@@ -85,6 +102,13 @@ body,
 body {
   min-height: 0;
   font-size: var(--tk-text-sm);
+  /* Geist's alternate figures everywhere, code included: a plain zero, and a
+     one with a foot. */
+  font-feature-settings: "ss09";
+  /* Figures line up: ids, counts, line numbers, sizes and times, in rows and
+     columns and as they change. Running text sets its own (ReviewPanel's
+     Markdown). */
+  font-variant-numeric: tabular-nums;
   /* The app manages its own scroll regions; the window itself never scrolls. */
   overflow: hidden;
 }
