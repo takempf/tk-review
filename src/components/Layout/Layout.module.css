@@ -22,39 +22,98 @@
   background: var(--bg);
 }
 
-/* Columns are set inline: the side panels at their stored widths, the middle
-   taking whatever is left. */
+/* Columns are set inline: the side panels at their stored widths, or nothing
+   while hidden, the middle taking whatever is left. Clipped rather than
+   hidden, so nothing sliding past its edges can make it scroll. */
 .body {
   grid-area: body;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
+  overflow: clip;
+}
+
+/* Each panel spans the whole row, pinned to its edge at its own width (set
+   inline), so it keeps its place and size whether or not the grid gives it a
+   column: hidden, it rests just past the edge, and sliding, it passes over the
+   diff. */
+.sidebar,
+.aside {
+  position: relative;
+  z-index: 1;
+  grid-row: 1;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  /* Hidden once it has slid away, so it's neither painted nor reached. */
+  transition: visibility 0s;
+
+  &[data-shown="false"] {
+    visibility: hidden;
+    transition-delay: var(--slide);
+
+    @media (prefers-reduced-motion: reduce) {
+      transition-delay: 0s;
+    }
+  }
 }
 
 .sidebar {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  justify-self: start;
   border-right: 1px solid var(--border);
-  background: var(--bg);
+
+  &[data-shown="false"] {
+    transform: translateX(-100%);
+  }
 }
 
+.aside {
+  justify-self: end;
+  border-left: 1px solid var(--border);
+
+  &[data-shown="false"] {
+    transform: translateX(100%);
+  }
+}
+
+/* Isolated, so nothing stacked inside the diff can rise over a panel passing
+   across it. */
 .main {
+  grid-row: 1;
+  grid-column: 2;
+  isolation: isolate;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--bg-code);
 }
 
-.aside {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--border);
-  background: var(--bg);
+/* A ghost button whose icon, not its box, lines up with the header's edge. */
+.toggle {
+  margin-inline: calc(-1 * var(--space-2));
+}
+
+/* The panel's strip of the icon empties toward the window's edge as the panel
+   leaves by it. */
+.panelFill {
+  transform-box: fill-box;
+  transition: scale var(--slide) var(--ease-out-expo);
+
+  .panelIcon[data-edge="start"] & {
+    transform-origin: left;
+  }
+
+  .panelIcon[data-edge="end"] & {
+    transform-origin: right;
+  }
+
+  .panelIcon:not([data-shown]) & {
+    scale: 0 1;
+  }
 }
 
 .banner {
