@@ -5,17 +5,48 @@
 @import "tk-design-system/styles.css";
 @import "@fontsource-variable/archivo/wdth.css";
 
-/* Geist and Geist Mono from Vercel's own build (the `geist` package, 1.7.2),
-   under the names the theme asks for. Fontsource's builds drop the stylistic
-   sets, ss09 among them (see `body`). Upright only, as before. */
+/* Inter from its own release (4.1), upright and italic, with its tabular
+   figures kept to the figures (`fonts/patch-inter.py`): Fontsource's build
+   comes from Google Fonts, which strips the character variants and stylistic
+   sets. Both files carry the weight axis and the optical size axis (14–32),
+   which the browser sets from the font size: body text gets the open cut
+   made for small sizes, and larger text moves toward Inter Display's tighter
+   one, with no tracking of our own. */
 @font-face {
-  font-family: "Geist Variable";
+  font-family: "Inter Variable";
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  src: url("./fonts/InterVariable.woff2") format("woff2");
 }
 
+@font-face {
+  font-family: "Inter Variable";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/InterVariable-Italic.woff2") format("woff2");
+}
+
+/* Inter's alternates, named for Inter alone (`body` turns them on): Geist
+   Mono's ss01, ss02 and ss08 are other letters' alternates altogether. */
+@font-feature-values "Inter Variable" {
+  @styleset {
+    open-digits: 1;
+    disambiguation: 2;
+    square-quotes: 8;
+  }
+
+  @character-variant {
+    alternate-one: 1;
+    simplified-u: 6;
+    flat-top-three: 9;
+    spurred-g: 10;
+  }
+}
+
+/* Geist Mono from Vercel's own build (the `geist` package, 1.7.2), under the
+   name the theme asks for. Inter has no monospace. Upright only, as before. */
 @font-face {
   font-family: "Geist Mono Variable";
   font-style: normal;
@@ -41,6 +72,11 @@
   /* The base theme reads at 18px; a diff tool wants more on screen. Every tk
      rem — control heights, spacing, type — scales from this one value. */
   --tk-root-size: 16px;
+
+  /* Inter in place of the theme's Geist. The theme loosens body text by
+     0.025em for Geist; Inter's text cut is spaced for small sizes already. */
+  --tk-font-sans: "Inter Variable", var(--tk-font-fallback), sans-serif;
+  --tk-tracking: 0;
 
   --font-ui: var(--tk-font-sans);
   --font-mono: var(--tk-font-mono);
@@ -117,9 +153,17 @@ body,
 body {
   min-height: 0;
   font-size: var(--tk-text-sm);
-  /* Geist's alternate figures everywhere, code included: a plain zero, and a
-     one with a foot. */
-  font-feature-settings: "ss09";
+  /* Open digits, the flat-topped three and the alternate one; I, l and 0 told
+     apart from l, 1 and O; square quotes, the simplified u and the spurred G. */
+  font-variant-alternates: styleset(open-digits, disambiguation, square-quotes)
+    character-variant(alternate-one, simplified-u, flat-top-three, spurred-g);
+  /* The zero slashed, as Geist Mono's is in code: here rather than as
+     `slashed-zero` below, so text that sets its own figures keeps it. And
+     Inter's contextual alternates, which raise colons, hyphens and brackets
+     between figures and capitals and draw `->` as an arrow: on by default,
+     but WebKit and Chromium both drop them from letter-spaced text, the
+     uppercase labels, unless they are asked for. */
+  font-feature-settings: "zero", "calt";
   /* Figures line up: ids, counts, line numbers, sizes and times, in rows and
      columns and as they change. Running text sets its own (ReviewPanel's
      Markdown). */
