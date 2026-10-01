@@ -800,16 +800,44 @@ fn run_gh_inner(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, GitError
     }
     let output = spawned.ok_or(GitError::GhNotFound)?;
     if output.status.success() {
-        Ok(output.stdout)
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        Err(GitError::Command(if stderr.is_empty() {
-            stdout
-        } else {
-            stderr
-        }))
+        return Ok(output.stdout);
     }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let mut message = if stderr.is_empty() {
+        stdout.clone()
+    } else {
+        stderr.clone()
+    };
+    for reason in github_error_reasons(&stdout) {
+        message.push('\n');
+        message.push_str(&reason);
+    }
+    Err(GitError::detailed(
+        message,
+        format!(
+            "gh {}\n{}\n\nstderr:\n{stderr}\n\nstdout:\n{stdout}",
+            args.join(" "),
+            output.status
+        ),
+    ))
+}
+
+/// The specific reasons in a GitHub API error body. `gh api` prints the body on
+/// stdout and only a status line on stderr ("Validation Failed (HTTP 422)"), so
+/// without these the message says a request failed but never why.
+fn github_error_reasons(body: &str) -> Vec<String> {
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(errors) = body["errors"].as_array() else {
+        return Vec::new();
+    };
+    errors
+        .iter()
+        .filter_map(|error| error.as_str().or_else(|| error["message"].as_str()))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn find_remote(root: &Path, reference: &PrRef) -> Result<String, GitError> {
@@ -1046,5 +1074,24 @@ mod tests {
         let (content_type, body) = parse_github_image_response(response).expect("image response");
         assert_eq!(content_type, "image/png");
         assert_eq!(body, b"\x89PNG");
+    }
+
+    /// Both shapes GitHub uses: objects for validation errors, bare strings
+    /// for the rest.
+    #[test]
+    fn reads_the_reasons_out_of_a_github_error_body() {
+        let validation = r#"{"message":"Validation Failed","errors":[{"resource":"PullRequestReviewComment","code":"custom","field":"pull_request_review_thread.line","message":"pull_request_review_thread.line must be part of the diff"}],"status":"422"}"#;
+        let review = r#"{"message":"Unprocessable Entity","errors":["Review Can not approve your own pull request"]}"#;
+
+        assert_eq!(
+            github_error_reasons(validation),
+            ["pull_request_review_thread.line must be part of the diff"]
+        );
+        assert_eq!(
+            github_error_reasons(review),
+            ["Review Can not approve your own pull request"]
+        );
+        assert!(github_error_reasons("not json").is_empty());
+        assert!(github_error_reasons(r#"{"message":"Not Found"}"#).is_empty());
     }
 }

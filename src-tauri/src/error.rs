@@ -19,6 +19,11 @@ pub enum GitError {
     BadRevision(String),
     #[error("{0}")]
     Command(String),
+    /// A failure explained in a sentence or two, with the raw output behind it
+    /// kept for debugging: the app shows `message` and keeps `detail` one
+    /// click away.
+    #[error("{message}")]
+    Detailed { message: String, detail: String },
 }
 
 impl GitError {
@@ -32,16 +37,32 @@ impl GitError {
             Self::GhNotFound => "ghNotFound",
             Self::NotARepo(_) => "notARepo",
             Self::BadRevision(_) => "badRevision",
-            Self::Command(_) => "command",
+            Self::Command(_) | Self::Detailed { .. } => "command",
+        }
+    }
+
+    pub fn detailed(message: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self::Detailed {
+            message: message.into(),
+            detail: detail.into(),
+        }
+    }
+
+    /// The raw output behind the message, when there is any.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Detailed { detail, .. } => Some(detail),
+            _ => None,
         }
     }
 }
 
 impl Serialize for GitError {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("GitError", 2)?;
+        let mut state = serializer.serialize_struct("GitError", 3)?;
         state.serialize_field("kind", self.kind())?;
         state.serialize_field("message", &self.to_string())?;
+        state.serialize_field("detail", &self.detail())?;
         state.end()
     }
 }
