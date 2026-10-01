@@ -70,7 +70,7 @@
 
 .mark {
   height: 1cap;
-  color: var(--tk-label);
+  color: var(--accent);
   /* Text shadows don't reach SVG, so the mark casts the same one itself. */
   filter: drop-shadow(1px 1px 0 oklch(0% 0 0 / 0.6));
 }

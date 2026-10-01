@@ -365,12 +365,22 @@ function MarkdownCodeBlock({ language, children }: { language?: string; children
   return <CodeBlock code={textOf(children)} language={language} className={css.codeBlock} />;
 }
 
+/**
+ * A task list's box, as the design system's checkbox. Read-only, as on GitHub
+ * for anyone but the author: ticking it here could not change the Markdown.
+ * The sanitizer drops raw `<input>`s, so task lists are the only source.
+ */
+function TaskCheckbox({ checked }: { checked?: boolean }) {
+  return <Checkbox checked={checked === true} readOnly className="task-list-item-checkbox" />;
+}
+
 const GITHUB_MARKDOWN_COMPONENTS = {
   img: GitHubImage,
   picture: GitHubPicture,
   source: GitHubSource,
   code: Code,
   pre: MarkdownCodeBlock,
+  input: TaskCheckbox,
 };
 
 function safePrMarkdown(markdown: string): string {

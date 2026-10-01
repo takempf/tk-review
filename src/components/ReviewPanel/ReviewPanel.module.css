@@ -244,6 +244,26 @@
   height: auto;
 }
 
+/* A bullet's width in rather than the browser's 40px, with a little more for
+   numbers, and markers in the accent. */
+.prMarkdown ul,
+.prCommentMarkdown ul,
+.agentMarkdown ul {
+  padding-left: 1.25em;
+}
+
+.prMarkdown ol,
+.prCommentMarkdown ol,
+.agentMarkdown ol {
+  padding-left: 1.5em;
+}
+
+.prMarkdown li::marker,
+.prCommentMarkdown li::marker,
+.agentMarkdown li::marker {
+  color: var(--accent);
+}
+
 .prMarkdown blockquote,
 .prCommentMarkdown blockquote,
 .agentMarkdown blockquote {
@@ -266,11 +286,30 @@
   cursor: pointer;
 }
 
-.prMarkdown .task-list-item-checkbox,
-.prCommentMarkdown .task-list-item-checkbox,
-.agentMarkdown .task-list-item-checkbox {
-  margin: 0 var(--space-1) 0 0;
-  pointer-events: none;
+/* Task lists: the box stands in for the bullet, flush with the text around
+   the list, and hangs so an item's wrapped lines keep its text's edge. It is
+   the design system's checkbox, 1.25rem square, with the gap its labelled
+   checkboxes use. Out of flow, the space Markdown leaves after it collapses. */
+.prMarkdown :global(.contains-task-list),
+.prCommentMarkdown :global(.contains-task-list),
+.agentMarkdown :global(.contains-task-list) {
+  padding-left: 0;
+}
+
+.prMarkdown :global(.task-list-item),
+.prCommentMarkdown :global(.task-list-item),
+.agentMarkdown :global(.task-list-item) {
+  position: relative;
+  padding-left: calc(1.25rem + var(--space-3));
+  list-style: none;
+}
+
+.prMarkdown :global(.task-list-item-checkbox),
+.prCommentMarkdown :global(.task-list-item-checkbox),
+.agentMarkdown :global(.task-list-item-checkbox) {
+  position: absolute;
+  top: calc((1lh - 1.25rem) / 2);
+  left: 0;
 }
 
 .prMarkdown table,
@@ -614,8 +653,8 @@
 .composerInput {
   box-sizing: border-box;
   width: 100%;
-  padding: var(--space-2);
-  --textarea-padding-and-border: calc(var(--space-2) + 1px);
+  padding: var(--space-3);
+  --textarea-padding-and-border: calc(var(--space-3) + 1px);
   color: var(--text);
   font: inherit;
   line-height: 1.4;
@@ -695,11 +734,13 @@
   align-items: flex-end;
 }
 
+/* One line of text stands a control's height tall, the Send button's, so the
+   two line up until the field grows past it. */
 .commentInput {
   flex: 1;
   min-width: 0;
-  padding: 2px var(--space-2);
-  --textarea-padding-and-border: 3px;
+  padding: calc((var(--tk-control-h) - 1lh) / 2 - 1px) var(--space-3);
+  --textarea-padding-and-border: calc((var(--tk-control-h) - 1lh) / 2);
   line-height: 1.5;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -716,7 +757,8 @@
   flex: none;
   gap: var(--space-1);
   align-items: center;
-  padding: 2px var(--space-2);
+  height: var(--tk-control-h);
+  padding: 0 var(--space-3);
   background: var(--bg);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);

@@ -608,6 +608,12 @@ export function findingsFor(path: string, review: Review): Finding[] {
 }
 \`\`\`
 
+## Checklist
+
+- [x] Migration runs on an empty database
+- [ ] No secrets in the fixtures
+- [x] PR is linked to the issue it closes, so the tracker moves it along the workflow
+
 <details><summary>Testing</summary>
 
 Run \`pnpm harness\` and open the pull request fixture.
