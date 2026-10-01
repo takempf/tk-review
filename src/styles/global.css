@@ -81,16 +81,19 @@
   --danger: var(--tk-danger);
   --danger-bg: var(--tk-danger-soft);
 
-  /* Diff colours have no design-system equivalent; tuned for the base theme's
-     neutral dark. */
-  --added: #52c96a;
-  --added-bg: #16301d;
-  --deleted: #f0736c;
-  --deleted-bg: #3a1c1c;
-  --modified: #d9a92b;
-  --modified-bg: #332a10;
-  --renamed: #6fa8ff;
-  --renamed-bg: #16273f;
+  /* What a diff did to a line or a file, drawn from the theme's standard hues
+     and tinted the way its status colours are. For verdicts and warnings, use
+     the status tokens (`--tk-success`, `--tk-warning`, …) instead: these mean
+     "added" and "deleted", not "good" and "bad". The diff renderer takes the
+     first two as well (DiffSurface.module.css). */
+  --added: var(--tk-green);
+  --added-bg: color-mix(in oklab, var(--added) 14%, var(--tk-surface));
+  --deleted: var(--tk-red);
+  --deleted-bg: color-mix(in oklab, var(--deleted) 14%, var(--tk-surface));
+  --modified: var(--tk-yellow);
+  --modified-bg: color-mix(in oklab, var(--modified) 14%, var(--tk-surface));
+  --renamed: var(--tk-blue);
+  --renamed-bg: color-mix(in oklab, var(--renamed) 14%, var(--tk-surface));
 }
 
 html,

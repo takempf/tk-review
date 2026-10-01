@@ -44,9 +44,12 @@
 
   /* The renderer draws into a shadow root, which its own styles cannot reach
      from here — but custom properties do inherit across that boundary, and it
-     reads these two for its code and file-header fonts. */
+     reads these for its code and file-header fonts, and for the colours its
+     added and deleted lines are tinted from. */
   --diffs-font-family: var(--font-mono);
   --diffs-header-font-family: var(--font-ui);
+  --diffs-addition-color-override: var(--added);
+  --diffs-deletion-color-override: var(--deleted);
 }
 
 /*
