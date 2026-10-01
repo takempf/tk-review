@@ -26,6 +26,13 @@
   animation: screen-out var(--screen-fade-out) var(--ease-out-expo) both;
 }
 
+/* Kept mounted out of sight: nothing in it is laid out, painted or reached,
+   but its layout and scroll positions are kept for when it comes back. */
+.hidden {
+  content-visibility: hidden;
+  pointer-events: none;
+}
+
 @keyframes screen-in {
   from {
     opacity: 0;

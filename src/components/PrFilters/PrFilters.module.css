@@ -1,0 +1,46 @@
+/* On the trigger: what the filter holds, one value's name or how many. */
+.chosen {
+  max-width: 12rem;
+  overflow: hidden;
+  color: var(--tk-accent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  color: var(--tk-fg-subtle);
+}
+
+.option {
+  display: flex;
+  gap: var(--tk-space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.optionName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Set apart from the name, the way the tabs set their counts. */
+.optionCount {
+  margin-left: var(--tk-space-3);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-subtle);
+
+  [data-highlighted] & {
+    color: inherit;
+  }
+}
+
+.swatch {
+  flex: none;
+  width: 0.625em;
+  height: 0.625em;
+  border-radius: 50%;
+  background: var(--label);
+}

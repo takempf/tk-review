@@ -22,10 +22,20 @@ function Tab({
   const base = useStore(tab.store, (state) => state.base);
   const compare = useStore(tab.store, (state) => state.compare);
   const title = pr ? pr.title : `${base ?? "…"} … ${compare ?? "…"}`;
+  // Named only for a change that moves them: when the tabs shift, every tab and
+  // its text (so a tab resizing doesn't stretch its text with it); otherwise
+  // only the number and title gliding to or from the list. A closing tab's
+  // text folds away with it instead.
+  const shifting = useAppStore((state) => state.screenChange?.shifting ?? false);
+  const carried = useAppStore((state) => {
+    const change = state.screenChange;
+    if (!change || change.folding === tab.id) return false;
+    return change.shifting || change.carrying === tab.morphKey;
+  });
   const name = pr ? `#${pr.number} ${pr.title}` : title;
 
   return (
-    <ScreenMorph id={tab.morphKey} part="tab">
+    <ScreenMorph id={tab.morphKey} part="tab" active={shifting}>
       <li
         className={css.tab}
         data-active={active || undefined}
@@ -49,13 +59,13 @@ function Tab({
           <TabStatus store={tab.store} />
           <span className={css.label}>
             {pr ? (
-              <ScreenMorph id={tab.morphKey} part="number">
+              <ScreenMorph id={tab.morphKey} part="number" active={carried}>
                 <span className={css.number}>#{pr.number}</span>
               </ScreenMorph>
             ) : (
               <Icon name="branch" className={css.branch} />
             )}
-            <ScreenMorph id={tab.morphKey} part="title">
+            <ScreenMorph id={tab.morphKey} part="title" active={carried}>
               <span className={css.title}>{title}</span>
             </ScreenMorph>
           </span>
@@ -92,6 +102,7 @@ export function TabBar({ className }: { className?: string }) {
   const showTab = useAppStore((state) => state.showTab);
   const closeTab = useAppStore((state) => state.closeTab);
   const goHome = useAppStore((state) => state.goHome);
+  const heading = useAppStore((state) => state.screenChange?.heading ?? false);
 
   // Always mounted, so the row can open and close rather than appear.
   return (
@@ -107,7 +118,7 @@ export function TabBar({ className }: { className?: string }) {
               title="Back to pull requests"
             >
               <Icon name="arrow-left" className={css.backArrow} />
-              <ScreenMorph id="home" part="heading">
+              <ScreenMorph id="home" part="heading" active={heading}>
                 <span className={css.backLabel}>Pull requests</span>
               </ScreenMorph>
             </Button>

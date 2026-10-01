@@ -142,6 +142,8 @@ export function ReviewLoader({ count, progress = null, leaving = false, onLeft }
       frame = requestAnimationFrame(tick);
       // A low frame rate suits the look, and spares the CPU while an agent runs.
       if (now - last < FRAME_MS) return;
+      // Out of sight (a screen kept out of view, a panel slid away), it waits.
+      if (!canvas.checkVisibility({ visibilityProperty: true })) return;
       last = now;
       const time = Math.max(0, now - start) / 1000;
       draw(time);

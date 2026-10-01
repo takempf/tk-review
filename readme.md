@@ -88,7 +88,7 @@ The git layer returns plain serializable structs and knows nothing about the UI.
 
 ## Pull requests
 
-The home screen lists the open pull requests of the repository's GitHub remote, through `gh`, with a filter that also takes a pasted PR link. Opening one fetches its head and base refs into the local clone and compares them the same way as any two branches (below). Each pull request or comparison opens in a tab of its own, so an agent can work through one while you read another.
+The home screen lists the open pull requests of the repository's GitHub remote, through `gh`, with a filter that also takes a pasted PR link. Lists load 100 at a time and fetch the next page as you scroll to the end (the dev harness takes `?prs=200` to try it on a long one). Opening one fetches its head and base refs into the local clone and compares them the same way as any two branches (below). Each pull request or comparison opens in a tab of its own, so an agent can work through one while you read another.
 
 The review panel's **PR** tab shows the description and the existing discussion. Findings can be sent to the PR as comments (inline on their lines where GitHub allows it), and a review's conclusion can be submitted as an approval, a request for changes, or a comment (only a comment on your own PR, since GitHub refuses the other two there).
 

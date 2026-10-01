@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import { create } from "zustand";
 import {
   type AppError,
@@ -89,6 +90,13 @@ interface AppState {
    * tab gives up.
    */
   returning: string | null;
+  /**
+   * What moves in the screen change under way, set just before the change
+   * captures the old screen, so only those parts are named for it. `null`
+   * between changes, and for one where nothing moves (a switch between tabs),
+   * which is a plain crossfade.
+   */
+  screenChange: ScreenChange | null;
   layout: DiffLayout;
   /**
    * Show an explanation's file notes at the top of each file in the diff.
@@ -134,6 +142,18 @@ interface AppState {
 }
 
 /** The tab on screen, if a review is. */
+/** What moves in a screen change. */
+export interface ScreenChange {
+  /** Tabs come or go, so every tab slides to its new place. */
+  shifting: boolean;
+  /** The list's heading and the review's way back to it trade places. */
+  heading: boolean;
+  /** The `morphKey` whose number and title glide between a list row and a tab. */
+  carrying: string | null;
+  /** The id of the tab closing, whose number and title fold away with it. */
+  folding: string | null;
+}
+
 export function shownTab(state: Pick<AppState, "view" | "tabs" | "activeTabId">): ReviewTab | null {
   if (state.view !== "review") return null;
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
@@ -179,6 +199,8 @@ export const useAppStore = create<AppState>((set, get) => {
   function transition(patch: Partial<AppState>, { animate = true }: NavigateOptions = {}) {
     const left = shownTab(get());
     let retired: ReviewTab | null = null;
+    const change = animate ? plannedChange(patch) : null;
+    if (change) flushSync(() => set({ screenChange: change }));
     const update = () => {
       set(patch);
       // Looked at now: its status loses the "finished while away" dot in the
@@ -191,6 +213,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (keepsTab(left.store.getState())) return;
       retired = left;
       closing.set(left.id, left);
+      rememberClosed(left);
       const { tabs, activeTabId, view } = get();
       set({
         tabs: tabs.filter((tab) => tab !== left),
@@ -200,6 +223,7 @@ export const useAppStore = create<AppState>((set, get) => {
     };
     const settle = async () => {
       await (screenSettling() ?? Promise.resolve());
+      if (change && get().screenChange === change) set({ screenChange: null });
       if (!retired) return;
       closing.delete(retired.id);
       if (get().returning === retired.morphKey) set({ returning: null });
@@ -209,9 +233,69 @@ export const useAppStore = create<AppState>((set, get) => {
       void settle();
       return Promise.resolve();
     }
-    const done = transitionScreen(update);
+    const done = transitionScreen(update, { shared: change != null });
     void done.then(settle);
     return done;
+  }
+
+  /**
+   * What moves in the screen change `patch` makes, or `null` when nothing does
+   * and the screens only crossfade. A tab closes by being taken out of the
+   * list, or by being left with nothing to keep it (`keepsTab`); a PR opened
+   * from the list takes its number and title from its row, and one left for
+   * the list hands them back.
+   */
+  function plannedChange(patch: Partial<AppState>): ScreenChange | null {
+    const before = get();
+    const after = { ...before, ...patch };
+    const left = shownTab(before);
+    const shown = shownTab(after);
+    const removed = before.tabs.find((tab) => !after.tabs.includes(tab)) ?? null;
+    const added = after.tabs.some((tab) => !before.tabs.includes(tab));
+    const retires =
+      left != null &&
+      left.id !== shown?.id &&
+      after.tabs.includes(left) &&
+      !keepsTab(left.store.getState());
+    const home = after.view === "home";
+    const heading = (before.view === "home") !== home;
+    if (!added && !removed && !retires && !heading) return null;
+    const opened = before.view === "home" && shown != null && !before.tabs.includes(shown);
+    return {
+      shifting: added || removed != null || retires,
+      heading,
+      carrying: opened ? shown.morphKey : retires && home ? left.morphKey : null,
+      folding: removed?.id ?? (retires && !home ? left.id : null),
+    };
+  }
+
+  /**
+   * Tabs closed lately, newest last: reopening one of their PRs shows it at
+   * once from what it had loaded, and checks it against GitHub behind that,
+   * rather than fetching and diffing it all again.
+   */
+  const recentlyClosed: ReviewTab[] = [];
+  const RECENTLY_CLOSED = 4;
+
+  function rememberClosed(tab: ReviewTab) {
+    const { summary, error } = tab.store.getState();
+    if (tab.number == null || !summary || error) return;
+    const index = recentlyClosed.findIndex((other) => other.morphKey === tab.morphKey);
+    if (index !== -1) recentlyClosed.splice(index, 1);
+    recentlyClosed.push(tab);
+    if (recentlyClosed.length > RECENTLY_CLOSED) recentlyClosed.shift();
+  }
+
+  function takeClosed(root: string, number: number): ReviewTab | null {
+    const index = recentlyClosed.findIndex((tab) => tab.root === root && tab.number === number);
+    return index === -1 ? null : (recentlyClosed.splice(index, 1)[0] ?? null);
+  }
+
+  /** Brings a recently closed tab back, and checks its PR behind it. */
+  async function reopen(tab: ReviewTab): Promise<true> {
+    await addTab(tab);
+    void tab.store.getState().revalidatePr();
+    return true;
   }
 
   function openPrs(root: string): number[] {
@@ -268,6 +352,7 @@ export const useAppStore = create<AppState>((set, get) => {
     const next = wasShown ? (rest[index] ?? rest[index - 1] ?? null) : null;
 
     closing.set(id, tab);
+    rememberClosed(tab);
     const done = transition({
       ...patch,
       tabs: rest,
@@ -313,6 +398,7 @@ export const useAppStore = create<AppState>((set, get) => {
     tabs: [],
     activeTabId: null,
     returning: null,
+    screenChange: null,
     layout: "split",
     fileNotes: readFileNotes(),
     reviewEngine: readReviewEngine(),
@@ -376,6 +462,8 @@ export const useAppStore = create<AppState>((set, get) => {
           await get().showTab(already.id);
           return true;
         }
+        const recent = takeClosed(repo.root, preview.number);
+        if (recent) return reopen(recent);
         const tab = makeTab(
           {
             repo,
@@ -399,13 +487,18 @@ export const useAppStore = create<AppState>((set, get) => {
       // A pasted link says nothing about its PR until `gh` has read it, so
       // whoever asked waits on it, "Opening…", and the screen changes after.
       try {
-        const pr = await gitApi.openPr(repo.root, url, openPrs(repo.root));
+        // Neither needs the other: PR heads are fetched outside the branches listed.
+        const [pr, branches] = await Promise.all([
+          gitApi.openPr(repo.root, url, openPrs(repo.root)),
+          gitApi.listBranches(repo.root),
+        ]);
         const already = prTab(repo.root, pr.number);
         if (already) {
           await get().showTab(already.id);
           return true;
         }
-        const branches = await gitApi.listBranches(repo.root);
+        const recent = takeClosed(repo.root, pr.number);
+        if (recent) return reopen(recent);
         const tab = makeTab({ repo, branches, ...prComparison(pr) }, pr.number);
         await addTab(tab);
         await tab.store.getState().ensureDiff();

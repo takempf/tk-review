@@ -219,6 +219,15 @@ export interface PrLabel {
   color: string;
 }
 
+/** One page of a pull-request list, most recently updated first. */
+export interface PrPage {
+  prs: PrSummary[];
+  /** How many the whole list holds, across every page. */
+  total: number;
+  /** Where the next page starts, to pass back as `after`; `null` on the last. */
+  next: string | null;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -391,9 +400,12 @@ export const gitApi = {
   /** `git fetch --all --prune` — contacts every remote, so as slow as the network. */
   fetchRemotes: (root: string) => invoke<void>("fetch_remotes", { root }),
 
-  /** Open PRs on the repository this checkout's remotes point at, through `gh`. */
-  listPrs: (root: string, filter: PrListFilter = "all") =>
-    invoke<PrSummary[]>("list_prs", { root, filter }),
+  /**
+   * A page of the open PRs on the repository this checkout's remotes point at,
+   * through `gh`, from `after` (a page's `next`) or the start.
+   */
+  listPrs: (root: string, filter: PrListFilter = "all", after: string | null = null) =>
+    invoke<PrPage>("list_prs", { root, filter, after }),
 
   /**
    * Opens a GitHub PR and fetches its head to a stable local review ref. `keep`

@@ -1,0 +1,149 @@
+/*
+ * Every place that shows Markdown shares one rhythm, in `em`s of its own type,
+ * so the PR description, the comments, the agents' writing and the file notes
+ * all space the same way. A caller sets the type, the colour and its padding.
+ *
+ * One gap stands between blocks of any kind. A heading takes half again above
+ * it and half below, so it sits with the text it heads.
+ */
+.markdown {
+  --markdown-gap: 1em;
+
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown :is(p, ul, ol, blockquote, table, details, :global(.tk-code-block)) {
+  margin: 0 0 var(--markdown-gap);
+}
+
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: calc(var(--markdown-gap) * 1.5) 0 calc(var(--markdown-gap) * 0.5);
+  color: var(--text);
+  font-size: 1.125em;
+}
+
+/* Nothing pushes against the edges of what holds it: the area itself, a list
+   item, a quote, a details block or a table cell. */
+.markdown > :first-child,
+.markdown :is(li, blockquote, details, td, th) > :first-child,
+.markdown details > summary + * {
+  margin-top: 0;
+}
+
+.markdown > :last-child,
+.markdown :is(li, blockquote, details, td, th) > :last-child {
+  margin-bottom: 0;
+}
+
+/* Code is the design system's (`Code` inline, `CodeBlock` fenced). Inline, it
+   may break anywhere: a long path or identifier would otherwise push a narrow
+   column sideways. */
+.markdown :global(.tk-code) {
+  overflow-wrap: anywhere;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+/* Inline, as on GitHub, where the design system's reset makes images blocks:
+   bots put avatars and status badges on the line beside their text. */
+.markdown img {
+  display: inline;
+  max-width: 100%;
+  height: auto;
+}
+
+/* A bullet's width in rather than the browser's 40px, with a little more for
+   numbers, and markers in the accent. Items sit a quarter gap apart, and a
+   list inside one starts right under its text. */
+.markdown ul {
+  padding-left: 1.25em;
+}
+
+.markdown ol {
+  padding-left: 1.5em;
+}
+
+.markdown li::marker {
+  color: var(--accent);
+}
+
+.markdown li + li {
+  margin-top: calc(var(--markdown-gap) * 0.25);
+}
+
+.markdown li > :is(ul, ol) {
+  margin: calc(var(--markdown-gap) * 0.25) 0 0;
+}
+
+/* A rule clears a whole line on each side, in the accent at half strength. */
+.markdown hr {
+  height: 0;
+  margin: 1lh 0;
+  border: 0;
+  border-top: 1px solid color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
+.markdown blockquote {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-strong);
+}
+
+.markdown details {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.markdown summary {
+  cursor: pointer;
+}
+
+.markdown details[open] > summary {
+  margin-bottom: var(--markdown-gap);
+}
+
+/* Task lists: the box stands in for the bullet, flush with the text around
+   the list, and hangs so an item's wrapped lines keep its text's edge. It is
+   the design system's checkbox, 1.25rem square, with the gap its labelled
+   checkboxes use. Out of flow, the space Markdown leaves after it collapses. */
+.markdown :global(.contains-task-list) {
+  padding-left: 0;
+}
+
+.markdown :global(.task-list-item) {
+  position: relative;
+  padding-left: calc(1.25rem + var(--space-3));
+  list-style: none;
+}
+
+.markdown :global(.task-list-item-checkbox) {
+  position: absolute;
+  top: calc((1lh - 1.25rem) / 2);
+  left: 0;
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown :is(th, td) {
+  padding: 3px var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  /* Whole words, unlike the prose around it: a table too wide for its column
+     scrolls sideways, as GitHub's do, rather than splitting "Project". */
+  overflow-wrap: normal;
+  border: 1px solid var(--border);
+}
+
+/* Inline code in a cell keeps whole as well, though it may break anywhere in
+   prose: the table scrolls before `MultiFileDiff` splits. */
+.markdown td :global(.tk-code) {
+  overflow-wrap: normal;
+}

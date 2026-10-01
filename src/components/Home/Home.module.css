@@ -127,6 +127,16 @@
   }
 }
 
+/* Where the next page loads, under the rows already listed. */
+.more {
+  display: flex;
+  gap: var(--tk-space-2);
+  align-items: center;
+  justify-content: center;
+  padding: var(--tk-space-4) var(--tk-space-3);
+  color: var(--tk-fg-muted);
+}
+
 .message {
   animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
   padding: var(--tk-space-8) var(--tk-space-3);

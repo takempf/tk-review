@@ -1,7 +1,12 @@
 import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
-import { focusManager, QueryClient, queryOptions } from "@tanstack/react-query";
+import {
+  focusManager,
+  type InfiniteData,
+  infiniteQueryOptions,
+  QueryClient,
+} from "@tanstack/react-query";
 import type { PersistQueryClientProviderProps } from "@tanstack/react-query-persist-client";
-import { gitApi, type PrListFilter } from "../ipc/git";
+import { gitApi, type PrListFilter, type PrPage, type PrSummary } from "../ipc/git";
 
 /**
  * What the app reads from GitHub, cached. A screen shows what it last saw the
@@ -28,7 +33,7 @@ const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
  * Bump whenever a cached shape (`PrSummary`) changes, so a cache written by an
  * older build is dropped rather than read as the new one.
  */
-const CACHE_VERSION = "3";
+const CACHE_VERSION = "4";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,14 +84,38 @@ export const persistOptions: PersistQueryClientProviderProps["persistOptions"] =
 /** Every cached pull-request list for one repository. */
 const prListsKey = (root: string) => ["prs", root] as const;
 
+/** A list as the screens read it: every page loaded so far, as one. */
+export interface PrListing {
+  prs: PrSummary[];
+  /** How many the whole list holds, loaded or not. */
+  total: number;
+}
+
 /**
- * One `gh pr list`, cached per repository, account and filter: "Mine" and
- * "Review requested" are whoever `gh` is signed in as.
+ * Pages run in GitHub's order, so a PR updated between two page loads can turn
+ * up on both. The first sighting is the newer one.
+ */
+function flatten(data: InfiniteData<PrPage>): PrListing {
+  const seen = new Set<number>();
+  const prs = data.pages.flatMap((page) =>
+    page.prs.filter((pr) => !seen.has(pr.number) && seen.add(pr.number)),
+  );
+  return { prs, total: Math.max(data.pages[0]?.total ?? 0, prs.length) };
+}
+
+/**
+ * One list of open PRs, a page at a time, cached per repository, account and
+ * filter: "Mine" and "Review requested" are whoever `gh` is signed in as. The
+ * list asks for the next page as it is scrolled to the end; a refetch reloads
+ * every page it has.
  */
 export function prListQuery(root: string, login: string | null, filter: PrListFilter) {
-  return queryOptions({
+  return infiniteQueryOptions({
     queryKey: [...prListsKey(root), login, filter] as const,
-    queryFn: () => gitApi.listPrs(root, filter),
+    queryFn: ({ pageParam }) => gitApi.listPrs(root, filter, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next,
+    select: flatten,
   });
 }
 

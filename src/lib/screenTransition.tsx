@@ -2,12 +2,13 @@ import {
   type CSSProperties,
   cloneElement,
   createContext,
+  memo,
   type ReactNode,
   useContext,
   useEffect,
   useState,
 } from "react";
-import { Morph, type MorphProps, morph } from "tk-design-system";
+import { cx, Morph, type MorphProps, morph } from "tk-design-system";
 import css from "./screenTransition.module.css";
 
 /**
@@ -62,8 +63,30 @@ let settling: Promise<void> | null = null;
 /** The running screen change's settling, for background work to wait out. */
 export const screenSettling = (): Promise<void> | null => settling;
 
-/** Runs `update` inside the screen transition; resolves once the new screen has rendered. */
-export function transitionScreen(update: () => void): Promise<void> {
+const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Runs `update` inside the screen transition; resolves once the new screen has
+ * rendered. With `shared` false nothing moves between the screens (a switch
+ * between tabs, say), so they only crossfade, and no view transition is spent
+ * capturing parts that would stay where they are.
+ */
+export function transitionScreen(
+  update: () => void,
+  { shared = true }: { shared?: boolean } = {},
+): Promise<void> {
+  if (!shared) {
+    // The crossfade is the layers' own, so all it needs is to know it is on.
+    if (!prefersReducedMotion()) {
+      const settled = new Promise<void>((done) => setTimeout(done, SCREEN_FADE.in));
+      settling = settled;
+      void settled.then(() => {
+        if (settling === settled) settling = null;
+      });
+    }
+    update();
+    return Promise.resolve();
+  }
   // `morph` runs the update a frame later, after capturing the old screen.
   // Callers keep working with the store once it has run, so wait for it.
   return new Promise((resolve) => {
@@ -114,30 +137,91 @@ export function useScreenSettled(): boolean {
   return settled;
 }
 
-/** True inside the screen that is fading out. */
-const LeavingContext = createContext(false);
+/**
+ * Where a screen stands: on show, fading out over the one arriving, or kept
+ * mounted out of sight (`hidden`) so coming back to it is instant.
+ */
+type ScreenState = "shown" | "leaving" | "hidden";
+
+interface ScreenContextValue {
+  state: ScreenState;
+  /** How many times the screen has come on show. */
+  visit: number;
+}
+
+const ScreenContext = createContext<ScreenContextValue>({ state: "shown", visit: 1 });
+
+/** Whether this screen is the one on show: not fading out, not kept out of sight. */
+export function useScreenShown(): boolean {
+  return useContext(ScreenContext).state === "shown";
+}
 
 /**
- * Shows `render(screen)`. When `screen` changes inside `transitionScreen`, the
- * old screen stays mounted, fading out over the new one fading in, until the
- * change settles. Any other change — the swipe gesture, which animates itself,
- * or reduced motion — swaps at once.
+ * Counts the times this screen has come on show. Screens stay mounted between
+ * visits, so work that belongs to each visit keys on this.
+ */
+export function useScreenVisit(): number {
+  return useContext(ScreenContext).visit;
+}
+
+/** One screen's layer. Memoized, so a change elsewhere in the stack passes it by. */
+const ScreenLayer = memo(function ScreenLayer<K extends string>({
+  screen,
+  state,
+  visit,
+  entering,
+  render,
+}: {
+  screen: K;
+  state: ScreenState;
+  visit: number;
+  entering: boolean;
+  render: (screen: K) => ReactNode;
+}) {
+  const fading = state === "leaving" ? css.leaving : state === "hidden" ? css.hidden : "";
+  return (
+    <div className={cx(css.layer, fading, entering && css.entering)} inert={state !== "shown"}>
+      <ScreenContext value={{ state, visit }}>{render(screen)}</ScreenContext>
+    </div>
+  );
+}) as <K extends string>(props: {
+  screen: K;
+  state: ScreenState;
+  visit: number;
+  entering: boolean;
+  render: (screen: K) => ReactNode;
+}) => ReactNode;
+
+/**
+ * Shows `render(screen)`, keeping every one of `screens` mounted out of sight
+ * besides, so going back to one finds it as it was left: its diff laid out,
+ * its scroll where it was, nothing to parse again. When `screen` changes
+ * inside `transitionScreen`, the old screen fades out over the new one fading
+ * in until the change settles, and then stays out of sight, or unmounts if it
+ * is no longer one of `screens` (a tab that closed). Any other change (the
+ * swipe gesture, which animates itself, or reduced motion) swaps at once.
  */
 export function ScreenStack<K extends string>({
+  screens,
   screen,
   render,
 }: {
+  screens: readonly K[];
   screen: K;
   render: (screen: K) => ReactNode;
 }) {
   const [shown, setShown] = useState(screen);
   const [leaving, setLeaving] = useState<{ screen: K; until: Promise<void> } | null>(null);
+  const [visits, setVisits] = useState<Partial<Record<K, number>>>(
+    () => ({ [screen]: 1 }) as Partial<Record<K, number>>,
+  );
 
-  // Derived during render, so both screens mount in the same commit the view
-  // transition captures as its new state.
+  // Derived during render, so both screens are in place in the same commit the
+  // view transition captures as its new state.
   if (screen !== shown) {
     setShown(screen);
     setLeaving(settling ? { screen: shown, until: settling } : null);
+    setVisits((counts) => ({ ...counts, [screen]: (counts[screen] ?? 0) + 1 }));
   }
 
   useEffect(() => {
@@ -151,9 +235,9 @@ export function ScreenStack<K extends string>({
     };
   }, [leaving]);
 
-  // A fixed order, so neither screen's DOM moves (and resets its scroll) as the
-  // other comes and goes.
-  const screens = leaving ? [shown, leaving.screen].sort() : [shown];
+  // A fixed order, so no screen's DOM moves (and resets its scroll) as others
+  // come and go.
+  const mounted = [...new Set([...screens, shown, ...(leaving ? [leaving.screen] : [])])].sort();
   const timing = {
     "--screen-fade-out": `${SCREEN_FADE.out}ms`,
     "--screen-fade-in": `${SCREEN_FADE.in}ms`,
@@ -161,15 +245,16 @@ export function ScreenStack<K extends string>({
 
   return (
     <div className={css.stack} style={timing}>
-      {screens.map((key) => {
-        const fading = leaving ? (key === leaving.screen ? css.leaving : css.entering) : "";
-        const isLeaving = key === leaving?.screen;
-        return (
-          <div key={key} className={`${css.layer} ${fading}`} inert={isLeaving}>
-            <LeavingContext value={isLeaving}>{render(key)}</LeavingContext>
-          </div>
-        );
-      })}
+      {mounted.map((key) => (
+        <ScreenLayer
+          key={key}
+          screen={key}
+          state={key === shown ? "shown" : key === leaving?.screen ? "leaving" : "hidden"}
+          visit={visits[key] ?? 0}
+          entering={key === shown && leaving != null}
+          render={render}
+        />
+      ))}
     </div>
   );
 }
@@ -190,8 +275,11 @@ export function ScreenMorph({
   active?: boolean;
   children: MorphProps["children"];
 }) {
-  const leaving = useContext(LeavingContext);
-  if (leaving) {
+  const { state } = useContext(ScreenContext);
+  // Out of sight, a screen takes no part: its names would clash with the
+  // screen on show.
+  if (state === "hidden") return children;
+  if (state === "leaving") {
     // In the screen fading out, the part whose copy is gliding to the new
     // screen keeps its space but not its text; the rest fade with the screen.
     if (!active) return children;

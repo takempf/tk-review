@@ -49,6 +49,47 @@ const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(
 const runMode = new URLSearchParams(location.search).get("run");
 
 /**
+ * Extra open PRs from `?prs=`, to scroll the list through several pages:
+ * `?prs=200` lists 200 more after the fixtures, 100 to a page as `gh` returns
+ * them. They vary the way real ones do (title lengths, logins, labels, sizes
+ * that grow a digit on later pages) and one early PR is stacked on one from
+ * the second page, so a page arriving reshapes the rows already shown.
+ */
+const PAGE_SIZE = 100;
+const WORDS =
+  "tighten how the review panel handles stale comments after a force push rewrites the branch".split(
+    " ",
+  );
+const LOGINS = ["octocat", "mona", "hubot", "a-much-longer-contributor-login"];
+const MANY_PRS = Array.from(
+  { length: Number(new URLSearchParams(location.search).get("prs") ?? 0) },
+  (_, index) => {
+    const number = 1000 + index;
+    const words = index % 3 === 0 ? `: ${WORDS.slice(0, 3 + (index % 13)).join(" ")}` : "";
+    return {
+      ...PR_LIST[2],
+      number,
+      title: `Generated pull request ${number}${words}`,
+      author: LOGINS[index % LOGINS.length] ?? "octocat",
+      url: `https://github.com/example/tk-review/pull/${number}`,
+      headRef: `generated/${number}`,
+      baseRef: index === 5 ? "generated/1160" : "main",
+      labels:
+        index % 5 === 0
+          ? [
+              { name: "needs-design-review", color: "d876e3" },
+              { name: "backend", color: "0e8a16" },
+            ]
+          : [],
+      additions: index < 100 ? 10 + index : 10_000 + index * 37,
+      updatedAt: new Date(Date.UTC(2026, 6, 1) - index * 36e5).toISOString(),
+      requested: index % 3 === 0,
+      mine: false,
+    } as (typeof PR_LIST)[number];
+  },
+);
+
+/**
  * Who `gh` is signed in as, from `?login=`: `?login=octocat` to be the author
  * of the PR the harness opens (#47), `?login=` for nobody signed in.
  */
@@ -133,13 +174,23 @@ function answer(command: string, payload: unknown): unknown {
     // visible. Lists are cached across reloads (src/lib/queries.ts): remove
     // `tk-review:query-cache` from localStorage to see a cold load again.
     case "list_prs": {
-      const filter = (payload as { filter?: string }).filter ?? "all";
-      const listed = PR_LIST.filter((pr) =>
+      const { filter = "all", after = null } = payload as {
+        filter?: string;
+        after?: string | null;
+      };
+      const listed = [...PR_LIST, ...MANY_PRS].filter((pr) =>
         filter === "reviewRequested" ? pr.requested : filter === "mine" ? pr.mine : true,
       );
+      // Paged like GitHub's: the cursor is where the page starts.
+      const start = after ? Number(after) : 0;
+      const end = start + PAGE_SIZE;
       return later(
         700,
-        listed,
+        {
+          prs: listed.slice(start, end),
+          total: listed.length,
+          next: end < listed.length ? String(end) : null,
+        },
         failing.has("list")
           ? {
               kind: "command",
@@ -196,8 +247,10 @@ stdout:
       return (payload as { compare: string | null }).compare == null
         ? { ...SUMMARY, compareHead: null }
         : SUMMARY;
+    // From the merge base, the PR's changes; between two later commits (a
+    // prior finding followed to the PR's head), nothing changed.
     case "get_patch":
-      return PATCH;
+      return (payload as { mergeBase: string }).mergeBase === SUMMARY.mergeBase ? PATCH : "";
     case "list_commits":
       return COMMITS;
     case "get_file_versions": {

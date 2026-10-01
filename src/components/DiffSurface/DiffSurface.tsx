@@ -141,7 +141,7 @@ function FileNote({ note, stale }: { note: string; stale: boolean }) {
           <span className={css.fileNoteStale}>from an older version of this diff</span>
         ) : null}
       </p>
-      <GitHubMarkdown markdown={note} className={css.fileNoteText} />
+      <GitHubMarkdown markdown={note} />
     </aside>
   );
 }

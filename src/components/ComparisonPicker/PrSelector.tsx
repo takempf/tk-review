@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { errorMessage } from "../../ipc/git";
 import { prListQuery } from "../../lib/queries";
@@ -39,8 +39,8 @@ export function PrSelector({
   // on whatever that last listed. Listing costs a `gh` round trip, so it never
   // fetches by itself: it re-lists each time the popup opens, since PRs are
   // raised and merged while the app is running.
-  const listing = useQuery({ ...prListQuery(root, login, "all"), enabled: false });
-  const prs = listing.data;
+  const listing = useInfiniteQuery({ ...prListQuery(root, login, "all"), enabled: false });
+  const prs = listing.data?.prs;
 
   function load(open: boolean) {
     if (open) void listing.refetch();

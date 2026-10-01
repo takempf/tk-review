@@ -14,11 +14,13 @@ import {
 import { createContext, useContext, useMemo, useState } from "react";
 import { Badge, Button, Icon, Menu } from "tk-design-system";
 import type { PrLabel, PrSummary, ReviewEngine } from "../../ipc/git";
+import { prStatus, STATUS_LABELS, STATUSES } from "../../lib/prStatus";
 import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
 import type { StackLinks } from "../../lib/stacks";
 import { absoluteTime, shortTime } from "../../lib/time";
 import type { ReviewedPr } from "../../store/history";
 import { Spinner } from "../Spinner/Spinner";
+import { useCarries, useRowOpening } from "./carry";
 import css from "./PrTable.module.css";
 
 /**
@@ -41,12 +43,8 @@ export interface PrRow {
 /** What the cells need beyond their own row. */
 interface TableContext {
   root: string;
-  /** The URL being opened, while one is. */
-  opening: string | null;
   /** Whether GitHub's open list has loaded, so a PR missing from it has closed. */
   listed: boolean;
-  /** Whether this row carries its number and title into the review, as `ScreenMorph`'s `active`. */
-  carries: (number: number, url: string | null) => boolean;
   /** Stacks only indent in the list's own order; a sorted column breaks them up. */
   grouped: boolean;
 }
@@ -62,16 +60,8 @@ function useTableContext(): TableContext {
 const ENGINES: Record<ReviewEngine, string> = { claude: "Claude Code", codex: "Codex" };
 
 /** Ascending: what most needs a reviewer's attention first. */
-const DECISION_RANK: Record<string, number> = {
-  CHANGES_REQUESTED: 0,
-  REVIEW_REQUIRED: 1,
-  APPROVED: 2,
-};
-
 function statusRank(pr: PrSummary | null): number | undefined {
-  if (!pr) return undefined;
-  if (pr.isDraft) return 4;
-  return DECISION_RANK[pr.reviewDecision ?? ""] ?? 3;
+  return pr ? STATUSES.indexOf(prStatus(pr)) : undefined;
 }
 
 function timestamp(iso: string | null | undefined): number | undefined {
@@ -105,23 +95,27 @@ function hasNewCommits(row: PrRow): boolean {
 
 const HEX = /^[0-9a-f]{6}$/i;
 
+/** A label's colour as CSS, from GitHub's six hex digits. */
+export function labelColor(color: string | undefined): string {
+  return color && HEX.test(color) ? `#${color}` : "var(--tk-fg-subtle)";
+}
+
 function Label({ label }: { label: PrLabel }) {
-  const color = HEX.test(label.color) ? `#${label.color}` : "var(--tk-fg-subtle)";
   return (
-    <Badge className={css.label} style={{ "--label": color } as React.CSSProperties}>
+    <Badge
+      className={css.label}
+      style={{ "--label": labelColor(label.color) } as React.CSSProperties}
+    >
       {label.name}
     </Badge>
   );
 }
 
 function NumberCell({ row }: { row: PrRow }) {
-  const { root, carries } = useTableContext();
+  const { root } = useTableContext();
+  const carries = useCarries(root, row.number, row.url);
   return (
-    <ScreenMorph
-      id={prMorphKey(root, row.number)}
-      part="number"
-      active={carries(row.number, row.url)}
-    >
+    <ScreenMorph id={prMorphKey(root, row.number)} part="number" active={carries}>
       <span className={css.number}>#{row.number}</span>
     </ScreenMorph>
   );
@@ -139,14 +133,15 @@ function Branches({ pr }: { pr: PrSummary }) {
 }
 
 function TitleCell({ row }: { row: PrRow }) {
-  const { root, opening, carries, grouped } = useTableContext();
+  const { root, grouped } = useTableContext();
+  const carries = useCarries(root, row.number, row.url);
+  const busy = useRowOpening(row.url);
   const depth = grouped ? row.depth : 0;
   // Grouped, the rows themselves draw the stack: a child sits indented under
   // its parent. Badges only say what the rows can't: a parent that isn't listed
   // above, or the whole stack once a sort has laid the rows flat.
   const parent = depth === 0 ? row.stack?.parent : undefined;
   const children = grouped ? [] : (row.stack?.children ?? []);
-  const busy = row.url != null && opening === row.url;
   return (
     <div
       className={css.titleCell}
@@ -161,11 +156,7 @@ function TitleCell({ row }: { row: PrRow }) {
         aria-busy={busy || undefined}
         title={row.url ? undefined : "Load the open pull requests to reopen this one"}
       >
-        <ScreenMorph
-          id={prMorphKey(root, row.number)}
-          part="title"
-          active={carries(row.number, row.url)}
-        >
+        <ScreenMorph id={prMorphKey(root, row.number)} part="title" active={carries}>
           <span>{row.title}</span>
         </ScreenMorph>
       </button>
@@ -195,16 +186,21 @@ function TitleCell({ row }: { row: PrRow }) {
 
 function StatusCell({ pr }: { pr: PrSummary | null }) {
   const { listed } = useTableContext();
-  if (!pr) return listed ? <span className={css.muted}>Not open</span> : <Empty />;
-  if (pr.isDraft) return <Badge>Draft</Badge>;
-  if (pr.reviewDecision === "APPROVED") return <Badge tone="success">Approved</Badge>;
-  if (pr.reviewDecision === "CHANGES_REQUESTED") {
-    return <Badge tone="danger">Changes requested</Badge>;
+  if (!pr) return listed ? <span className={css.muted}>{STATUS_LABELS.closed}</span> : <Empty />;
+  const status = prStatus(pr);
+  const label = STATUS_LABELS[status];
+  switch (status) {
+    case "draft":
+      return <Badge>{label}</Badge>;
+    case "approved":
+      return <Badge tone="success">{label}</Badge>;
+    case "changesRequested":
+      return <Badge tone="danger">{label}</Badge>;
+    case "reviewRequired":
+      return <span className={css.muted}>{label}</span>;
+    case "noReview":
+      return <Empty />;
   }
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    return <span className={css.muted}>Awaiting review</span>;
-  }
-  return <Empty />;
 }
 
 function ReviewedCell({ row }: { row: PrRow }) {
@@ -422,14 +418,43 @@ export function ColumnMenu({
 
 const SORT_ICONS = { asc: "chevron-up", desc: "chevron-down" } as const;
 
+/** A row of the list, which marks itself while its PR opens. */
+function BodyRow({
+  number,
+  url,
+  onClick,
+  children,
+}: {
+  number: number;
+  url: string | null;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  const busy = useRowOpening(url);
+  return (
+    <tr
+      // What the list holds its place by as rows come and go (Home's `useHeldPlace`).
+      data-pr={number}
+      className={css.row}
+      data-disabled={!url || undefined}
+      data-busy={busy || undefined}
+      onClick={onClick}
+    >
+      {children}
+    </tr>
+  );
+}
+
 /**
  * The Size column's two slots, each as wide as its longest count among the
  * rows (sign included), so every row's additions and deletions sit in the same
  * places, right-aligned, and read down the column as two.
  */
 function sizeSlots(rows: PrRow[]): React.CSSProperties {
-  let added = 1;
-  let deleted = 1;
+  // Room for four digits from the start, so a page of bigger PRs arriving
+  // rarely widens the column (and rewraps every title beside it).
+  let added = 4;
+  let deleted = 4;
   for (const { pr } of rows) {
     if (!pr) continue;
     added = Math.max(added, String(pr.additions).length);
@@ -472,9 +497,14 @@ export function PrTable({
   });
 
   const slots = useMemo(() => sizeSlots(rows), [rows]);
+  const grouped = sorting.length === 0;
+  const value = useMemo(
+    () => ({ root: context.root, listed: context.listed, grouped }),
+    [context.root, context.listed, grouped],
+  );
 
   return (
-    <Context value={{ ...context, grouped: sorting.length === 0 }}>
+    <Context value={value}>
       <table className={css.table} style={slots}>
         <thead>
           {table.getHeaderGroups().map((group) => (
@@ -512,11 +542,10 @@ export function PrTable({
             const { url } = row.original;
             // The title's button is the row's keyboard route; the row widens its pointer target.
             return (
-              <tr
+              <BodyRow
                 key={row.id}
-                className={css.row}
-                data-disabled={!url || undefined}
-                data-busy={(url != null && url === context.opening) || undefined}
+                number={row.original.number}
+                url={url}
                 onClick={() => url && onOpen(row.original)}
               >
                 {row.getVisibleCells().map((cell) => (
@@ -524,7 +553,7 @@ export function PrTable({
                     <table.FlexRender cell={cell} />
                   </td>
                 ))}
-              </tr>
+              </BodyRow>
             );
           })}
         </tbody>

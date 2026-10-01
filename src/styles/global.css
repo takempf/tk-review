@@ -168,6 +168,35 @@ body {
   animation-timing-function: var(--spring-snappy);
 }
 
+/* A tab that closes folds away from its right edge as the tabs after it slide
+   over into its place. On their spring, so its edge keeps pace with theirs and
+   nothing overlaps. It fades on its own, slow-starting curve: the spring is
+   most of the way there in a third of its time, and fading on it would lose
+   the tab before the fold had got anywhere. Its number and title fold with it
+   (`screenChange.folding` in the app store). */
+:root:active-view-transition-type(screen)::view-transition-old(.tk-review-tab):only-child {
+  animation:
+    tab-fold var(--spring-snappy-duration) var(--spring-snappy) both,
+    tab-fade var(--spring-snappy-duration) ease-in both;
+}
+
+/* Both ends stated: from `none`, a clip can't interpolate and would snap. */
+@keyframes tab-fold {
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+
+  to {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+
+@keyframes tab-fade {
+  to {
+    opacity: 0;
+  }
+}
+
 /* Both ends are the same text at the same size, so the crossfade only shows
    where they differ (a title ellipsized in one place and not the other).
    Adding the two, rather than layering them, keeps it from dimming midway. */

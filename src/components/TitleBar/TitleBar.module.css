@@ -61,8 +61,16 @@
   /* The mark stands on the name's baseline, a letter's height tall. */
   align-items: baseline;
   gap: var(--tk-space-2);
+  /* Capitals sit tight; a fixed tracking rather than the theme's label
+     tracking, which is tuned for small text and runs to 0.2em. */
+  --tracking: 0.08em;
+  /* Less the space the tracking leaves after the last letter, so the gap to
+     the divider matches the gap to the mark. */
+  margin-inline-end: calc(-1 * var(--tracking));
   color: var(--tk-fg-bright);
   font-weight: var(--tk-weight-bold);
+  letter-spacing: var(--tracking);
+  text-transform: uppercase;
   /* The hero's shadow, for the same reason: it sits on the scenery. */
   text-shadow: 1px 1px 0 oklch(0% 0 0 / 0.6);
   cursor: default;

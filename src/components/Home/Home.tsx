@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   Button,
@@ -15,7 +15,12 @@ import {
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
-import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
+import {
+  ScreenMorph,
+  screenSettling,
+  useScreenShown,
+  useScreenVisit,
+} from "../../lib/screenTransition";
 import { buildStacks, groupStacks } from "../../lib/stacks";
 import { relativeTime } from "../../lib/time";
 import { warmHighlighter } from "../../lib/warmHighlighter";
@@ -24,6 +29,14 @@ import { useAppStore } from "../../store/appStore";
 import { type ReviewedPr, readReviewedPrs } from "../../store/history";
 import type { PrPreview } from "../../store/tabStore";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
+import {
+  filterRows,
+  isFiltering,
+  NO_FILTERS,
+  PrFilterMenus,
+  type PrFilters,
+} from "../PrFilters/PrFilters";
+import { useOpening } from "../PrTable/carry";
 import { ColumnMenu, type PrRow, PrTable, useColumnVisibility } from "../PrTable/PrTable";
 import { Spinner } from "../Spinner/Spinner";
 import css from "./Home.module.css";
@@ -58,17 +71,17 @@ const PR_REFERENCE = /(?:\/pulls?\/\d+)|(?:^[\w.-]+\/[\w.-]+#\d+$)/;
  * show and the full list fetch; the others read the cache for their counts,
  * and fetch when opened.
  */
-function usePrListings(root: string, login: string | null, shown: PrListFilter) {
+function usePrListings(root: string, login: string | null, shown: PrListFilter, onScreen: boolean) {
   // Stacks come from the full list too: a filtered tab can leave out the PR
   // another one is stacked on.
   const listing = (filter: PrListFilter) => ({
     ...prListQuery(root, login, filter),
-    enabled: filter === shown || filter === "all",
+    enabled: onScreen && (filter === shown || filter === "all"),
   });
   return {
-    reviewRequested: useQuery(listing("reviewRequested")),
-    mine: useQuery(listing("mine")),
-    all: useQuery(listing("all")),
+    reviewRequested: useInfiniteQuery(listing("reviewRequested")),
+    mine: useInfiniteQuery(listing("mine")),
+    all: useInfiniteQuery(listing("all")),
   } satisfies Record<PrListFilter, unknown>;
 }
 
@@ -82,12 +95,13 @@ interface Reviewed {
  * The latest review of each PR, keyed by number, for the badges on every tab.
  * `scope` is the repository's storage root, so it is the signed-in account's.
  */
-function useReviewed(scope: string): Reviewed {
+function useReviewed(scope: string, visit: number): Reviewed {
   // Read once per visit: reviews are only written from the review screen.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `visit` is the reason to read again
   return useMemo(() => {
     const reviewed = readReviewedPrs(scope);
     return { list: reviewed, byNumber: new Map(reviewed.map((entry) => [entry.number, entry])) };
-  }, [scope]);
+  }, [scope, visit]);
 }
 
 function matches(query: string, ...fields: (string | number | null | undefined)[]): boolean {
@@ -99,43 +113,48 @@ function matches(query: string, ...fields: (string | number | null | undefined)[
 const NO_PRS: PrSummary[] = [];
 
 /**
- * One tab's rows. The open tabs list GitHub's pull requests with their stacks
- * grouped; "Reviewed" lists the review history, filled in from GitHub's list
- * wherever the PR is still open.
+ * Which PRs stack on which. From the tab's own PRs as well as everyone's: "All
+ * open" is only what has loaded so far, so an older stack listed under "Mine"
+ * would otherwise have no links at all. Newest first, as `buildStacks` expects.
+ */
+function stacksOf(openPrs: PrSummary[], allPrs: PrSummary[], defaultBranch: string | null) {
+  const known = new Map([...allPrs, ...openPrs].map((pr) => [pr.number, pr]));
+  return buildStacks(
+    [...known.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    defaultBranch,
+  );
+}
+
+type Stacks = ReturnType<typeof stacksOf>;
+
+/**
+ * One tab's rows that match the search, before the filters and with stacks not
+ * yet grouped. The open tabs list GitHub's pull requests; "Reviewed" lists the
+ * review history, filled in from GitHub's list wherever the PR is still open.
  */
 function buildRows(
   tab: HomeTab,
   query: string,
   openPrs: PrSummary[],
-  allPrs: PrSummary[],
   reviewed: Reviewed,
-  defaultBranch: string | null,
+  stacks: Stacks,
 ): PrRow[] {
-  // The tab's own PRs as well as everyone's: "All open" is only the most
-  // recently updated few dozen, so an older stack listed under "Mine" would
-  // otherwise have no links at all. Newest first, as `buildStacks` expects.
-  const known = new Map([...allPrs, ...openPrs].map((pr) => [pr.number, pr]));
-  const stacks = buildStacks(
-    [...known.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    defaultBranch,
-  );
   const labelNames = (pr: PrSummary | null | undefined) =>
     pr?.labels.map((label) => label.name) ?? [];
 
   if (tab !== "reviewed") {
-    const visible = openPrs.filter((pr) =>
-      matches(query, pr.number, pr.title, pr.author, pr.headRef, ...labelNames(pr)),
-    );
-    return groupStacks(visible, stacks).map(({ pr, depth }) => ({
-      number: pr.number,
-      title: pr.title,
-      author: pr.author,
-      url: pr.url,
-      pr,
-      reviewed: reviewed.byNumber.get(pr.number),
-      stack: stacks.get(pr.number),
-      depth,
-    }));
+    return openPrs
+      .filter((pr) => matches(query, pr.number, pr.title, pr.author, pr.headRef, ...labelNames(pr)))
+      .map((pr) => ({
+        number: pr.number,
+        title: pr.title,
+        author: pr.author,
+        url: pr.url,
+        pr,
+        reviewed: reviewed.byNumber.get(pr.number),
+        stack: stacks.get(pr.number),
+        depth: 0,
+      }));
   }
 
   const openByNumber = new Map(openPrs.map((pr) => [pr.number, pr]));
@@ -166,6 +185,118 @@ function buildRows(
   });
 }
 
+/**
+ * An open tab's rows in the list's own order with each stack grouped, read
+ * bottom-up. Grouped after filtering, so a member filtered out leaves the rest
+ * of its stack intact rather than a child indented under the wrong row.
+ */
+function groupRows(rows: PrRow[], stacks: Stacks): PrRow[] {
+  const byNumber = new Map(rows.map((row) => [row.number, row]));
+  const prs = rows.flatMap((row) => (row.pr ? [row.pr] : []));
+  return groupStacks(prs, stacks).flatMap(({ pr, depth }) => {
+    const row = byNumber.get(pr.number);
+    return row ? [{ ...row, depth }] : [];
+  });
+}
+
+/**
+ * Keeps the reader's place while the list's rows change under them. A page
+ * arriving can pull a stacked PR up beside its newly listed parent, or widen a
+ * column so the titles above rewrap, and WebKit doesn't anchor scrolling the
+ * way Chromium does, so everything in view would lurch. The row at the top of
+ * the view is held where it was instead.
+ */
+function useHeldPlace(scroller: HTMLElement | null, rows: unknown) {
+  const held = useRef<{ scroller: HTMLElement; pr: string; top: number } | null>(null);
+
+  // Which row is at the top of the view, just under the sticky header, and
+  // how far down it sits.
+  const note = useRef(() => {});
+  note.current = () => {
+    if (!scroller || scroller.scrollTop <= 0) {
+      held.current = null;
+      return;
+    }
+    const view = scroller.getBoundingClientRect();
+    // The header's cells stick, not the header itself, which scrolls away.
+    const under = scroller.querySelector("thead th")?.getBoundingClientRect().bottom ?? view.top;
+    const row = document
+      .elementFromPoint(view.left + view.width / 2, under + 1)
+      ?.closest<HTMLElement>("tr[data-pr]");
+    held.current = row?.dataset.pr
+      ? { scroller, pr: row.dataset.pr, top: row.getBoundingClientRect().top - view.top }
+      : null;
+  };
+
+  useEffect(() => {
+    if (!scroller) return;
+    const onScroll = () => note.current();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [scroller]);
+
+  // After the rows have changed, before they paint: put that row back.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `rows` changing is the reason to run
+  useLayoutEffect(() => {
+    const place = held.current;
+    if (scroller && place?.scroller === scroller) {
+      const row = scroller.querySelector(`tr[data-pr="${place.pr}"]`);
+      if (row) {
+        const top = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        scroller.scrollTop += top - place.top;
+      }
+    }
+    note.current();
+  }, [scroller, rows]);
+}
+
+/**
+ * The end of a list with more on GitHub: coming within a screen of it loads the
+ * next page, and keeps loading while it stays in reach (a filter matching few
+ * of the rows loaded, say). A page that fails says so, and can be tried again.
+ */
+function MorePrs({ listing }: { listing: ReturnType<typeof usePrListings>["all"] }) {
+  const end = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = listing;
+
+  useEffect(() => {
+    const element = end.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setNear(entry?.isIntersecting ?? false),
+      {
+        root: element.closest(`.${css.listScroll}`),
+        rootMargin: "0px 0px 100% 0px",
+      },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (near && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage();
+  }, [near, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+
+  if (!hasNextPage) return null;
+  return (
+    <div ref={end} className={css.more} role="status">
+      {isFetchNextPageError ? (
+        <>
+          Could not load more pull requests.{" "}
+          <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()}>
+            Try again
+          </Button>
+        </>
+      ) : (
+        <>
+          <Spinner /> Loading more…
+        </>
+      )}
+    </div>
+  );
+}
+
 function ListMessage({ children }: { children: React.ReactNode }) {
   return <p className={css.message}>{children}</p>;
 }
@@ -173,28 +304,23 @@ function ListMessage({ children }: { children: React.ReactNode }) {
 function PrBrowser({ root, login }: { root: string; login: string | null }) {
   const openPr = useAppStore((state) => state.openPr);
   const compareBranches = useAppStore((state) => state.compareBranches);
-  const tabs = useAppStore((state) => state.tabs);
-  const returning = useAppStore((state) => state.returning);
   const [tab, setTab] = useState<HomeTab>(readTab);
   const [query, setQuery] = useState("");
-  const [opening, setOpening] = useState<string | null>(null);
+  // Held while the list is out of sight, so they're still set on coming back
+  // from a review; a new launch or another repository starts unfiltered.
+  const [filters, setFilters] = useState<PrFilters>(NO_FILTERS);
   const [columns, setColumns] = useColumnVisibility();
   const defaultBranch = useAppStore((state) => state.repo?.defaultBranch ?? null);
-  const reviewed = useReviewed(storageRoot({ root, githubLogin: login }));
-  // A PR already open in a tab is carried into the review by its tab, from the
-  // tab bar, rather than by its row: one name, one holder. One whose tab closed
-  // on the way here gets its number and title back from that tab.
-  const inTabs = useMemo(
-    () => new Set(tabs.filter((open) => open.root === root).map((open) => open.number)),
-    [tabs, root],
-  );
-  const carries = (number: number, url: string | null) =>
-    prMorphKey(root, number) === returning ||
-    (url != null && opening === url && !inTabs.has(number));
+  // The list stays mounted between visits; each one reads the history afresh.
+  const visit = useScreenVisit();
+  const reviewed = useReviewed(storageRoot({ root, githubLogin: login }), visit);
+  // Out of sight, the lists keep what they last showed but fetch nothing.
+  const shown = useScreenShown();
+  const heading = useAppStore((state) => state.screenChange?.heading ?? false);
 
   // The reviewed tab reads its open/closed state and freshness from the full list.
   const needed: PrListFilter = tab === "reviewed" ? "all" : tab;
-  const listings = usePrListings(root, login, needed);
+  const listings = usePrListings(root, login, needed, shown);
   const listing = listings[needed];
   const all = listings.all;
   // Rows already on screen stay up while their lists refetch; only the
@@ -225,18 +351,33 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   async function open(url: string, preview?: PrPreview) {
     // Committed before the screen changes, so the transition captures this
     // row's number and title and carries them into the PR's tab.
-    flushSync(() => setOpening(url));
+    flushSync(() => useOpening.setState({ url }));
     const ok = await openPr(url, { preview });
-    // On success the app has moved to the review screen and this unmounts.
-    if (!ok) setOpening(null);
+    // On success the list has gone out of sight, but stays mounted; once the
+    // change settles, nothing is opening any more.
+    if (ok) await (screenSettling() ?? Promise.resolve());
+    if (useOpening.getState().url === url) useOpening.setState({ url: null });
   }
 
-  const openPrs = listing.data ?? NO_PRS;
-  const allPrs = all.data ?? openPrs;
-  const rows = useMemo(
-    () => buildRows(tab, query, openPrs, allPrs, reviewed, defaultBranch),
-    [tab, query, openPrs, allPrs, reviewed, defaultBranch],
+  const openPrs = listing.data?.prs ?? NO_PRS;
+  const allPrs = all.data?.prs ?? openPrs;
+  const listed = listing.data != null;
+  const stacks = useMemo(
+    () => stacksOf(openPrs, allPrs, defaultBranch),
+    [openPrs, allPrs, defaultBranch],
   );
+  const searched = useMemo(
+    () => buildRows(tab, query, openPrs, reviewed, stacks),
+    [tab, query, openPrs, reviewed, stacks],
+  );
+  const rows = useMemo(() => {
+    const kept = filterRows(searched, filters, listed);
+    return tab === "reviewed" ? kept : groupRows(kept, stacks);
+  }, [tab, searched, filters, listed, stacks]);
+  const filtering = isFiltering(filters);
+  // A tab's list scrolls in an area of its own, made afresh for each tab.
+  const [listScroll, setListScroll] = useState<HTMLDivElement | null>(null);
+  useHeldPlace(listScroll, rows);
 
   function openRow(row: PrRow) {
     if (!row.url) return;
@@ -249,6 +390,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   }
 
   const reference = PR_REFERENCE.test(query.trim()) ? query.trim() : null;
+  const hasMore = tab !== "reviewed" && listing.hasNextPage;
 
   function onSearchKey(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
@@ -262,7 +404,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
         <div className={css.titleBlock}>
           <h1 className={css.title}>
             {/* Becomes the review's back button, and comes back out of it. */}
-            <ScreenMorph id="home" part="heading">
+            <ScreenMorph id="home" part="heading" active={heading}>
               <span className={css.titleText}>Pull requests</span>
             </ScreenMorph>
           </h1>
@@ -294,9 +436,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
           <Tabs.List className={css.tabList}>
             {TABS.map(({ value, label }) => {
               const count =
-                value === "reviewed"
-                  ? reviewed.list.length
-                  : (listings[value].data?.length ?? null);
+                value === "reviewed" ? reviewed.list.length : (listings[value].data?.total ?? null);
               return (
                 <Tabs.Tab key={value} value={value} className={css.tab}>
                   {label}
@@ -318,6 +458,12 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
                 className={css.searchInput}
               />
             </div>
+            <PrFilterMenus
+              rows={searched}
+              listed={listed}
+              filters={filters}
+              onChange={setFilters}
+            />
             <ColumnMenu visibility={columns} onChange={setColumns} />
           </div>
         </div>
@@ -327,7 +473,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
             a list scrolled down would paint its hidden rows over the header. A
             tab of its own also starts at the top. */}
         <Reveal key={tab} scope="home-list">
-          <div className={css.listScroll}>
+          <div ref={setListScroll} className={css.listScroll}>
             {reference ? (
               <button type="button" className={css.pasted} onClick={() => void open(reference)}>
                 <Icon name="external" />
@@ -357,28 +503,40 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
               <ListMessage>
                 <Spinner /> Loading pull requests…
               </ListMessage>
-            ) : rows.length === 0 ? (
-              <ListMessage>
-                {query
-                  ? "Nothing matches that filter."
-                  : tab === "reviewed"
-                    ? "Nothing reviewed in this repository yet. Reviews you run show up here."
-                    : tab === "reviewRequested"
-                      ? "No open pull requests are waiting on your review."
-                      : tab === "mine"
-                        ? "You have no open pull requests here."
-                        : "No open pull requests."}
-              </ListMessage>
             ) : (
-              <PrTable
-                rows={rows}
-                root={root}
-                opening={opening}
-                listed={listing.data != null}
-                carries={carries}
-                visibility={columns}
-                onOpen={openRow}
-              />
+              <>
+                {rows.length > 0 ? (
+                  <PrTable
+                    rows={rows}
+                    root={root}
+                    listed={listed}
+                    visibility={columns}
+                    onOpen={openRow}
+                  />
+                ) : filtering ? (
+                  <ListMessage>
+                    Nothing {hasMore ? "loaded yet " : ""}matches these filters.{" "}
+                    <Button variant="ghost" size="sm" onClick={() => setFilters(NO_FILTERS)}>
+                      Clear filters
+                    </Button>
+                  </ListMessage>
+                ) : (
+                  <ListMessage>
+                    {query
+                      ? "Nothing matches that filter."
+                      : tab === "reviewed"
+                        ? "Nothing reviewed in this repository yet. Reviews you run show up here."
+                        : tab === "reviewRequested"
+                          ? "No open pull requests are waiting on your review."
+                          : tab === "mine"
+                            ? "You have no open pull requests here."
+                            : "No open pull requests."}
+                  </ListMessage>
+                )}
+                {/* Under an empty list too, so a filter matching nothing loaded
+                    so far keeps looking through the pages still on GitHub. */}
+                {hasMore ? <MorePrs listing={listing} /> : null}
+              </>
             )}
           </div>
         </Reveal>

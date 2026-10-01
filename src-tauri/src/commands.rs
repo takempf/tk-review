@@ -11,8 +11,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::GitError;
 use crate::git::{self, Branch, CommitLog, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
-    self, PostedPrComment, PrCommentDestination, PrContext, PrListFilter, PrReviewVerdict,
-    PrSummary, RefreshPrResult,
+    self, PostedPrComment, PrCommentDestination, PrContext, PrListFilter, PrPage, PrReviewVerdict,
+    RefreshPrResult,
 };
 use crate::models::{self, EngineModels};
 use crate::review::{
@@ -64,8 +64,12 @@ pub async fn fetch_remotes(root: String) -> Result<(), GitError> {
 
 /// Talks to GitHub through `gh`, so it costs a network round trip.
 #[tauri::command]
-pub async fn list_prs(root: String, filter: PrListFilter) -> Result<Vec<PrSummary>, GitError> {
-    blocking(move || github::list_prs(&PathBuf::from(root), filter)).await
+pub async fn list_prs(
+    root: String,
+    filter: PrListFilter,
+    after: Option<String>,
+) -> Result<PrPage, GitError> {
+    blocking(move || github::list_prs(&PathBuf::from(root), filter, after.as_deref())).await
 }
 
 #[tauri::command]

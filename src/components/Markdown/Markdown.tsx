@@ -18,18 +18,20 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Checkbox, Code, CodeBlock } from "tk-design-system";
+import { Checkbox, Code, CodeBlock, cx } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
 import {
   dropReferenceDefinitions,
   inlineHtmlEntities,
   parseWithDetails,
 } from "../../lib/comarkFixes";
+import { shieldCode } from "../../lib/markdownCode";
+import css from "./Markdown.module.css";
 
 /**
  * GitHub-flavoured Markdown, for PR descriptions and comments and for what the
- * agents write. Unstyled beyond what the design system's code components
- * bring: each place that shows it sets its own type and spacing through
+ * agents write. It brings its own spacing, the same everywhere (see the CSS);
+ * each place that shows it sets its type, colour and padding through
  * `className`.
  */
 
@@ -241,8 +243,11 @@ const parseMarkdown = createMarkdownParser({
 });
 
 async function parseGitHubMarkdown(markdown: string): Promise<ParsedMarkdown> {
-  const nodes = await parseWithDetails(safePrMarkdown(markdown), parseMarkdown);
-  return { nodes, frontmatter: {}, meta: {} };
+  // Code is set aside while the rest is sanitized as HTML, so a `<Foo>` in
+  // backticks stays code rather than being dropped as a tag (markdownCode.ts).
+  const { text, restore } = shieldCode(markdown);
+  const nodes = await parseWithDetails(safePrMarkdown(text), parseMarkdown);
+  return { nodes: restore(nodes), frontmatter: {}, meta: {} };
 }
 
 function Parsed({ parsing, className }: { parsing: Promise<ParsedMarkdown>; className?: string }) {
@@ -250,13 +255,37 @@ function Parsed({ parsing, className }: { parsing: Promise<ParsedMarkdown>; clas
     <MarkdownDocument
       value={use(parsing)}
       components={GITHUB_MARKDOWN_COMPONENTS}
-      className={className}
+      className={cx(css.markdown, className)}
     />
   );
 }
 
+/**
+ * Parses, newest last, kept so a screen coming back (or a thread re-rendering)
+ * finds its Markdown already parsed: `use` reads a settled parse at once, so
+ * it renders in the same commit rather than after a Suspense round trip.
+ */
+const PARSED = new Map<string, Promise<ParsedMarkdown>>();
+const PARSED_LIMIT = 300;
+
+function parsed(markdown: string): Promise<ParsedMarkdown> {
+  const cached = PARSED.get(markdown);
+  if (cached) {
+    PARSED.delete(markdown);
+    PARSED.set(markdown, cached);
+    return cached;
+  }
+  const parsing = parseGitHubMarkdown(markdown);
+  PARSED.set(markdown, parsing);
+  // A failed parse is tried again next time rather than remembered.
+  parsing.catch(() => PARSED.delete(markdown));
+  const oldest = PARSED.keys().next().value;
+  if (PARSED.size > PARSED_LIMIT && oldest !== undefined) PARSED.delete(oldest);
+  return parsing;
+}
+
 export function GitHubMarkdown({ markdown, className }: { markdown: string; className?: string }) {
-  const parsing = useMemo(() => parseGitHubMarkdown(markdown), [markdown]);
+  const parsing = useMemo(() => parsed(markdown), [markdown]);
   // While a new parse is pending the last one stays up, rather than blanking.
   const shown = useDeferredValue(parsing);
   return (

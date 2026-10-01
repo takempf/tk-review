@@ -4,6 +4,7 @@
  */
 import type { ComarkPlugin, ElementNode, Node } from "comark";
 import { visit } from "comark/utils";
+import { findFences } from "./markdownCode";
 
 function isInlineHtml(node: Node): node is ElementNode {
   return (
@@ -93,25 +94,7 @@ const WRAPPING_P = /^\s*<p>[ \t]*\n([\s\S]*)\n[ \t]*<\/p>\s*$/i;
 
 /** Where fenced code sits, as `[start, end)` offsets: a tag in there is code. */
 function fencedRanges(text: string): [number, number][] {
-  const ranges: [number, number][] = [];
-  let open: { marker: string; start: number } | null = null;
-  let offset = 0;
-  for (const line of text.split("\n")) {
-    if (open) {
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
-      if (close && close[0] === open.marker[0] && close.length >= open.marker.length) {
-        ranges.push([open.start, offset + line.length]);
-        open = null;
-      }
-    } else {
-      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-      if (marker) open = { marker, start: offset };
-    }
-    offset += line.length + 1;
-  }
-  // An unclosed fence runs to the end, as it renders.
-  if (open) ranges.push([open.start, text.length]);
-  return ranges;
+  return findFences(text).map((fence) => [fence.start, fence.end]);
 }
 
 const inFence = (fences: [number, number][], index: number) =>

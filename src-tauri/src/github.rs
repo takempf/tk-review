@@ -170,16 +170,18 @@ struct GhPr {
     head_ref_oid: String,
 }
 
+/// A pull request as the list's GraphQL query reads it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPrSummary {
     number: u64,
     title: String,
-    author: GhAuthor,
+    /// `null` for an account that has since been deleted.
+    author: Option<GhAuthor>,
     is_draft: bool,
     url: String,
     #[serde(default)]
-    labels: Vec<PrLabel>,
+    labels: GhLabels,
     head_ref_name: String,
     base_ref_name: String,
     #[serde(default)]
@@ -196,6 +198,55 @@ struct GhPrSummary {
     changed_files: u64,
     #[serde(default)]
     review_decision: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GhLabels {
+    #[serde(default)]
+    nodes: Vec<PrLabel>,
+}
+
+/// One page of a GraphQL connection: `pullRequests` counts in `totalCount`,
+/// `search` in `issueCount`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhConnection {
+    total_count: Option<u64>,
+    issue_count: Option<u64>,
+    page_info: GhPageInfo,
+    /// Search can hold things other than pull requests, which come back empty.
+    nodes: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhPageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhRepositoryPrs {
+    pull_requests: GhConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhListData {
+    repository: Option<GhRepositoryPrs>,
+    search: Option<GhConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhListResponse {
+    data: Option<GhListData>,
+    #[serde(default)]
+    errors: Vec<GhGraphError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhGraphError {
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,60 +384,117 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
     })
 }
 
-/// How many pull requests one list shows. Enough to cover what is actually in
-/// flight on a busy repository, while still being one quick `gh` call —
-/// anything older is reached by pasting its URL, the way it always was.
-const PR_LIST_LIMIT: &str = "50";
+/// How many pull requests a page of a list holds: GitHub's most per request.
+/// The list asks for the next page as it is scrolled to the end.
+const PR_PAGE_SIZE: u32 = 100;
 
-const PR_LIST_FIELDS: &str =
-    "number,title,author,isDraft,url,labels,headRefName,baseRefName,isCrossRepository,headRefOid,createdAt,updatedAt,additions,deletions,changedFiles,reviewDecision";
+const PR_FIELDS: &str = "number title url isDraft createdAt updatedAt additions deletions \
+    changedFiles reviewDecision headRefName baseRefName headRefOid isCrossRepository \
+    author { login } labels(first: 20) { nodes { name color } }";
 
-/// Open pull requests on the repository this checkout's remotes point at,
-/// most recently updated first.
+/// One page of a pull-request list, most recently updated first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPage {
+    pub prs: Vec<PrSummary>,
+    /// How many the whole list holds, across every page.
+    pub total: u64,
+    /// Where the next page starts, to pass back as `after`; `None` on the last.
+    pub next: Option<String>,
+}
+
+/// One page of the open pull requests on the repository this checkout's
+/// remotes point at, most recently updated first, from `after` (a page's
+/// `next`) or the start.
+///
+/// "All open" reads the repository's own list, which is exact and current.
+/// The signed-in user's lists go through search, as `gh pr list --search` and
+/// `--author` do; `@me` there is whoever `gh` is signed in as.
 ///
 /// Listing is a convenience, not the way in: a repository with no GitHub remote,
 /// a missing `gh`, or an expired login all report as an error the list shows
 /// in its place, and pasting a URL keeps working regardless.
-pub fn list_prs(root: &Path, filter: PrListFilter) -> Result<Vec<PrSummary>, GitError> {
-    let target = list_target(root)?;
-    let mut args = vec![
-        "pr",
-        "list",
-        "--repo",
-        &target,
-        "--state",
-        "open",
-        "--limit",
-        PR_LIST_LIMIT,
-        "--json",
-        PR_LIST_FIELDS,
-    ];
-    // `gh` resolves `@me` to the signed-in account itself.
-    match filter {
-        PrListFilter::All => {}
-        PrListFilter::ReviewRequested => args.extend(["--search", "review-requested:@me"]),
-        PrListFilter::Mine => args.extend(["--author", "@me"]),
+pub fn list_prs(
+    root: &Path,
+    filter: PrListFilter,
+    after: Option<&str>,
+) -> Result<PrPage, GitError> {
+    let (host, owner, name) = github_remote(root)?.ok_or_else(|| {
+        GitError::Command("This repository has no GitHub remote to list pull requests from.".into())
+    })?;
+    let page = format!("first: {PR_PAGE_SIZE}, after: $after");
+    let mut args: Vec<String> = ["api", "graphql", "--hostname", &host]
+        .map(String::from)
+        .into();
+    let query = match filter {
+        PrListFilter::All => {
+            args.extend([
+                "-f".into(),
+                format!("owner={owner}"),
+                "-f".into(),
+                format!("name={name}"),
+            ]);
+            format!(
+                "query($owner: String!, $name: String!, $after: String) {{ \
+                 repository(owner: $owner, name: $name) {{ \
+                 pullRequests(states: OPEN, {page}, orderBy: {{ field: UPDATED_AT, direction: DESC }}) {{ \
+                 totalCount pageInfo {{ hasNextPage endCursor }} nodes {{ {PR_FIELDS} }} }} }} }}"
+            )
+        }
+        PrListFilter::ReviewRequested | PrListFilter::Mine => {
+            let whose = if filter == PrListFilter::Mine {
+                "author:@me"
+            } else {
+                "review-requested:@me"
+            };
+            let search = format!("repo:{owner}/{name} is:pr is:open sort:updated-desc {whose}");
+            args.extend(["-f".into(), format!("q={search}")]);
+            format!(
+                "query($q: String!, $after: String) {{ \
+                 search(query: $q, type: ISSUE, {page}) {{ \
+                 issueCount pageInfo {{ hasNextPage endCursor }} \
+                 nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}"
+            )
+        }
+    };
+    args.extend(["-f".into(), format!("query={query}")]);
+    if let Some(after) = after {
+        args.extend(["-f".into(), format!("after={after}")]);
     }
-    let raw = run_gh(&args)?;
-    parse_pr_list(&raw)
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    parse_pr_page(&run_gh(&borrowed)?)
 }
 
-fn parse_pr_list(raw: &[u8]) -> Result<Vec<PrSummary>, GitError> {
-    if raw.iter().all(u8::is_ascii_whitespace) {
-        return Ok(Vec::new());
-    }
-    let listed: Vec<GhPrSummary> = serde_json::from_slice(raw).map_err(|error| {
+fn parse_pr_page(raw: &[u8]) -> Result<PrPage, GitError> {
+    let unreadable = |error: serde_json::Error| {
         GitError::Command(format!("Could not read pull requests from gh: {error}"))
-    })?;
-    let mut prs: Vec<PrSummary> = listed
+    };
+    let response: GhListResponse = serde_json::from_slice(raw).map_err(unreadable)?;
+    if let Some(error) = response.errors.first() {
+        return Err(GitError::Command(format!("GitHub said: {}", error.message)));
+    }
+    let data = response
+        .data
+        .ok_or_else(|| GitError::Command("gh returned no pull requests.".into()))?;
+    let connection = data
+        .repository
+        .map(|repository| repository.pull_requests)
+        .or(data.search)
+        .ok_or_else(|| GitError::Command("gh returned no pull requests.".into()))?;
+    let prs = connection
+        .nodes
         .into_iter()
+        // Anything that isn't a pull request has none of its fields.
+        .filter_map(|node| serde_json::from_value::<GhPrSummary>(node).ok())
         .map(|pr| PrSummary {
             number: pr.number,
             title: pr.title,
-            author: pr.author.login,
+            author: pr
+                .author
+                .map_or_else(|| "ghost".into(), |author| author.login),
             is_draft: pr.is_draft,
             url: pr.url,
-            labels: pr.labels,
+            labels: pr.labels.nodes,
             head_ref: pr.head_ref_name,
             base_ref: pr.base_ref_name,
             is_cross_repository: pr.is_cross_repository,
@@ -398,10 +506,19 @@ fn parse_pr_list(raw: &[u8]) -> Result<Vec<PrSummary>, GitError> {
             changed_files: pr.changed_files,
             review_decision: pr.review_decision.filter(|decision| !decision.is_empty()),
         })
-        .collect();
-    // ISO 8601 in one zone sorts as text.
-    prs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(prs)
+        .collect::<Vec<_>>();
+    Ok(PrPage {
+        total: connection
+            .total_count
+            .or(connection.issue_count)
+            .unwrap_or(prs.len() as u64),
+        next: connection
+            .page_info
+            .has_next_page
+            .then_some(connection.page_info.end_cursor)
+            .flatten(),
+        prs,
+    })
 }
 
 /// The GitHub repository this checkout's remotes point at, as `(host, owner,
@@ -419,17 +536,6 @@ fn github_remote(root: &Path) -> Result<Option<(String, String, String)>, GitErr
     Ok(named("upstream")
         .or_else(|| named("origin"))
         .or_else(|| remotes.iter().find_map(|(_, url)| remote_repo(url))))
-}
-
-/// The `host/owner/repo` to list from.
-fn list_target(root: &Path) -> Result<String, GitError> {
-    github_remote(root)?
-        .map(|(host, owner, repo)| format!("{host}/{owner}/{repo}"))
-        .ok_or_else(|| {
-            GitError::Command(
-                "This repository has no GitHub remote to list pull requests from.".into(),
-            )
-        })
 }
 
 /// Who `gh` is signed in as on this checkout's GitHub host: the account its
@@ -554,7 +660,7 @@ pub fn post_pr_comment(
     let args = [
         "api".to_owned(),
         "--hostname".to_owned(),
-        reference.host,
+        reference.host.clone(),
         "-X".to_owned(),
         "POST".to_owned(),
         "--input".to_owned(),
@@ -562,7 +668,8 @@ pub fn post_pr_comment(
         endpoint,
     ];
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-    let raw = run_gh_with_input(&borrowed, &payload)?;
+    let raw = run_gh_with_input(&borrowed, &payload)
+        .map_err(|error| explain_pending_review(error, &reference))?;
     let posted: GhPostedComment = serde_json::from_slice(&raw).map_err(|error| {
         GitError::Command(format!(
             "GitHub accepted the comment but returned unreadable JSON: {error}"
@@ -641,7 +748,8 @@ pub fn submit_pr_review(
             &endpoint,
         ],
         &payload,
-    )?;
+    )
+    .map_err(|error| explain_pending_review(error, &reference))?;
     let posted: GhPostedComment = serde_json::from_slice(&raw).map_err(|error| {
         GitError::Command(format!(
             "GitHub accepted the review but returned unreadable JSON: {error}"
@@ -650,6 +758,27 @@ pub fn submit_pr_review(
     Ok(PostedPrComment {
         url: posted.html_url,
     })
+}
+
+/// GitHub allows one unsubmitted review per person per pull request, and an
+/// inline comment or a new review each counts as one. A review started on
+/// github.com and left pending blocks both, with an error that names neither
+/// the review nor the way out.
+fn explain_pending_review(error: GitError, reference: &PrRef) -> GitError {
+    match error {
+        GitError::Detailed { message, detail }
+            if message.contains("one pending review per pull request") =>
+        {
+            GitError::detailed(
+                format!(
+                    "You have an unsubmitted review on this pull request, started on GitHub, and GitHub won't take more comments from you until it's submitted or discarded. Finish it at {}/files, then try again.",
+                    pr_target(reference)
+                ),
+                detail,
+            )
+        }
+        other => other,
+    }
 }
 
 fn read_comments(reference: &PrRef) -> Result<Vec<PrComment>, GitError> {
@@ -997,23 +1126,30 @@ mod tests {
     }
 
     #[test]
-    fn parses_pr_list_newest_first_and_drops_empty_review_decisions() {
-        let raw = br#"[
-            {"number":1,"title":"Old","author":{"login":"a"},"isDraft":false,"url":"u1",
-             "headRefName":"one","baseRefName":"main","headRefOid":"aaa","updatedAt":"2026-09-01T10:00:00Z",
-             "additions":3,"deletions":1,"reviewDecision":""},
-            {"number":2,"title":"New","author":{"login":"b"},"isDraft":true,"url":"u2",
-             "headRefName":"two","baseRefName":"main","isCrossRepository":true,"headRefOid":"bbb","updatedAt":"2026-09-20T10:00:00Z",
-             "createdAt":"2026-09-18T10:00:00Z","additions":10,"deletions":0,"changedFiles":4,"reviewDecision":"APPROVED",
-             "labels":[{"id":"L1","name":"bug","description":"","color":"d73a4a"}]}
-        ]"#;
-        let prs = parse_pr_list(raw).unwrap();
+    fn parses_a_page_of_the_repositorys_pull_requests() {
+        let raw = br#"{"data":{"repository":{"pullRequests":{"totalCount":120,
+            "pageInfo":{"hasNextPage":true,"endCursor":"abc"},
+            "nodes":[
+              {"number":2,"title":"New","author":{"login":"b"},"isDraft":true,"url":"u2",
+               "headRefName":"two","baseRefName":"main","isCrossRepository":true,"headRefOid":"bbb",
+               "createdAt":"2026-09-18T10:00:00Z","updatedAt":"2026-09-20T10:00:00Z",
+               "additions":10,"deletions":0,"changedFiles":4,"reviewDecision":"APPROVED",
+               "labels":{"nodes":[{"name":"bug","color":"d73a4a"}]}},
+              {"number":1,"title":"Old","author":null,"isDraft":false,"url":"u1",
+               "headRefName":"one","baseRefName":"main","isCrossRepository":false,"headRefOid":"aaa",
+               "createdAt":"2026-09-01T09:00:00Z","updatedAt":"2026-09-01T10:00:00Z",
+               "additions":3,"deletions":1,"changedFiles":1,"reviewDecision":null,
+               "labels":{"nodes":[]}}
+            ]}}}}"#;
+        let page = parse_pr_page(raw).unwrap();
+        assert_eq!(page.total, 120);
+        assert_eq!(page.next.as_deref(), Some("abc"));
+        let prs = &page.prs;
         assert_eq!(prs.iter().map(|pr| pr.number).collect::<Vec<_>>(), [2, 1]);
         assert_eq!(prs[0].review_decision.as_deref(), Some("APPROVED"));
         assert_eq!(prs[1].review_decision, None);
         assert_eq!(prs[0].head_ref, "two");
         assert!(prs[0].is_cross_repository);
-        assert!(!prs[1].is_cross_repository);
         assert_eq!(
             prs[0].labels,
             [PrLabel {
@@ -1022,8 +1158,32 @@ mod tests {
             }]
         );
         assert_eq!(prs[0].changed_files, 4);
-        assert!(prs[1].labels.is_empty());
-        assert!(parse_pr_list(b"  \n").unwrap().is_empty());
+        // A deleted account shows as GitHub shows it.
+        assert_eq!(prs[1].author, "ghost");
+    }
+
+    #[test]
+    fn parses_the_last_page_of_a_search() {
+        let raw = br#"{"data":{"search":{"issueCount":1,
+            "pageInfo":{"hasNextPage":false,"endCursor":"zzz"},
+            "nodes":[{},
+              {"number":7,"title":"Mine","author":{"login":"me"},"isDraft":false,"url":"u7",
+               "headRefName":"seven","baseRefName":"main","isCrossRepository":false,"headRefOid":"ccc",
+               "createdAt":"2026-09-01T09:00:00Z","updatedAt":"2026-09-02T10:00:00Z",
+               "additions":1,"deletions":1,"changedFiles":1,"reviewDecision":"REVIEW_REQUIRED",
+               "labels":{"nodes":[]}}]}}}"#;
+        let page = parse_pr_page(raw).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.next, None);
+        // The empty node is search turning up something that isn't a pull request.
+        assert_eq!(page.prs.iter().map(|pr| pr.number).collect::<Vec<_>>(), [7]);
+    }
+
+    #[test]
+    fn reports_graphql_errors() {
+        let raw = br#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"#;
+        let err = parse_pr_page(raw).expect_err("an error");
+        assert!(err.to_string().contains("Could not resolve"), "{err}");
     }
 
     #[test]
@@ -1156,5 +1316,26 @@ mod tests {
         );
         assert!(github_error_reasons("not json").is_empty());
         assert!(github_error_reasons(r#"{"message":"Not Found"}"#).is_empty());
+    }
+
+    #[test]
+    fn points_a_blocked_post_at_the_pending_review_behind_it() {
+        let reference = parse_pr_ref("https://github.com/acme/widgets/pull/7").expect("PR URL");
+        let blocked = GitError::detailed(
+            "gh: Validation Failed (HTTP 422)\nuser_id can only have one pending review per pull request",
+            "raw gh output",
+        );
+
+        let explained = explain_pending_review(blocked, &reference);
+        assert!(explained
+            .to_string()
+            .contains("Finish it at https://github.com/acme/widgets/pull/7/files"));
+        assert_eq!(explained.detail(), Some("raw gh output"));
+
+        let other = GitError::detailed("gh: Not Found (HTTP 404)", "raw");
+        assert_eq!(
+            explain_pending_review(other, &reference).to_string(),
+            "gh: Not Found (HTTP 404)"
+        );
     }
 }

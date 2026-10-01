@@ -23,7 +23,9 @@ function useFits() {
       const needed = contentElement.getBoundingClientRect().width;
       setFits(needed <= frameElement.getBoundingClientRect().width + 0.5);
     };
-    measure();
+    // The observer's first report comes after layout, before paint, so it
+    // measures without forcing a layout of its own mid-render (inside a screen
+    // change's update, say).
     const observer = new ResizeObserver(measure);
     observer.observe(frameElement);
     observer.observe(contentElement);

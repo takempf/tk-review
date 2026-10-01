@@ -20,7 +20,12 @@ import {
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
 import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
-import { postBodyForFinding, postLocationForFinding } from "../../lib/prComment";
+import {
+  findingAfter,
+  postBodyForFinding,
+  postLocationForFinding,
+  postLocationForPriorFinding,
+} from "../../lib/prComment";
 import { absoluteTime, shortTime } from "../../lib/time";
 import { knownVerdict } from "../../lib/verdict";
 import { isSignedInAs } from "../../store/account";
@@ -29,6 +34,7 @@ import {
   type AgentRunKind,
   CONCLUSION_POST_KEY,
   findingThreadKey,
+  postTargetKey,
   REVIEW_THREAD_KEY,
   type ResolvedFinding,
   resolutionThreadKey,
@@ -586,6 +592,7 @@ function PrCommentComposer({
   pr,
   reviewBody,
   postedUrl,
+  prior,
 }: {
   /** Whose review the finding or summary belongs to. */
   engine: ReviewEngine;
@@ -595,14 +602,33 @@ function PrCommentComposer({
   /** The summary body for the review-level thread. */
   reviewBody?: string;
   postedUrl?: string;
+  /** For a finding an earlier review raised: where it sits on the PR's head now. */
+  prior?: PriorPlacement | "pending";
 }) {
-  const location = useMemo(() => postLocationForFinding(finding, patch), [finding, patch]);
+  const placed = prior === "pending" ? undefined : prior;
+  const location = useMemo(
+    () =>
+      finding && placed
+        ? postLocationForPriorFinding(finding, placed.now, patch)
+        : postLocationForFinding(finding, patch),
+    [finding, placed, patch],
+  );
+  const draft = useMemo(
+    () =>
+      reviewBody ??
+      (placed
+        ? postBodyForFinding(placed.now ?? finding, location, placed.now ? null : placed.asOf)
+        : postBodyForFinding(finding, location)),
+    [reviewBody, placed, finding, location],
+  );
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [body, setBody] = useState(() => reviewBody ?? postBodyForFinding(finding, location));
+  // The draft until it's edited; edits survive closing the editor.
+  const [edited, setBody] = useState<string | null>(null);
+  const body = edited ?? draft;
   const postingTo = useTab((state) => state.postingTo);
   const postPrComment = useTab((state) => state.postPrComment);
-  const targetKey = sourcedKey(engine, finding ? findingThreadKey(finding) : REVIEW_THREAD_KEY);
+  const targetKey = postTargetKey(engine, finding, prior != null);
   const busy = postingTo !== null;
   const pending = postingTo === targetKey;
   const requiresConfirmation = pr.state !== "open" && !pr.isDraft;
@@ -617,7 +643,7 @@ function PrCommentComposer({
       setConfirming(true);
       return;
     }
-    void postPrComment(engine, finding, body, location).then((posted) => {
+    void postPrComment(engine, finding, body, location, prior != null).then((posted) => {
       // Failures stay visible in the review panel and leave the editable draft
       // intact; a successful response leaves behind the GitHub permalink.
       if (posted) close();
@@ -627,7 +653,7 @@ function PrCommentComposer({
   return (
     <div className={css.prComposer}>
       {!open ? (
-        <Button size="sm" onClick={() => setOpen(true)} disabled={busy}>
+        <Button size="sm" onClick={() => setOpen(true)} disabled={busy || prior === "pending"}>
           <Icon name="send" /> {postedUrl ? "Post again" : "Send to PR"}
         </Button>
       ) : null}
@@ -735,31 +761,110 @@ function findingMarkdown(finding: ReviewFinding, label: string, text: string): s
   return [`**${label}:** ${finding.title}`, at, text.trim()].filter(Boolean).join("\n\n");
 }
 
+/** Where a prior finding sits on the PR's head: `now` is `null` when its lines can't be followed. */
+interface PriorPlacement {
+  now: ReviewFinding | null;
+  /** The commit the finding's lines belong to, when that isn't the head. */
+  asOf: string | null;
+}
+
+/** Patches between two commits, kept for the session, to follow prior findings through. */
+const PATCHES_BETWEEN = new Map<string, Promise<string>>();
+
+function patchBetween(root: string, from: string, to: string): Promise<string> {
+  const key = `${root}\n${from}\n${to}`;
+  let patch = PATCHES_BETWEEN.get(key);
+  if (!patch) {
+    patch = gitApi.getPatch(root, from, to);
+    PATCHES_BETWEEN.set(key, patch);
+    // A failure is tried again next time rather than remembered.
+    patch.catch(() => PATCHES_BETWEEN.delete(key));
+  }
+  return patch;
+}
+
+/**
+ * Where a finding raised on commit `readAt` sits on the PR's head, its lines
+ * followed through the commits since; `null` until that's worked out. One read
+ * on a commit nobody recorded, or one git no longer has, can't be followed.
+ */
+function usePriorPlacement(
+  finding: ReviewFinding,
+  readAt: string | null,
+  pr: PrContext | null,
+): PriorPlacement | null {
+  const root = useTab((state) => state.repo.root);
+  const head = pr?.headSha ?? null;
+  const same = readAt != null && readAt === head;
+  const key = [root, readAt, head, findingThreadKey(finding)].join("\n");
+  const [placed, setPlaced] = useState<{ key: string; placement: PriorPlacement } | null>(null);
+  const unmoved = useMemo(() => ({ now: finding, asOf: null }), [finding]);
+
+  useEffect(() => {
+    if (!head || same) return;
+    let cancelled = false;
+    const settle = (now: ReviewFinding | null) => {
+      if (!cancelled) setPlaced({ key, placement: { now, asOf: readAt } });
+    };
+    if (!readAt) settle(null);
+    else {
+      patchBetween(root, readAt, head).then(
+        (patch) => settle(findingAfter(finding, patch)),
+        () => settle(null),
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [key, root, readAt, head, same, finding]);
+
+  if (same) return unmoved;
+  return placed?.key === key ? placed.placement : null;
+}
+
+/** Verdicts that close a finding: nothing left of it to send to the PR. */
+const SETTLED = new Set(["addressed", "obsolete"]);
+
 /**
  * One prior finding with the re-review's verdict on it. The card mirrors a
  * finding's, but the chip is the verdict rather than the severity — what the
  * reader needs here is "is this done?", not how bad it was the first time.
  * Its comment thread carries over from the finding it judges, under a key of
- * its own so a look-alike new finding cannot inherit it.
+ * its own so a look-alike new finding cannot inherit it. One still open can
+ * go to the PR, as a new finding can.
  */
-function Resolution({ resolution, source }: { resolution: ResolvedFinding; source: StoredReview }) {
+function Resolution({
+  resolution,
+  source,
+  patch,
+  pr,
+}: {
+  resolution: ResolvedFinding;
+  source: StoredReview;
+  patch: string | null;
+  pr: PrContext | null;
+}) {
   const { finding, status, note } = resolution;
   const threadKey = resolutionThreadKey(finding);
   const comments = useTab(
     (state) => state.reviews[source.engine]?.threads[threadKey] ?? EMPTY_THREAD,
   );
+  const postable = pr != null && (!SETTLED.has(status.toLowerCase()) || finding.postedUrl != null);
+  // The review it came from is the last of the earlier ones.
+  const readAt = source.earlier?.at(-1)?.head ?? null;
+  const placement = usePriorPlacement(finding, readAt, postable ? pr : null);
 
   return (
     <li className={css.finding} data-reveal>
+      <div className={css.findingMeta}>
+        <FindingLocation path={finding.path} lines={findingLines(finding)} />
+        <SourceTag source={source} />
+      </div>
       <div className={`${css.itemHead} ${css.titleHead}`}>
         <p className={`${css.findingTitle} ${resolutionClass(status)}`}>
           <span className={css.severity}>{status}</span> {finding.title}
         </p>
         <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
-      </div>
-      <div className={css.findingMeta}>
-        <FindingLocation path={finding.path} lines={findingLines(finding)} />
-        <SourceTag source={source} />
       </div>
       {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
       <Thread
@@ -768,6 +873,18 @@ function Resolution({ resolution, source }: { resolution: ResolvedFinding; sourc
         engine={source.engine}
         placeholder="Ask about this verdict…"
         askLabel="Ask about this"
+        actions={
+          pr && postable ? (
+            <PrCommentComposer
+              engine={source.engine}
+              finding={finding}
+              patch={patch}
+              pr={pr}
+              postedUrl={finding.postedUrl}
+              prior={placement ?? "pending"}
+            />
+          ) : null
+        }
       />
     </li>
   );
@@ -792,6 +909,10 @@ function Finding({
 
   return (
     <li className={css.finding} data-reveal>
+      <div className={css.findingMeta}>
+        <FindingLocation path={finding.path} lines={findingLines(finding)} />
+        <SourceTag source={source} />
+      </div>
       <div className={`${css.itemHead} ${css.titleHead}`}>
         <p className={`${css.findingTitle} ${severityClass(finding.severity)}`}>
           <span className={css.severity}>{finding.severity}</span> {finding.title}
@@ -800,10 +921,6 @@ function Finding({
           text={findingMarkdown(finding, finding.severity, finding.body)}
           label="Copy finding"
         />
-      </div>
-      <div className={css.findingMeta}>
-        <FindingLocation path={finding.path} lines={findingLines(finding)} />
-        <SourceTag source={source} />
       </div>
       <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
       <Thread
@@ -1433,6 +1550,8 @@ function ReviewTab() {
                       key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
                       resolution={resolution}
                       source={source}
+                      patch={patch}
+                      pr={pr}
                     />
                   ))}
                 </ul>

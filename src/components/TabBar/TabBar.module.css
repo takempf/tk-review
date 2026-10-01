@@ -94,6 +94,12 @@
   }
 }
 
+/* Marks the tab's part in a screen change, for the fold in global.css. Above
+   the rule `morph()` names parts with, so the class adds to its own. */
+.list > .tab[data-tk-morph] {
+  view-transition-class: tk-morph tk-review-tab;
+}
+
 .show {
   display: flex;
   flex: 1;

@@ -160,6 +160,20 @@ export const resolutionThreadKey = (finding: ReviewFinding): string =>
  */
 export const sourcedKey = (engine: ReviewEngine, key: string): string => `${engine}:${key}`;
 
+/**
+ * `postingTo` while a finding of `engine`'s review is sent to the PR; a prior
+ * one (shown as a resolution) by its own key, apart from a look-alike new one.
+ * With no finding, the review as a whole.
+ */
+export function postTargetKey(
+  engine: ReviewEngine,
+  finding: ReviewFinding | null,
+  prior = false,
+): string {
+  if (!finding) return sourcedKey(engine, REVIEW_THREAD_KEY);
+  return sourcedKey(engine, prior ? resolutionThreadKey(finding) : findingThreadKey(finding));
+}
+
 const viewedKey = (root: string, base: string, compare: string) =>
   `tk-review:viewed:${root}:${base}...${compare}`;
 
@@ -355,6 +369,11 @@ export interface TabState {
    */
   openPr: (url: string) => Promise<boolean>;
   refreshPr: () => Promise<void>;
+  /**
+   * For a tab brought back from what it had loaded: checks its PR against
+   * GitHub, and reloads the diff only if the head has moved since.
+   */
+  revalidatePr: () => Promise<void>;
   selectFile: (path: string | null, lines?: LineSpan | null) => void;
   moveSelection: (offset: number) => void;
   setIncludeUncommitted: (include: boolean) => Promise<void>;
@@ -377,12 +396,16 @@ export interface TabState {
    * engine to respond.
    */
   addComment: (engine: ReviewEngine, threadKey: string, text: string) => Promise<void>;
-  /** Sends a finding or summary of `engine`'s review to the open PR and saves its permalink. */
+  /**
+   * Sends a finding or summary of `engine`'s review to the open PR and saves
+   * its permalink. `prior` says the finding is one the re-review judged.
+   */
   postPrComment: (
     engine: ReviewEngine,
     finding: ReviewFinding | null,
     body: string,
     location: PrPostLocation,
+    prior?: boolean,
   ) => Promise<boolean>;
   /** Submits `engine`'s conclusion as a GitHub review with the chosen verdict. */
   submitPrReview: (engine: ReviewEngine, verdict: ReviewVerdict, body: string) => Promise<boolean>;
@@ -520,9 +543,20 @@ function withPostedComment(
   finding: ReviewFinding | null,
   postedUrl: string,
   postedAt: string,
+  prior: boolean,
 ): StoredReview {
   if (!finding) return { ...stored, review: { ...stored.review, postedUrl, postedAt } };
   const key = findingThreadKey(finding);
+  if (prior) {
+    return {
+      ...stored,
+      resolutions: stored.resolutions?.map((resolution) =>
+        findingThreadKey(resolution.finding) === key
+          ? { ...resolution, finding: { ...resolution.finding, postedUrl, postedAt } }
+          : resolution,
+      ),
+    };
+  }
   return {
     ...stored,
     review: {
@@ -747,8 +781,11 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         const { repo } = get();
         set({ openingPr: true, error: null });
         try {
-          const pr = await gitApi.openPr(repo.root, url, env.openPrs(repo.root));
-          const branches = await gitApi.listBranches(repo.root);
+          // Neither needs the other: PR heads are fetched outside the branches listed.
+          const [pr, branches] = await Promise.all([
+            gitApi.openPr(repo.root, url, env.openPrs(repo.root)),
+            gitApi.listBranches(repo.root),
+          ]);
           set({
             // Nothing of the previous comparison lingers while this one loads.
             ...NO_COMPARISON,
@@ -774,6 +811,23 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           await syncPr(repo.root, pr);
           set({ refreshingPr: false });
           await loadDiff();
+        } catch (error) {
+          set({
+            refreshingPr: false,
+            error: toAppError(error, "Could not refresh the pull request"),
+          });
+        }
+      },
+
+      async revalidatePr() {
+        const { repo, pr, refreshingPr, loadingDiff } = get();
+        if (!pr || refreshingPr || loadingDiff) return;
+
+        set({ refreshingPr: true, error: null });
+        try {
+          await syncPr(repo.root, pr);
+          set({ refreshingPr: false });
+          if (get().prHeadMoved) await loadDiff();
         } catch (error) {
           set({
             refreshingPr: false,
@@ -1159,14 +1213,11 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         }
       },
 
-      async postPrComment(engine, finding, body, location) {
+      async postPrComment(engine, finding, body, location, prior = false) {
         const { destination } = location;
         const { repo, base, compare, reviews, pr, postingTo } = get();
         const stored = reviews[engine];
-        const targetKey = sourcedKey(
-          engine,
-          finding ? findingThreadKey(finding) : REVIEW_THREAD_KEY,
-        );
+        const targetKey = postTargetKey(engine, finding, prior);
         if (!base || !compare || !pr || !stored || postingTo || !body.trim()) return false;
 
         const worktree = reviewsWorkingTree(get());
@@ -1190,7 +1241,13 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             endLine: destination === "inline" ? location.endLine : null,
             destination,
           });
-          const updated = withPostedComment(stored, finding, posted.url, new Date().toISOString());
+          const updated = withPostedComment(
+            stored,
+            finding,
+            posted.url,
+            new Date().toISOString(),
+            prior,
+          );
           const next = persist(updated);
           set(stillCurrent() ? { reviews: next, postingTo: null } : { postingTo: null });
           return true;

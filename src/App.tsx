@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Button, Icon } from "tk-design-system";
 import css from "./App.module.css";
 import { CommitList } from "./components/CommitList/CommitList";
@@ -173,6 +173,12 @@ function renderScreen(screen: Screen) {
 
 export function App() {
   const tab = useAppStore(shownTab);
+  const tabs = useAppStore((state) => state.tabs);
+  // The list and every open tab stay mounted, the one on show in front.
+  const screens = useMemo<Screen[]>(
+    () => ["home", ...tabs.map((open) => `tab:${open.id}` as const)],
+    [tabs],
+  );
   const restoreLastRepo = useAppStore((state) => state.restoreLastRepo);
 
   useFileKeyboardNav();
@@ -190,7 +196,11 @@ export function App() {
         <TabBar />
       </TitleBar>
       <div className={css.screen}>
-        <ScreenStack<Screen> screen={tab ? `tab:${tab.id}` : "home"} render={renderScreen} />
+        <ScreenStack<Screen>
+          screens={screens}
+          screen={tab ? `tab:${tab.id}` : "home"}
+          render={renderScreen}
+        />
       </div>
     </div>
   );
