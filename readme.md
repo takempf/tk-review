@@ -113,6 +113,31 @@ behind **Show details**, with a copy button for bug reports. The dev harness
 acts out each failure with `?fail=review`, `turns`, `explain`, `post`, `list`
 or `refresh`.
 
+## Agent explanation
+
+The **AI explain** tab is the review's counterpart for understanding rather
+than judging: press **Explain** and the same agent (same engine, model and
+effort settings) writes a walkthrough of the change for someone who hasn't seen
+it. It's a run of its own, so an explanation and a review can go at the same
+time, and either can fail or be cancelled without touching the other.
+
+It comes back in two parts:
+
+- **The walkthrough**, in the tab: the short version first, then the parts of
+  the change in reading order, with short paragraphs, lists, and the odd table.
+- **File notes**, at the top of each file in the diff (on the new side of a
+  split diff): a sentence or three on what that file's changes are for. Files
+  that explain themselves (lockfiles, pure renames, formatting) get none. The
+  **Notes** toggle in the diff toolbar hides them; the tab keeps an index of
+  them either way.
+
+The prompt's voice lives in `src-tauri/src/voice.md`: how the explanations
+should sound, plus a handful of real (cleaned-up) messages to borrow the
+register from. Edit it to change the tone without touching the prompt.
+
+One explanation is kept per comparison, whichever engine wrote it, alongside
+the reviews in localStorage.
+
 
 
 There is deliberately no file-size limit. [Pierre's write-up on rendering

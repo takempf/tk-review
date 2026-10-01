@@ -48,19 +48,53 @@
   flex: 0 1 auto;
   min-width: 0;
   border-bottom: 0;
+  /* Narrower than its tabs, the list scrolls under its own edge rather than
+     sliding beneath the button beside it. */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-/* Both tabs' icons fit beside the review button's longest label
-   ("Re-reviewing…") down to about this width, which the panel's default
-   clears. Dragged narrower, the tabs let their icons go rather than wrap
-   their labels. */
+/* Three tabs and the active one's button ("Re-reviewing…" at its longest)
+   share the row. As the panel narrows, the tabs give up their icons first,
+   then the "AI" in their labels, and then the button its icon and the tabs
+   some padding. Past that, the list scrolls rather than wrap. The widths are
+   where each step stops fitting. */
 .tabBar {
   container-type: inline-size;
 }
 
-@container (width < 325px) {
+.tabList [role="tab"] {
+  flex: none;
+  white-space: nowrap;
+}
+
+.tabShort {
+  display: none;
+}
+
+@container (width < 490px) {
   .tabIcon {
     display: none;
+  }
+}
+
+@container (width < 420px) {
+  .tabLong {
+    display: none;
+  }
+
+  .tabShort {
+    display: inline;
+  }
+}
+
+@container (width < 350px) {
+  .actionIcon {
+    display: none;
+  }
+
+  .tabList [role="tab"] {
+    padding-inline: var(--space-2);
   }
 }
 
@@ -173,7 +207,7 @@
 .prMarkdown p,
 .prMarkdown ul,
 .prMarkdown ol,
-.prMarkdown .codeBlock,
+.prMarkdown :global(.tk-code-block),
 .prMarkdown blockquote,
 .prMarkdown table,
 .prCommentMarkdown p,
@@ -182,8 +216,8 @@
 .agentMarkdown ul,
 .prCommentMarkdown ol,
 .agentMarkdown ol,
-.prCommentMarkdown .codeBlock,
-.agentMarkdown .codeBlock,
+.prCommentMarkdown :global(.tk-code-block),
+.agentMarkdown :global(.tk-code-block),
 .prCommentMarkdown blockquote,
 .agentMarkdown blockquote,
 .prCommentMarkdown table,
@@ -336,6 +370,14 @@
   border: 1px solid var(--border);
 }
 
+/* Inline code in a cell keeps whole as well, though it may break anywhere in
+   prose: the table scrolls before `MultiFileDiff` splits. */
+.prMarkdown td :global(.tk-code),
+.prCommentMarkdown td :global(.tk-code),
+.agentMarkdown td :global(.tk-code) {
+  overflow-wrap: normal;
+}
+
 .prMoved {
   color: var(--tk-warning);
 }
@@ -441,12 +483,6 @@
 .settingsHint {
   font-size: var(--tk-text-xs);
   color: var(--text-faint);
-}
-
-/* Sits alongside the engine and model fields; a mode switch, not a command. */
-.explainToggle {
-  display: flex;
-  flex: none;
 }
 
 /* The model combobox fills whatever the engine select leaves of the row. */
@@ -870,7 +906,7 @@
   --tone-bg: var(--bg-sunken);
 }
 
-/* A file's explanation: its path, as a finding shows one, over the text. */
+/* A file's note: its path, as a finding shows one, over the text. */
 .explainFile {
   display: flex;
   flex-direction: column;

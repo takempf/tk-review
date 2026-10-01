@@ -211,8 +211,8 @@ stdout:
         { ...RE_REVIEW, cutShort: failing.has("turns") },
         failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
       );
-    // Slower than the review on purpose: the two run independently, and the
-    // panel has to stay usable while only one of them is still going.
+    // Slower than the review on purpose: the two run independently, and each
+    // tab has to stay usable while the other's run is still going.
     case "explain_diff":
       return agentRun(
         payload,
@@ -285,21 +285,26 @@ localStorage.setItem(
   );
 }
 
-// Explain mode on, with a result already on record, so the middle column's
-// explanations render on load rather than only after a mocked agent run.
-// Set `mergeBase` to anything else here to see the "older version" note.
-localStorage.setItem("tk-review:explain-mode", "true");
-localStorage.setItem(
-  `tk-review:explanations:${REPO.root}:main...feature/diff-viewer`,
-  JSON.stringify({
-    explanation: EXPLANATION,
-    engine: "claude",
-    model: null,
-    effort: null,
-    mergeBase: SUMMARY.mergeBase,
-    createdAt: new Date().toISOString(),
-  }),
-);
+// An explanation already on record, for PR #47 and for the same branches
+// compared directly, so the walkthrough and the file notes render on load
+// rather than only after a mocked agent run. Set `mergeBase` to anything else
+// here to see the "older version" note.
+for (const comparison of [
+  `${PR.baseRemote}/${PR.baseRef}...${PR.compareRef}`,
+  "main...feature/diff-viewer",
+]) {
+  localStorage.setItem(
+    `tk-review:explanations:${REPO.root}:${comparison}`,
+    JSON.stringify({
+      explanation: EXPLANATION,
+      engine: "claude",
+      model: null,
+      effort: null,
+      mergeBase: SUMMARY.mergeBase,
+      createdAt: new Date().toISOString(),
+    }),
+  );
+}
 
 const container = document.getElementById("root");
 if (!container) throw new Error("missing #root element");

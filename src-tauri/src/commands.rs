@@ -219,8 +219,9 @@ pub async fn re_review_diff(
     .await
 }
 
-/// Explains the comparison in plain language — an overview plus one entry per
-/// file. Runs the same agent CLIs as `review_diff`, and just as slowly.
+/// Explains the comparison in plain language: a walkthrough plus a note for
+/// each file that needs one. Runs the same agent CLIs as `review_diff`, and
+/// just as slowly.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn explain_diff(

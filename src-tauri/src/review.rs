@@ -423,7 +423,12 @@ The diff:
     prompt
 }
 
-/// A plain-language explanation of one file's part in the change.
+/// How the explanation should sound, with samples of the voice it borrows.
+/// Kept in its own file because it is mostly source material, not instructions.
+const EXPLAIN_VOICE: &str = include_str!("voice.md");
+
+/// A short note on what one file's changes are for, shown at the top of that
+/// file in the diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileExplanation {
@@ -435,14 +440,19 @@ pub struct FileExplanation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplainResult {
-    /// What the whole change does, as a readable paragraph or two.
+    /// The walkthrough of the whole change, for the explain panel.
     pub overall: String,
+    /// Notes for the files that benefit from one; the rest are left out.
     #[serde(default)]
     pub files: Vec<FileExplanation>,
+    /// As on `ReviewResult`.
+    #[serde(default, skip_deserializing)]
+    pub cut_short: bool,
 }
 
-/// Explains the comparison in plain language: one overview plus one entry per
-/// file. A reading aid rather than a judgement — see `build_explain_prompt`.
+/// Explains the comparison in plain language: a walkthrough of the whole
+/// change, plus a short note for each file that benefits from one. A reading
+/// aid rather than a judgement — see `build_explain_prompt`.
 ///
 /// Deliberately a separate CLI run from `review_diff` rather than an extra
 /// field on the review: the two jobs want different framing, and a failure in
@@ -472,12 +482,21 @@ pub fn explain_diff(
     }
 
     let prompt = build_explain_prompt(compare, &patch, pr_context);
-    let result_text = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?.text
+    let answer = if engine == "claude" {
+        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?
     } else {
-        codex_result_text(root, &prompt, model, effort, Some(EXPLAIN_SCHEMA), run)?
+        AgentText::complete(codex_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            Some(EXPLAIN_SCHEMA),
+            run,
+        )?)
     };
-    parse_agent_json(&result_text)
+    let mut result: ExplainResult = parse_agent_json(&answer.text)?;
+    result.cut_short = answer.cut_short;
+    Ok(result)
 }
 
 fn build_explain_prompt(
@@ -499,28 +518,47 @@ You are running inside the repository the diff belongs to. Use your file reading
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
 {{
-  "overall": "What this change accomplishes and how it is put together.",
+  "overall": "The walkthrough: what this change does, why, and how it is put together.",
   "files": [
     {{
       "path": "path/as/it/appears/in/the/diff",
-      "explanation": "What this file does, and what changed in it."
+      "explanation": "A short note on what the changes in this file are for."
     }}
   ]
 }}
 
-For `overall`: what the change accomplishes, the shape of the approach, and how the pieces fit together — which files are the heart of the change and which are fallout (renames, plumbing, test updates). One to three sentences, or a sentence followed by a short list when the change has several distinct parts.
+`overall` is the walkthrough, shown in a panel of its own. It is the reader's one stop for understanding the change: thorough enough that someone who reads only this knows what changed, why, and where to look, and skimmable enough that someone who reads only the first line of each part still gets the gist.
+- Open with the short version: a sentence or two on what the change does and why, in terms of what users or callers see before how the code does it.
+- Then walk through the parts in the order that makes them easiest to follow (usually cause before effect, data before UI), not in file order. Say which files are the heart of the change and which are fallout: renames, plumbing, test updates.
+- Give the why wherever the code doesn't make it obvious: the bug, constraint, or trade-off behind an approach. If the diff doesn't say, read the code around it. If you still can't tell, describe what it does rather than inventing a motive.
+- Point out what a reader would trip over: a behavior change hiding in a refactor, an ordering that matters, a surprising dependency. Frame these as orientation ("heads up: ..."), not as findings.
+- Use a small table where it reads better than prose: before and after behavior, which file does what, a set of cases and what happens in each. Keep tables to a few columns of short cells.
+- It is a document rather than a comment, so short `###` headings are welcome when the walkthrough covers more than two or three parts. Never put a heading over a single paragraph, and don't open with a title.
+- Length follows the change. A one-line fix gets a few sentences; a large change can run to several short sections. Never pad.
 
-For each file: open with a clause of context on what the file does in this codebase, then say what changed in it and why. Let length follow complexity — one to three sentences for a typical file, a sentence and then a short list for a genuinely tricky one, a single line for a mechanical rename. Include every file in the diff that carries real meaning; group trivia (lockfiles, generated output) into a one-liner on one of them rather than padding. Skip binary files. Use the compare-side path exactly as the diff spells it.
+Each entry in `files` is a note shown at the top of that file in the diff, so the reader sees it just before reading the code:
+- Write one only for files whose changes benefit from explaining. Leave out lockfiles that follow a manifest change, generated output, formatting-only edits, and pure renames. For a set of repetitive mechanical edits, explain the shared reason once on a representative file and name the others there.
+- Lead with why this file needed to change, then how its behavior or implementation changed. Tie it to this file's part in the change rather than repeating the walkthrough.
+- When a file has several separate changes, cover each one that needs explaining as a short list, and skip the ones that explain themselves.
+- Keep it to one to three short sentences, or a sentence and a short list. The walkthrough carries the detail.
+- Explain tests by the behavior they cover, and deletions by what replaces them or why they're no longer needed.
+- Refer to functions and blocks by name, not by line number.
+- Skip binary files. Use the compare-side path exactly as the diff spells it.
 
 Write for someone competent who has not seen this code before. Prefer concrete nouns from the codebase over generic description.
 
 {WRITING_GUIDANCE}
 
+The walkthrough's `###` headings are the one exception to "No headings" above.
+
+{voice}
+
 {JSON_MARKDOWN_NOTE}
 
 The diff:
 
-{patch}"#
+{patch}"#,
+        voice = EXPLAIN_VOICE.trim_end(),
     );
     if let Some(pr) = pr_context {
         // The author's own framing belongs before the diff, next to the rest of
@@ -2023,16 +2061,41 @@ mod tests {
             "{prompt}"
         );
         assert!(prompt.contains("No findings, no verdicts"), "{prompt}");
-        // Length guidance is what keeps a complex file from getting one line.
-        assert!(
-            prompt.contains("one to three sentences for a typical file"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("short list for a genuinely tricky one"),
-            "{prompt}"
-        );
         assert!(prompt.contains("diff --git a/a b/a"), "{prompt}");
+    }
+
+    /// The walkthrough and the file notes are read in different places, so
+    /// they get different briefs: one thorough, one short and selective.
+    #[test]
+    fn the_explain_prompt_briefs_the_walkthrough_and_the_file_notes_apart() {
+        let prompt = build_explain_prompt(Some("feature"), "diff --git a/a b/a", None);
+
+        assert!(prompt.contains("`overall` is the walkthrough"), "{prompt}");
+        assert!(prompt.contains("Use a small table"), "{prompt}");
+        assert!(
+            prompt.contains("short `###` headings are welcome"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("one exception to \"No headings\""),
+            "{prompt}"
+        );
+        // A note on a lockfile is noise in the diff, not help.
+        assert!(
+            prompt.contains("only for files whose changes benefit from explaining"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("not by line number"), "{prompt}");
+    }
+
+    #[test]
+    fn the_explain_prompt_carries_the_voice_and_its_samples() {
+        let prompt = build_explain_prompt(Some("feature"), "diff --git a/a b/a", None);
+
+        assert!(prompt.contains("How to sound:"), "{prompt}");
+        assert!(prompt.contains("song and dance"), "{prompt}");
+        // The voice is framing, so it stays ahead of the diff.
+        assert!(prompt.ends_with("diff --git a/a b/a"), "{prompt}");
     }
 
     /// The PR framing differs from the review's on purpose: a source to draw on

@@ -27,7 +27,7 @@ import {
 
 const LAST_REPO_KEY = "tk-review:last-repo";
 const REVIEW_ENGINE_KEY = "tk-review:review-engine";
-const EXPLAIN_MODE_KEY = "tk-review:explain-mode";
+const FILE_NOTES_KEY = "tk-review:file-notes";
 const reviewModelKey = (engine: ReviewEngine) => `tk-review:review-model:${engine}`;
 const reviewEffortKey = (engine: ReviewEngine) => `tk-review:review-effort:${engine}`;
 
@@ -35,8 +35,8 @@ function readReviewEngine(): ReviewEngine {
   return localStorage.getItem(REVIEW_ENGINE_KEY) === "codex" ? "codex" : "claude";
 }
 
-function readExplainMode(): boolean {
-  return localStorage.getItem(EXPLAIN_MODE_KEY) === "true";
+function readFileNotes(): boolean {
+  return localStorage.getItem(FILE_NOTES_KEY) !== "false";
 }
 
 function readReviewModel(engine: ReviewEngine): string {
@@ -90,11 +90,11 @@ interface AppState {
   returning: string | null;
   layout: DiffLayout;
   /**
-   * Ask for plain-language explanations alongside the next review, and show the
-   * stored ones on the diff. Turning it off hides them without discarding them.
+   * Show an explanation's file notes at the top of each file in the diff.
+   * Turning it off hides them without discarding them.
    */
-  explainMode: boolean;
-  /** Which agent CLI runs the next review — and whose stored review is shown. */
+  fileNotes: boolean;
+  /** Which agent CLI runs the next review or explanation. */
   reviewEngine: ReviewEngine;
   /** Model override for the engine; empty means the CLI's configured default. */
   reviewModel: string;
@@ -126,7 +126,7 @@ interface AppState {
   setReviewEngine: (engine: ReviewEngine) => void;
   setReviewModel: (model: string) => void;
   setReviewEffort: (effort: string) => void;
-  setExplainMode: (explain: boolean) => void;
+  setFileNotes: (shown: boolean) => void;
   /** Records that an agent run's CLI just wrote something, in whichever tab runs it. */
   noteRunOutput: (runId: string) => void;
   dismissError: () => void;
@@ -223,12 +223,11 @@ export const useAppStore = create<AppState>((set, get) => {
     const id = crypto.randomUUID();
     const store = createTabStore(init, {
       settings: () => {
-        const { reviewEngine, reviewModel, reviewEffort, explainMode } = get();
+        const { reviewEngine, reviewModel, reviewEffort } = get();
         return {
           engine: reviewEngine,
           model: reviewModel.trim() || null,
           effort: reviewEffort.trim() || null,
-          explain: explainMode,
         };
       },
       openPrs,
@@ -313,7 +312,7 @@ export const useAppStore = create<AppState>((set, get) => {
     activeTabId: null,
     returning: null,
     layout: "split",
-    explainMode: readExplainMode(),
+    fileNotes: readFileNotes(),
     reviewEngine: readReviewEngine(),
     reviewModel: readReviewModel(readReviewEngine()),
     reviewEffort: readReviewEffort(readReviewEngine()),
@@ -473,10 +472,10 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    setExplainMode(explainMode) {
-      set({ explainMode });
+    setFileNotes(fileNotes) {
+      set({ fileNotes });
       try {
-        localStorage.setItem(EXPLAIN_MODE_KEY, String(explainMode));
+        localStorage.setItem(FILE_NOTES_KEY, String(fileNotes));
       } catch {
         // Preference persistence is best-effort.
       }

@@ -13,6 +13,7 @@ import { useScreenSettled } from "../../lib/screenTransition";
 import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, useAppStore } from "../../store/appStore";
 import { reviewsWorkingTree, useTab } from "../../store/tabStore";
+import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffSurface.module.css";
 import { DIFF_THEME, DIFFS_THEME_CSS } from "./diffsTheme";
@@ -35,18 +36,35 @@ const MAX_HIGHLIGHT_LINES = 100_000;
 
 function Toolbar({
   fileCount,
+  hasNotes,
   layout,
   onLayoutChange,
 }: {
   fileCount: number;
+  /** An explanation left notes on files, so there is something to show or hide. */
+  hasNotes: boolean;
   layout: DiffLayout;
   onLayoutChange: (layout: DiffLayout) => void;
 }) {
+  const fileNotes = useAppStore((state) => state.fileNotes);
+  const setFileNotes = useAppStore((state) => state.setFileNotes);
   return (
     <div className={css.toolbar}>
       <span className={css.toolbarLabel}>
         {fileCount} {fileCount === 1 ? "file" : "files"} in this review
       </span>
+      {hasNotes ? (
+        <ToggleGroup
+          size="sm"
+          aria-label="File notes"
+          value={fileNotes ? ["notes"] : []}
+          onValueChange={(value) => setFileNotes(value.includes("notes"))}
+        >
+          <Toggle value="notes" title="Show the explanation's note at the top of each file">
+            <Icon name="info" /> Notes
+          </Toggle>
+        </ToggleGroup>
+      ) : null}
       <ToggleGroup
         size="sm"
         aria-label="Diff layout"
@@ -109,6 +127,49 @@ export function DiffSkeleton() {
   );
 }
 
+/**
+ * An explanation's note on one file, at the top of it: what its changes are
+ * for. In a split diff it sits over the new side, which is what it describes
+ * (the old side, for a deleted file).
+ */
+function FileNote({ note, stale }: { note: string; stale: boolean }) {
+  return (
+    <aside className={css.fileNote}>
+      <p className={css.fileNoteLabel}>
+        <Icon name="info" /> Note
+        {stale ? (
+          <span className={css.fileNoteStale}>from an older version of this diff</span>
+        ) : null}
+      </p>
+      <GitHubMarkdown markdown={note} className={css.fileNoteText} />
+    </aside>
+  );
+}
+
+/** Each file's note from the explanation on record, by path; none while they're hidden. */
+function useFileNotes() {
+  const explanation = useTab((state) => state.explanation);
+  const mergeBase = useTab((state) => state.summary?.mergeBase ?? null);
+  const shown = useAppStore((state) => state.fileNotes);
+
+  const all = useMemo(() => {
+    const byPath = new Map<string, string>();
+    for (const file of explanation?.explanation.files ?? []) {
+      const note = file.explanation.trim();
+      if (note) byPath.set(file.path, note);
+    }
+    return byPath;
+  }, [explanation]);
+
+  return {
+    notes: shown ? all : NO_NOTES,
+    hasNotes: all.size > 0,
+    stale: explanation != null && explanation.mergeBase !== mergeBase,
+  };
+}
+
+const NO_NOTES = new Map<string, string>();
+
 /** Preloads the themes once so the first paint is not an empty surface. */
 function useThemesReady(start: boolean): boolean {
   const [ready, setReady] = useState(false);
@@ -149,6 +210,7 @@ function DiffSurfaceInner() {
   const expanded = useTab((state) => state.expanded);
   const toggleViewed = useTab((state) => state.toggleViewed);
   const expandFile = useTab((state) => state.expandFile);
+  const { notes, hasNotes, stale } = useFileNotes();
 
   const viewRef = useRef<CodeViewHandle<undefined>>(null);
   // Parsing, highlighting and laying out the diff is the heaviest work in the
@@ -193,19 +255,27 @@ function DiffSurfaceInner() {
         // already. Either way an explicit open wins.
         const startsClosed = generatedPaths.has(fileDiff.name) || viewed.has(fileDiff.name);
         const collapsed = startsClosed && !expanded.has(fileDiff.name);
+        const noted = notes.has(fileDiff.name);
         return {
           id: fileDiff.name,
           type: "diff" as const,
           fileDiff,
           collapsed,
+          // A file-level annotation (line 0) is where the note goes: above the
+          // first hunk, on the side it describes. Its text comes from
+          // `renderAnnotation`, so a new explanation only has to re-render it.
+          annotations: noted
+            ? [{ side: fileDiff.type === "deleted" ? "deletions" : "additions", lineNumber: 0 }]
+            : undefined,
           // Signals to CodeView that the item's own state changed, not just the
-          // surrounding list. Both halves matter: the item is re-rendered when it
-          // opens or closes, and when a reload brought different contents for the
-          // same path — which is what a file id alone cannot express.
-          version: diffLoadId * 2 + (collapsed ? 0 : 1),
+          // surrounding list. Each part matters: the item is re-rendered when it
+          // opens or closes, when its note comes or goes, and when a reload
+          // brought different contents for the same path — which is what a file
+          // id alone cannot express.
+          version: diffLoadId * 4 + (collapsed ? 0 : 2) + (noted ? 1 : 0),
         };
       });
-  }, [settled, patch, mergeBase, compare, revision, diffLoadId, summary, viewed, expanded]);
+  }, [settled, patch, mergeBase, compare, revision, diffLoadId, summary, viewed, expanded, notes]);
 
   /**
    * Supplies whole-file contents when the reader expands context past what the
@@ -292,7 +362,19 @@ function DiffSurfaceInner() {
     const view = viewRef.current;
     if (!selectedLines) {
       view?.clearSelectedLines();
-      view?.scrollTo({ type: "item", id: selectedPath, align: "start" });
+      const target = { type: "item", id: selectedPath, align: "start" } as const;
+      view?.scrollTo(target);
+      // A file's note is only measured once the file renders, and CodeView
+      // then keeps the first line where the jump put it, which slides the
+      // note up under the sticky header. Going again once it has been
+      // measured lands on the header, note in view.
+      if (item.annotations) {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (openedFor.current === selection) viewRef.current?.scrollTo(target);
+          }),
+        );
+      }
       return;
     }
     // Findings anchor to new-file line numbers.
@@ -314,7 +396,12 @@ function DiffSurfaceInner() {
 
   return (
     <div className={css.wrap}>
-      <Toolbar fileCount={summary.files.length} layout={layout} onLayoutChange={setLayout} />
+      <Toolbar
+        fileCount={summary.files.length}
+        hasNotes={hasNotes}
+        layout={layout}
+        onLayoutChange={setLayout}
+      />
       {themesReady && items.length > 0 ? (
         // The file headers CodeView draws already carry each path and its line
         // counts, so there is no metadata to add here — only a marker showing
@@ -347,6 +434,11 @@ function DiffSurfaceInner() {
               </Checkbox>
             </span>
           )}
+          // The only annotations are file notes, one per file at most.
+          renderAnnotation={(_annotation, item) => {
+            const note = notes.get(item.id);
+            return note ? <FileNote note={note} stale={stale} /> : null;
+          }}
         />
       ) : (
         // Takes over from the screen's own skeleton without fading in again.

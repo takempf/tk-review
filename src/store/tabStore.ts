@@ -168,6 +168,8 @@ export type AgentRunKind = "review" | "explain" | "reply";
 /** An agent run in flight, as its progress line needs it. */
 export interface AgentRunInfo {
   kind: AgentRunKind;
+  /** Who is doing it, which the settings no longer say once they change mid-run. */
+  engine: ReviewEngine;
   /** `Date.now()` times. */
   startedAt: number;
   /** When its CLI last wrote anything; `null` until it first does. */
@@ -197,8 +199,6 @@ export interface ReviewSettings {
   model: string | null;
   /** `null` means the CLI's default. */
   effort: string | null;
-  /** Explain alongside a review. */
-  explain: boolean;
 }
 
 /** What a tab needs to know from the app around it, asked at the moment it matters. */
@@ -360,6 +360,12 @@ export interface TabState {
   toggleViewed: (path: string) => void;
   expandFile: (path: string) => void;
   runReview: () => Promise<void>;
+  /**
+   * Explains the comparison: a walkthrough for the panel and a note for each
+   * file that needs one. Independent of the review; either can run while the
+   * other does.
+   */
+  runExplain: () => Promise<void>;
   /**
    * Follows up on the stored review: one agent run that judges whether each
    * prior finding was addressed and reads the current diff for new issues.
@@ -637,10 +643,11 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
     }
 
     /** Registers an agent run for its progress line, under a fresh id for the backend. */
-    function beginRun(kind: AgentRunKind): string {
+    function beginRun(kind: AgentRunKind, engine: ReviewEngine): string {
       const runId = crypto.randomUUID();
       const run: AgentRunInfo = {
         kind,
+        engine,
         startedAt: Date.now(),
         lastOutputAt: null,
         cancelling: false,
@@ -864,15 +871,15 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       },
 
       async runReview() {
-        const { repo, base, compare, summary, reviewing, reReviewing, explaining, pr } = get();
-        if (!base || !compare || !summary || reviewing || reReviewing || explaining) return;
+        const { repo, base, compare, summary, reviewing, reReviewing, pr } = get();
+        if (!base || !compare || !summary || reviewing || reReviewing) return;
 
-        const { engine: reviewEngine, model, effort, explain: explainMode } = env.settings();
+        const { engine: reviewEngine, model, effort } = env.settings();
         const head = reviewedHead(get());
         const worktree = reviewsWorkingTree(get());
         const scope = viewedScope(compare, worktree);
         const target = worktree ? null : compare;
-        // These take a while; if the comparison changed under one, its result
+        // This takes a while; if the comparison changed under it, its result
         // still gets *persisted* for the comparison it belongs to — it just must
         // not land in the state of whatever is on screen now.
         const stillCurrent = () =>
@@ -880,109 +887,109 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           get().compare === compare &&
           reviewsWorkingTree(get()) === worktree;
 
-        async function review(): Promise<void> {
-          if (!base || !summary) return;
-          const runId = beginRun("review");
-          set({ reviewing: true, reviewError: null });
-          try {
-            const result = await gitApi.reviewDiff(
-              runId,
-              repo.root,
-              summary.mergeBase,
-              target,
-              reviewEngine,
-              model,
-              effort,
-              pr,
-            );
-            // Re-read rather than spread state: another engine's slot may have
-            // changed while this review ran.
-            const current = readReviews(repo.root, base, scope);
-            const stored: StoredReview = {
-              review: result,
+        const runId = beginRun("review", reviewEngine);
+        set({ reviewing: true, reviewError: null });
+        try {
+          const result = await gitApi.reviewDiff(
+            runId,
+            repo.root,
+            summary.mergeBase,
+            target,
+            reviewEngine,
+            model,
+            effort,
+            pr,
+          );
+          // Re-read rather than spread state: another engine's slot may have
+          // changed while this review ran.
+          const current = readReviews(repo.root, base, scope);
+          const stored: StoredReview = {
+            review: result,
+            engine: reviewEngine,
+            model,
+            effort,
+            mergeBase: summary.mergeBase,
+            head,
+            createdAt: new Date().toISOString(),
+            threads: {},
+            earlier: earlierThan(current[reviewEngine]),
+          };
+          const next = { ...current, [reviewEngine]: stored };
+          writeReviews(repo.root, base, scope, next);
+          if (pr) {
+            recordReview(repo.root, pr, {
               engine: reviewEngine,
-              model,
-              effort,
-              mergeBase: summary.mergeBase,
-              head,
-              createdAt: new Date().toISOString(),
-              threads: {},
-              earlier: earlierThan(current[reviewEngine]),
-            };
-            const next = { ...current, [reviewEngine]: stored };
-            writeReviews(repo.root, base, scope, next);
-            if (pr) {
-              recordReview(repo.root, pr, {
-                engine: reviewEngine,
-                createdAt: stored.createdAt,
-                findings: result.findings.length,
-              });
-            }
-            set(stillCurrent() ? { reviews: next, reviewing: false } : { reviewing: false });
-          } catch (error) {
-            set(
-              stillCurrent()
-                ? { reviewing: false, reviewError: runFailure(error, "The review failed") }
-                : { reviewing: false },
-            );
-          } finally {
-            endRun(runId);
+              createdAt: stored.createdAt,
+              findings: result.findings.length,
+            });
           }
+          set(stillCurrent() ? { reviews: next, reviewing: false } : { reviewing: false });
+        } catch (error) {
+          set(
+            stillCurrent()
+              ? { reviewing: false, reviewError: runFailure(error, "The review failed") }
+              : { reviewing: false },
+          );
+        } finally {
+          endRun(runId);
         }
+      },
 
-        async function explain(): Promise<void> {
-          if (!base || !summary) return;
-          const runId = beginRun("explain");
-          set({ explaining: true, explainError: null });
-          try {
-            const result = await gitApi.explainDiff(
-              runId,
-              repo.root,
-              summary.mergeBase,
-              target,
-              reviewEngine,
-              model,
-              effort,
-              pr,
-            );
-            const stored: StoredExplanation = {
-              explanation: result,
-              engine: reviewEngine,
-              model,
-              effort,
-              mergeBase: summary.mergeBase,
-              createdAt: new Date().toISOString(),
-            };
-            writeExplanation(repo.root, base, scope, stored);
-            set(
-              stillCurrent() ? { explanation: stored, explaining: false } : { explaining: false },
-            );
-          } catch (error) {
-            set(
-              stillCurrent()
-                ? {
-                    explaining: false,
-                    explainError: runFailure(error, "Could not explain the change"),
-                  }
-                : { explaining: false },
-            );
-          } finally {
-            endRun(runId);
-          }
+      async runExplain() {
+        const { repo, base, compare, summary, explaining, pr } = get();
+        if (!base || !compare || !summary || explaining) return;
+
+        const { engine, model, effort } = env.settings();
+        const worktree = reviewsWorkingTree(get());
+        const scope = viewedScope(compare, worktree);
+        const stillCurrent = () =>
+          get().summary?.mergeBase === summary.mergeBase &&
+          get().compare === compare &&
+          reviewsWorkingTree(get()) === worktree;
+
+        const runId = beginRun("explain", engine);
+        set({ explaining: true, explainError: null });
+        try {
+          const result = await gitApi.explainDiff(
+            runId,
+            repo.root,
+            summary.mergeBase,
+            worktree ? null : compare,
+            engine,
+            model,
+            effort,
+            pr,
+          );
+          const stored: StoredExplanation = {
+            explanation: result,
+            engine,
+            model,
+            effort,
+            mergeBase: summary.mergeBase,
+            createdAt: new Date().toISOString(),
+          };
+          writeExplanation(repo.root, base, scope, stored);
+          set(stillCurrent() ? { explanation: stored, explaining: false } : { explaining: false });
+        } catch (error) {
+          set(
+            stillCurrent()
+              ? {
+                  explaining: false,
+                  explainError: runFailure(error, "Could not explain the change"),
+                }
+              : { explaining: false },
+          );
+        } finally {
+          endRun(runId);
         }
-
-        // Two independent agent runs: a failed explanation must not cost a good
-        // review, and neither should wait on the other to start.
-        await Promise.all(explainMode ? [review(), explain()] : [review()]);
       },
 
       async runReReview() {
-        const { repo, base, compare, summary, reviews, reviewing, reReviewing, explaining, pr } =
-          get();
+        const { repo, base, compare, summary, reviews, reviewing, reReviewing, pr } = get();
         const { engine: reviewEngine, model, effort } = env.settings();
         const prior = reviews[reviewEngine];
         if (!base || !compare || !summary || !prior) return;
-        if (reviewing || reReviewing || explaining) return;
+        if (reviewing || reReviewing) return;
 
         const head = reviewedHead(get());
         const worktree = reviewsWorkingTree(get());
@@ -993,7 +1000,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           get().compare === compare &&
           reviewsWorkingTree(get()) === worktree;
 
-        const runId = beginRun("review");
+        const runId = beginRun("review", reviewEngine);
         set({ reReviewing: true, reviewError: null });
         try {
           const result = await gitApi.reReviewDiff({
@@ -1110,7 +1117,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             : {},
         );
 
-        const runId = beginRun("reply");
+        const runId = beginRun("reply", engine);
         try {
           const reply = await gitApi.reviewReply({
             runId,

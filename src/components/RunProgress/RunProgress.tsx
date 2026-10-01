@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, cx } from "tk-design-system";
+import { ENGINE_LABELS } from "../../lib/engines";
 import { type AgentRunKind, useTab } from "../../store/tabStore";
 import css from "./RunProgress.module.css";
 
@@ -37,21 +38,9 @@ function ago(ms: number): string {
 /**
  * How long an agent run has been going and when its CLI last wrote anything,
  * so a slow run can be told from a stuck one, and a way to stop it. `kind`
- * picks the run to time; `cancels` is every kind Cancel stops, since pressing
- * Review can start an explanation alongside the review.
+ * picks the run to time, and Cancel stops it.
  */
-export function RunProgress({
-  kind,
-  cancels = [kind],
-  agent,
-  className,
-}: {
-  kind: AgentRunKind;
-  cancels?: AgentRunKind[];
-  /** Who is working: "Codex". */
-  agent: string;
-  className?: string;
-}) {
+export function RunProgress({ kind, className }: { kind: AgentRunKind; className?: string }) {
   const run = useTab((state) =>
     Object.values(state.agentRuns).find((candidate) => candidate.kind === kind),
   );
@@ -59,6 +48,7 @@ export function RunProgress({
   const now = useNow();
   if (!run) return null;
 
+  const agent = ENGINE_LABELS[run.engine] ?? run.engine;
   const quiet = now - (run.lastOutputAt ?? run.startedAt);
   const silent = quiet >= QUIET_NOTICE_MS;
   return (
@@ -74,7 +64,7 @@ export function RunProgress({
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => cancelAgentRuns(cancels)}
+        onClick={() => cancelAgentRuns([kind])}
         disabled={run.cancelling}
       >
         {run.cancelling ? "Cancelling…" : "Cancel"}

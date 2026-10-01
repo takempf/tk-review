@@ -398,38 +398,51 @@ export const RE_REVIEW: ReReviewResult = {
 };
 
 /**
- * Explain mode's output, shaped to exercise the rendering rather than to read
- * as a real explanation: a long entry, a one-line rename, a file the model
- * skipped (`src/legacy/OldViewer.tsx`), a binary it was told to skip, and a
- * path that is not in the diff at all — which must render without a jump link.
+ * An explanation, shaped to exercise the rendering rather than to read as a
+ * real one. The walkthrough has headings, a list, and a table. The notes cover
+ * a deleted file (whose note sits on the old side), a new one, and a modified
+ * one; the rename is skipped as self-explanatory, the binary as binary, and one
+ * note names a path that is not in the diff, which must show without a link.
  */
 export const EXPLANATION: ExplainResult = {
-  overall:
-    "This change moves the diff viewer from fetching its own file contents to reading them from a single parsed patch, and adds the storage that review results need.\n\nThe heart of it is DiffViewer.tsx, which loses its per-file fetch, and git.ts, which gains the typed IPC surface that replaces it. The migration is the other half: reviews need somewhere to live, so the schema grows a table keyed by merge base. Everything else is fallout — the old viewer is deleted, and the status helper is renamed to match what it now returns.",
+  overall: [
+    "Short version: the diff viewer stops fetching every file on its own and renders through `@pierre/diffs` instead, and reviews get a table to live in.",
+    "Most of the weight is in `DiffViewer.tsx`. The rest is plumbing for it, plus a migration.",
+    "### The viewer",
+    "It used to grab one file's contents on mount and dump them in a `<pre>`. Now it reads both sides of the file and hands them to `MultiFileDiff`, so you get a real split or unified diff.",
+    "Heads up: the fetch now has a cancel flag. Switch files mid-load and the old response no longer lands on the new file.",
+    "| | Before | After |\n|---|---|---|\n| Renders | Raw text in a `<pre>` | `MultiFileDiff`, split or unified |\n| Loads | One file, one side | Both sides, cancelled on switch |\n| Layout | Fixed | Follows the toolbar toggle |",
+    "### Storage",
+    "Reviews need somewhere to live, so the migration adds two columns and an index:",
+    "- `merge_base` pins a review to the commit it read rather than to a branch name, which can move under it.\n- `viewed_paths` keeps the files you ticked off.\n- The `created_at` index is for listing reviews newest first.",
+    "### Fallout",
+    "`git.ts` is new: the typed wrapper the viewer now calls. `OldViewer.tsx` goes away, and `status.ts` is renamed to `fileChange.ts` with two more statuses. Mostly plumbing.",
+  ].join("\n\n"),
   files: [
     {
       path: "migrations/0007_add_reviews_table.sql",
       explanation:
-        "The schema migrations, applied in order at startup. This one adds the reviews table so a review survives a restart, keyed by the merge base it was anchored to. The merge_base column is what ties a stored review to a particular comparison rather than to a branch name, which can move under it.",
+        "Reviews need to survive a restart, so this adds the columns they're keyed and tracked by:\n- `merge_base`, which ties a review to a commit rather than a branch name\n- `viewed_paths`, for the files ticked off\n\nThe new index on `created_at` is for listing them newest first.",
     },
     {
       path: "src/components/DiffViewer/DiffViewer.tsx",
       explanation:
-        "The middle column — it renders the diff itself. Previously each file fetched its own before/after contents on mount, which meant one round trip per file and a flash of empty state on every selection. It now reads from the single parsed patch the store already holds, so selecting a file is pure rendering. The effect that remains only handles expanding context past what the patch carries.",
+        "The viewer now renders a real diff instead of raw text. It fetches both sides of the file and hands them to `MultiFileDiff`, and a `cancelled` flag keeps a slow response from landing on the file you've since switched to.",
     },
     {
       path: "src/ipc/git.ts",
       explanation:
-        "The typed wrapper over the Rust commands, mirroring the serde structs one for one. New here because the viewer's fetching moved behind it.",
+        "New: the typed wrapper over the Rust commands that the viewer calls instead of fetching on its own.",
     },
     {
-      path: "src/lib/fileChange.ts",
-      explanation: "Renamed from src/lib/status.ts; the helpers are unchanged.",
+      path: "src/legacy/OldViewer.tsx",
+      explanation:
+        "Deleted. `DiffViewer` does its job now, so nothing renders a patch as plain lines.",
     },
     {
       path: "src/does/not/exist.ts",
       explanation:
-        "A path with no file in the diff — this card renders last, with its path as plain text rather than a link.",
+        "A path with no file in the diff. Its note lists last in the panel, without a link, and appears nowhere in the diff.",
     },
   ],
 };

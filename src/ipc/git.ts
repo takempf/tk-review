@@ -165,7 +165,7 @@ export interface ReReviewResult {
   cutShort?: boolean;
 }
 
-/** Plain-language account of one file's part in the change. */
+/** A short note on what one file's changes are for, shown at the top of it in the diff. */
 export interface FileExplanation {
   /** Path as it appears in the diff's compare side, matching `ReviewFinding`. */
   path: string;
@@ -173,9 +173,12 @@ export interface FileExplanation {
 }
 
 export interface ExplainResult {
-  /** What the whole change does, as a readable paragraph or two. */
+  /** The walkthrough of the whole change, for the explain panel. */
   overall: string;
+  /** Notes for the files that benefit from one; the rest are left out. */
   files: FileExplanation[];
+  /** As on `ReviewResult`. Absent on explanations stored before it was recorded. */
+  cutShort?: boolean;
 }
 
 /** One existing GitHub conversation or inline review comment on an open PR. */
@@ -480,9 +483,9 @@ export const gitApi = {
   }) => invoke<ReReviewResult>("re_review_diff", { ...args }),
 
   /**
-   * Explains the comparison in plain language — an overview plus one entry per
-   * file. A separate agent run from `reviewDiff` and just as slow, so callers
-   * run the two concurrently rather than in sequence.
+   * Explains the comparison in plain language: a walkthrough of the whole
+   * change, plus a note for each file that benefits from one. An agent run of
+   * its own, independent of any review, and just as slow.
    */
   explainDiff: (
     runId: string,

@@ -1,11 +1,4 @@
-import { MarkdownClient } from "@comark/react";
-import emoji from "comark/plugins/emoji";
-import footnotes from "comark/plugins/footnotes";
-import DOMPurify from "dompurify";
 import {
-  Children,
-  Fragment,
-  isValidElement,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -14,19 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  Button,
-  Checkbox,
-  Code,
-  CodeBlock,
-  Icon,
-  Popover,
-  Radio,
-  RadioGroup,
-  Select,
-  Tabs,
-  Tooltip,
-} from "tk-design-system";
+import { Button, Icon, Popover, Radio, RadioGroup, Select, Tabs } from "tk-design-system";
 import {
   type EngineModels,
   gitApi,
@@ -36,7 +17,6 @@ import {
   type ReviewFinding,
   type ReviewVerdict,
 } from "../../ipc/git";
-import { dropReferenceDefinitions, inlineHtmlEntities } from "../../lib/comarkFixes";
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
 import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
@@ -45,20 +25,24 @@ import { absoluteTime, shortTime } from "../../lib/time";
 import { knownVerdict } from "../../lib/verdict";
 import { useAppStore } from "../../store/appStore";
 import {
+  type AgentRunKind,
   CONCLUSION_POST_KEY,
   findingThreadKey,
   REVIEW_THREAD_KEY,
   type ResolvedFinding,
   resolutionThreadKey,
   reviewsNewestFirst,
+  type StoredExplanation,
   type StoredReview,
   sourcedKey,
+  type TabState,
   useTab,
 } from "../../store/tabStore";
 import { Combobox } from "../Combobox/Combobox";
 import { CopyButton } from "../CopyButton/CopyButton";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
+import { GitHubMarkdown } from "../Markdown/Markdown";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
@@ -187,227 +171,20 @@ const VERDICTS: { value: ReviewVerdict; label: string; noun: string; done: strin
 /** Stable fallback: a fresh `[]` from a selector re-renders forever. */
 const EMPTY_THREAD: ReviewComment[] = [];
 const TAB_KEY = "tk-review:review-panel:tab";
-type PanelTab = "pr" | "ai";
-/** Comark enables GFM tables, strikethrough, autolinks, task lists, and alerts
- * by default. These plugins round it out with GitHub's emoji and footnotes, and
- * work around where Comark renders the same Markdown differently (see
- * comarkFixes.ts). */
-const GITHUB_MARKDOWN_PLUGINS = [
-  emoji(),
-  footnotes(),
-  inlineHtmlEntities(),
-  dropReferenceDefinitions(),
-];
-
-// PR descriptions and comments are third-party input. GitHub allows a useful
-// subset of HTML, so sanitize that subset before letting Comark parse it. This
-// preserves common bot output (`<a>`, `<picture>`, tables, details) without
-// allowing executable or embedded content.
-const GITHUB_HTML_OPTIONS = {
-  ALLOWED_TAGS: [
-    "a",
-    "abbr",
-    "b",
-    "blockquote",
-    "br",
-    "code",
-    "dd",
-    "del",
-    "details",
-    "div",
-    "dl",
-    "dt",
-    "em",
-    "figcaption",
-    "figure",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "hr",
-    "i",
-    "img",
-    "ins",
-    "kbd",
-    "li",
-    "mark",
-    "ol",
-    "p",
-    "picture",
-    "pre",
-    "s",
-    "samp",
-    "small",
-    "source",
-    "span",
-    "strong",
-    "sub",
-    "summary",
-    "sup",
-    "table",
-    "tbody",
-    "td",
-    "th",
-    "thead",
-    "tr",
-    "u",
-    "ul",
-    "var",
-  ],
-  ALLOWED_ATTR: [
-    "align",
-    "alt",
-    "colspan",
-    "height",
-    "href",
-    "id",
-    "loading",
-    "media",
-    "open",
-    "rel",
-    "rowspan",
-    "src",
-    "srcset",
-    "target",
-    "title",
-    "type",
-    "width",
-  ],
-  FORBID_ATTR: ["style"],
-};
-const GITHUB_MARKDOWN_OPTIONS = { html: true };
-
-const GITHUB_ATTACHMENT_URL =
-  /^https:\/\/github\.com\/user-attachments\/assets\/[a-f\d-]+(?:[?#].*)?$/i;
-
-function GitHubImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
-  // Comark hands an empty attribute (`alt=""`) over as `true`.
-  const altText = typeof alt === "string" ? alt : "";
-  const [resolvedSrc, setResolvedSrc] = useState(src);
-  // Which address failed, so the fetched attachment that replaces it still
-  // gets its chance to load.
-  const [failedSrc, setFailedSrc] = useState<string | undefined>();
-
-  useEffect(() => {
-    setResolvedSrc(src);
-    if (!src || !GITHUB_ATTACHMENT_URL.test(src)) return;
-
-    let cancelled = false;
-    void gitApi
-      .getGitHubImage(src)
-      .then(({ contentType, data }) => {
-        if (!cancelled) setResolvedSrc(`data:${contentType};base64,${data}`);
-      })
-      .catch(() => {
-        // Keep the original URL as a fallback; if that fails too, the image
-        // gives way to its alt text below.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [src]);
-
-  // A broken image says nothing a reader can use (WebKit draws a "?" box), so
-  // it gives way to its alt text, or to nothing when it was decorative.
-  if (failedSrc !== undefined && failedSrc === resolvedSrc) {
-    return altText ? <span>{altText}</span> : null;
-  }
-  return (
-    <img {...props} alt={altText} src={resolvedSrc} onError={() => setFailedSrc(resolvedSrc)} />
-  );
-}
-
-/** Comark passes `srcset` through as written, where React only knows `srcSet`. */
-function GitHubSource({
-  srcset,
-  ...props
-}: React.SourceHTMLAttributes<HTMLSourceElement> & { srcset?: string }) {
-  return <source {...props} srcSet={srcset ?? props.srcSet} />;
-}
-
-/**
- * A `<picture>` that drops its `<source>`s when the one chosen fails, leaving
- * the `<img>` inside to load its own `src`. Bots ship a variant per colour
- * scheme, and a dead dark one would otherwise break the image outright in a
- * dark-only app. React's `onError` bubbles, so the image's failure lands here.
- */
-function GitHubPicture({ children, ...props }: React.HTMLAttributes<HTMLElement>) {
-  const [sourcesFailed, setSourcesFailed] = useState(false);
-  const shown = sourcesFailed
-    ? Children.toArray(children).filter(
-        (child) => !isValidElement(child) || child.type !== GitHubSource,
-      )
-    : children;
-  return (
-    <picture {...props} onError={() => setSourcesFailed(true)}>
-      {/* Keyed so the image mounts afresh, forgetting the failure it just had. */}
-      <Fragment key={sourcesFailed ? "img" : "sources"}>{shown}</Fragment>
-    </picture>
-  );
-}
-
-/** The text inside rendered Markdown, however deeply it is wrapped. */
-function textOf(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(textOf).join("");
-  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
-  return "";
-}
-
-/**
- * A fenced block (or a raw `<pre>`), as the design system's code block: its
- * copy button, and highlighting for the languages it knows. Any other language
- * reads as plain text, as it did before.
- */
-function MarkdownCodeBlock({ language, children }: { language?: string; children?: ReactNode }) {
-  return <CodeBlock code={textOf(children)} language={language} className={css.codeBlock} />;
-}
-
-/**
- * A task list's box, as the design system's checkbox. Read-only, as on GitHub
- * for anyone but the author: ticking it here could not change the Markdown.
- * The sanitizer drops raw `<input>`s, so task lists are the only source.
- */
-function TaskCheckbox({ checked }: { checked?: boolean }) {
-  return <Checkbox checked={checked === true} readOnly className="task-list-item-checkbox" />;
-}
-
-const GITHUB_MARKDOWN_COMPONENTS = {
-  img: GitHubImage,
-  picture: GitHubPicture,
-  source: GitHubSource,
-  code: Code,
-  pre: MarkdownCodeBlock,
-  input: TaskCheckbox,
-};
-
-function safePrMarkdown(markdown: string): string {
-  // Comark's `::component` extension is not part of GitHub Markdown. Escape
-  // it so third-party content cannot request arbitrary React/HTML elements.
-  const withoutComponents = markdown.replace(/^::/gm, "\\::");
-  return String(DOMPurify.sanitize(withoutComponents, GITHUB_HTML_OPTIONS));
-}
-
-function GitHubMarkdown({ markdown, className }: { markdown: string; className?: string }) {
-  return (
-    <MarkdownClient
-      className={className}
-      value={safePrMarkdown(markdown)}
-      options={GITHUB_MARKDOWN_OPTIONS}
-      plugins={GITHUB_MARKDOWN_PLUGINS}
-      components={GITHUB_MARKDOWN_COMPONENTS}
-    />
-  );
-}
-
+type PanelTab = "pr" | "ai" | "explain";
+const PANEL_TABS: PanelTab[] = ["pr", "ai", "explain"];
 function persistedTab(): PanelTab {
   try {
-    return localStorage.getItem(TAB_KEY) === "pr" ? "pr" : "ai";
+    const stored = localStorage.getItem(TAB_KEY);
+    return PANEL_TABS.find((tab) => tab === stored) ?? "ai";
   } catch {
     return "ai";
   }
+}
+
+/** The engine doing the tab's run of `kind`, if one is in flight. */
+function runningEngine(state: TabState, kind: AgentRunKind): ReviewEngine | undefined {
+  return Object.values(state.agentRuns).find((run) => run.kind === kind)?.engine;
 }
 
 function PrRefreshButton() {
@@ -572,17 +349,19 @@ function Section({
   count,
   tag,
   reveal = false,
+  defaultOpen = true,
   children,
 }: {
   title: string;
   count?: number;
   /** Set after the title, like the count. */
   tag?: ReactNode;
-  /** Part of a review's result, so it takes part in `useRevealInOrder`. */
+  /** Part of a run's result, so it takes part in `useRevealInOrder`. */
   reveal?: boolean;
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section className={css.section} data-reveal-frame={reveal || undefined}>
       <button
@@ -608,79 +387,76 @@ function Section({
 const NOT_IN_DIFF = Number.MAX_SAFE_INTEGER;
 
 /**
- * The plain-language explanation of the change, in the same column as the
- * findings it sits among.
- *
- * Findings and explanations are different kinds of thing — one is a judgement
- * to act on, the other is orientation — so they live in separate sections and
- * never read as one list. Each per-file entry links to its file, which selects
- * it and scrolls the diff surface there, exactly as a finding's path does.
+ * An explanation of the change: the walkthrough, then an index of the notes it
+ * left on files. The notes are read at the top of each file in the diff, so
+ * here they start folded away, as a list to jump from or copy.
  */
-function ExplanationList() {
-  const explainMode = useAppStore((state) => state.explainMode);
-  const stored = useTab((state) => state.explanation);
-  const explaining = useTab((state) => state.explaining);
-  const reviewEngine = useAppStore((state) => state.reviewEngine);
+function Explanation({ stored }: { stored: StoredExplanation }) {
   const summary = useTab((state) => state.summary);
+  const { overall, cutShort } = stored.explanation;
 
-  // Diff order, so the explanations read in the order the files are scrolled
+  // Diff order, so the notes read in the order the files are scrolled
   // through. A path the model invented, or one that has since left the diff,
   // sorts last and is shown without a link rather than being dropped — the
   // text is still worth reading, it just has nowhere to jump.
   const files = useMemo(() => {
     const order = new Map((summary?.files ?? []).map((file, index) => [file.path, index]));
-    return (stored?.explanation.files ?? [])
+    return stored.explanation.files
       .filter((file) => file.explanation.trim())
       .map((file) => ({ ...file, index: order.get(file.path) ?? NOT_IN_DIFF }))
       .sort((a, b) => a.index - b.index);
   }, [stored, summary]);
 
-  // Turning the mode off hides the explanation without discarding it, so
-  // turning it back on costs nothing.
-  if (!explainMode || (!stored && !explaining)) return null;
-  const stale = stored != null && stored.mergeBase !== (summary?.mergeBase ?? null);
+  const stale = stored.mergeBase !== (summary?.mergeBase ?? null);
   const fileMarkdown = (file: { path: string; explanation: string }) =>
     `\`${file.path}\`\n\n${file.explanation.trim()}`;
 
   return (
-    <Section title="Explanation">
-      {stored ? (
+    <>
+      <Section title="Walkthrough" reveal>
         <div className={css.itemHead}>
           <Provenance
             engine={stored.engine}
             model={stored.model}
+            effort={stored.effort}
             createdAt={stored.createdAt}
             note={stale ? "from an older version of this diff" : undefined}
           />
-          <CopyButton
-            text={[stored.explanation.overall.trim(), ...files.map(fileMarkdown)].join("\n\n")}
-            label="Copy explanation"
-          />
+          <CopyButton text={overall} label="Copy walkthrough" />
         </div>
-      ) : null}
-      {explaining ? (
-        <>
-          <p className={css.status}>
-            <Spinner /> {stored ? "Explaining again…" : "Explaining the change in plain language…"}
+        {cutShort ? (
+          <p className={css.cutShort}>
+            <Icon name="warning" />
+            <span>
+              {ENGINE_LABELS[stored.engine]} hit its turn limit partway through, so it explained
+              from what it had read by then. Some files may be covered thinly, or not at all.
+            </span>
           </p>
-          <RunProgress kind="explain" agent={ENGINE_LABELS[reviewEngine]} />
-        </>
-      ) : null}
-      {stored ? (
-        <>
-          <GitHubMarkdown markdown={stored.explanation.overall} className={css.agentMarkdown} />
+        ) : null}
+        <GitHubMarkdown markdown={overall} className={css.agentMarkdown} />
+      </Section>
+      {files.length > 0 ? (
+        <Section title="File notes" count={files.length} defaultOpen={false} reveal>
+          <div className={css.itemActions}>
+            <span className={css.provenance}>Also shown at the top of each file in the diff.</span>
+            <CopyButton
+              className={css.actionsEnd}
+              text={files.map(fileMarkdown).join("\n\n")}
+              label="Copy file notes"
+            />
+          </div>
           {files.map((file) => (
             <div className={css.explainFile} key={file.path}>
               <div className={css.itemHead}>
                 <FindingLocation path={file.path} lines={null} />
-                <CopyButton text={fileMarkdown(file)} label="Copy file explanation" />
+                <CopyButton text={fileMarkdown(file)} label="Copy file note" />
               </div>
               <GitHubMarkdown markdown={file.explanation} className={css.agentMarkdown} />
             </div>
           ))}
-        </>
+        </Section>
       ) : null}
-    </Section>
+    </>
   );
 }
 
@@ -752,7 +528,7 @@ function Thread({
               <p className={css.commentPending}>
                 <Spinner /> Waiting for {agent}…
               </p>
-              <RunProgress kind="reply" agent={agent} />
+              <RunProgress kind="reply" />
             </>
           ) : null}
           <form
@@ -1249,19 +1025,21 @@ const REPLACE_FADE_MS = 240;
  * ends, its shapes leave (`handingOver`) before the result is let through, so
  * the new review never lands under a loader still on its way out.
  *
- * Meanwhile the reviews on screen (`shown`) fade out — the run's previous one,
- * on a re-review, and every other engine's — and the new set takes their place
- * unseen, while the shapes are still leaving: Markdown renders asynchronously,
- * and this way it has settled before anything comes in, rather than landing in
- * the middle of it. `revealed` counts results let through, which is what sets
- * off `useRevealInOrder`.
+ * Meanwhile the results on screen (`shown`) fade out — the run's previous one,
+ * and on the review tab every other engine's — and the new set takes their
+ * place unseen, while the shapes are still leaving: Markdown renders
+ * asynchronously, and this way it has settled before anything comes in, rather
+ * than landing in the middle of it. `revealed` counts results let through,
+ * which is what sets off `useRevealInOrder`.
+ *
+ * `label` is whatever the loader says about the run; it is kept as it was when
+ * the run started, so the status text doesn't change as it ends.
  */
-function useRunHandover<T>(running: boolean, rerunning: boolean, stored: T) {
+function useRunHandover<T, L>(running: boolean, label: L, stored: T) {
   const [wasRunning, setWasRunning] = useState(running);
   const [handingOver, setHandingOver] = useState(false);
   const [held, setHeld] = useState(false);
-  // Fixed for the run, so the status text doesn't change as it ends.
-  const [rerun, setRerun] = useState(rerunning);
+  const [heldLabel, setHeldLabel] = useState(label);
   // A new run gets a new loader, even one started while the last was leaving.
   const [runId, setRunId] = useState(0);
   const [shown, setShown] = useState(stored);
@@ -1274,7 +1052,7 @@ function useRunHandover<T>(running: boolean, rerunning: boolean, stored: T) {
     setHandingOver(holding);
     setHeld(holding);
     if (running) {
-      setRerun(rerunning);
+      setHeldLabel(label);
       setRunId((id) => id + 1);
     }
   }
@@ -1288,7 +1066,7 @@ function useRunHandover<T>(running: boolean, rerunning: boolean, stored: T) {
 
   return {
     handingOver,
-    rerun,
+    label: heldLabel,
     runId,
     shown,
     revealed,
@@ -1348,57 +1126,236 @@ function useRevealInOrder(ref: RefObject<HTMLElement | null>, revealed: number) 
   }, [ref, revealed]);
 }
 
-export function ReviewPanel() {
-  const pr = useTab((state) => state.pr);
-  // A PR opening from the list gets its tab straight away, loading, so the
-  // panel doesn't switch tabs under the reader when the PR arrives.
-  const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
+/**
+ * The loader for an agent run, from its start until its shapes have left: the
+ * scene, a caption, and the run's progress line.
+ *
+ * One shape per changed file, within reason: enough to keep the scene busy on
+ * a one-file change, few enough not to crowd it on a big one. The agents can't
+ * say how far along they are, so it runs open-ended; the line under it says
+ * whether the run is still writing anything.
+ */
+function RunLoader({
+  kind,
+  running,
+  handingOver,
+  runId,
+  caption,
+  onLeft,
+}: {
+  kind: AgentRunKind;
+  running: boolean;
+  handingOver: boolean;
+  runId: number;
+  caption: string;
+  onLeft: () => void;
+}) {
+  const fileCount = useTab((state) => state.summary?.files.length ?? 0);
+  return (
+    <Fold open appear className={css.notice}>
+      <ReviewLoader
+        key={runId}
+        count={Math.min(9, Math.max(5, fileCount))}
+        leaving={!running}
+        onLeft={onLeft}
+      />
+      <p
+        className={
+          handingOver
+            ? `${css.status} ${css.loaderStatus} ${css.statusLeaving}`
+            : `${css.status} ${css.loaderStatus}`
+        }
+      >
+        {caption} This can take a few minutes on a large change.
+      </p>
+      <RunProgress kind={kind} className={css.loaderProgress} />
+    </Fold>
+  );
+}
+
+/**
+ * The agent, model and effort the next review or explanation runs with. Both
+ * tabs share them, and a run in flight keeps whatever it started with, so they
+ * can change at any time.
+ */
+function AgentSettings() {
   const reviewEngine = useAppStore((state) => state.reviewEngine);
-  const reviews = useTab((state) => state.reviews);
-  // The selected engine's review is only what the next run follows up on;
-  // every engine's is shown.
-  const stored = reviews[reviewEngine] ?? null;
-  const reviewing = useTab((state) => state.reviewing);
-  const reReviewing = useTab((state) => state.reReviewing);
-  const reviewError = useTab((state) => state.reviewError);
-  const explainMode = useAppStore((state) => state.explainMode);
-  const explaining = useTab((state) => state.explaining);
-  const explainError = useTab((state) => state.explainError);
   const reviewModel = useAppStore((state) => state.reviewModel);
   const reviewEffort = useAppStore((state) => state.reviewEffort);
-  const patch = useTab((state) => state.patch);
-  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
-  const fileCount = useTab((state) => state.summary?.files.length ?? 0);
-  const runReview = useTab((state) => state.runReview);
-  const runReReview = useTab((state) => state.runReReview);
   const setReviewEngine = useAppStore((state) => state.setReviewEngine);
   const setReviewModel = useAppStore((state) => state.setReviewModel);
   const setReviewEffort = useAppStore((state) => state.setReviewEffort);
-  const setExplainMode = useAppStore((state) => state.setExplainMode);
-  const dismissReviewError = useTab((state) => state.dismissReviewError);
-  const dismissExplainError = useTab((state) => state.dismissExplainError);
   const agentModels = useAgentModels(reviewEngine);
 
-  const busy = reviewing || reReviewing || explaining;
+  return (
+    <div className={css.controls}>
+      <Popover.Root>
+        <Popover.Trigger
+          render={<Button variant="ghost" size="sm" className={css.settingsTrigger} />}
+          title="Choose the agent, model and effort for reviews and explanations"
+        >
+          <Icon name="sliders" />
+          <span className={css.settingsSummary}>
+            {[
+              ENGINE_LABELS[reviewEngine],
+              reviewModel.trim() || "default model",
+              agentModels.efforts.includes(reviewEffort) ? `${reviewEffort} effort` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          <Icon name="chevron-down" />
+        </Popover.Trigger>
+        <Popover.Popup align="start" className={css.settingsPopup}>
+          <Popover.Title className={css.settingsTitle}>Agent</Popover.Title>
+          <div className={css.settingsField}>
+            <span className={css.settingsLabel}>Engine</span>
+            <Select
+              size="sm"
+              aria-label="Agent engine"
+              items={ENGINE_OPTIONS}
+              value={reviewEngine}
+              onValueChange={(engine) => engine && setReviewEngine(engine)}
+            />
+          </div>
+          <div className={css.settingsField}>
+            <span className={css.settingsLabel}>Model</span>
+            {/*
+             * Keyed on the engine so switching starts the field's internal query
+             * state fresh alongside the engine's own remembered model.
+             */}
+            <Combobox
+              key={reviewEngine}
+              ariaLabel="Model"
+              value={reviewModel.trim() ? reviewModel : null}
+              groups={[
+                {
+                  label: agentModels.fromCatalog ? "Available models" : "Suggestions",
+                  items: agentModels.models,
+                },
+              ]}
+              onChange={setReviewModel}
+              placeholder="default model"
+              className={css.modelField}
+              commitTyped
+            />
+          </div>
+          <div className={css.settingsField}>
+            <span className={css.settingsLabel}>Effort</span>
+            <Select
+              size="sm"
+              aria-label="Reasoning effort"
+              items={[
+                { value: "", label: "default effort" },
+                ...agentModels.efforts.map((level) => ({
+                  value: level,
+                  label: `${level} effort`,
+                })),
+              ]}
+              value={agentModels.efforts.includes(reviewEffort) ? reviewEffort : ""}
+              onValueChange={(level) => setReviewEffort(level ?? "")}
+            />
+          </div>
+          <p className={css.settingsHint}>
+            Leave the model blank to use the CLI's own default. Reviews and explanations share
+            these.
+          </p>
+        </Popover.Popup>
+      </Popover.Root>
+    </div>
+  );
+}
+
+/**
+ * One button that changes job: the first press reviews, and once a review
+ * exists it becomes a follow-up — check the stored findings against the
+ * current code, then look for new problems.
+ */
+function ReviewButton() {
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const hasReview = useTab((state) => state.reviews[reviewEngine] != null);
+  const reviewing = useTab((state) => state.reviewing);
+  const reReviewing = useTab((state) => state.reReviewing);
+  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
+  const runReview = useTab((state) => state.runReview);
+  const runReReview = useTab((state) => state.runReReview);
+  const busy = reviewing || reReviewing;
+  const agent = ENGINE_LABELS[reviewEngine];
+
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      onClick={() => void (hasReview ? runReReview() : runReview())}
+      disabled={busy || !hasDiff}
+      title={
+        hasDiff
+          ? hasReview
+            ? `Ask ${agent} to check that its previous findings were addressed, then review the changed code for new issues`
+            : `Ask ${agent} to review this comparison`
+          : "Nothing to review until a comparison has changes"
+      }
+    >
+      {/* No spinner while busy: the loader below already shows the run. */}
+      {busy ? null : <Icon name="sparkle" className={css.actionIcon} />}
+      {reviewing
+        ? "Reviewing…"
+        : reReviewing
+          ? "Re-reviewing…"
+          : hasReview
+            ? "Re-review"
+            : "Review"}
+    </Button>
+  );
+}
+
+function ExplainButton() {
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const hasExplanation = useTab((state) => state.explanation != null);
+  const explaining = useTab((state) => state.explaining);
+  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
+  const runExplain = useTab((state) => state.runExplain);
+
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      onClick={() => void runExplain()}
+      disabled={explaining || !hasDiff}
+      title={
+        hasDiff
+          ? `Ask ${ENGINE_LABELS[reviewEngine]} to walk through this comparison, and leave a note on each file that needs one`
+          : "Nothing to explain until a comparison has changes"
+      }
+    >
+      {explaining ? null : <Icon name="sparkle" className={css.actionIcon} />}
+      {explaining ? "Explaining…" : hasExplanation ? "Re-explain" : "Explain"}
+    </Button>
+  );
+}
+
+/** The review: every engine's findings, the previous ones' verdicts, and the conclusion. */
+function ReviewTab() {
+  const pr = useTab((state) => state.pr);
+  const reviews = useTab((state) => state.reviews);
+  const reviewing = useTab((state) => state.reviewing);
+  const reReviewing = useTab((state) => state.reReviewing);
+  const reviewError = useTab((state) => state.reviewError);
+  const patch = useTab((state) => state.patch);
+  const dismissReviewError = useTab((state) => state.dismissReviewError);
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const agent = ENGINE_LABELS[useTab((state) => runningEngine(state, "review")) ?? reviewEngine];
+
   const running = reviewing || reReviewing;
-  const { handingOver, rerun, runId, shown, revealed, shapesLeft } = useRunHandover(
+  const { handingOver, label, runId, shown, revealed, shapesLeft } = useRunHandover(
     running,
-    reReviewing,
+    reReviewing
+      ? `${agent} is checking whether its previous findings were addressed, then reviewing the changed code for new issues.`
+      : `${agent} is reading the diff and the surrounding code.`,
     reviews,
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
-  const [tab, setTab] = useState(persistedTab);
-  // With no PR there is only the one tab, whatever was last remembered.
-  const activeTab: PanelTab = hasPr ? tab : "ai";
-  function selectTab(next: PanelTab) {
-    setTab(next);
-    try {
-      localStorage.setItem(TAB_KEY, next);
-    } catch {
-      // The remembered tab is a convenience, never a dependency.
-    }
-  }
 
   const sources = useMemo(() => reviewsNewestFirst(shown), [shown]);
   const findings = useMemo(
@@ -1424,6 +1381,170 @@ export function ReviewPanel() {
   const followUps = sources.length > 0 && sources.every((source) => source.resolutions?.length);
 
   return (
+    <>
+      <AgentSettings />
+      {/* While a finished run hands over, the review it replaces fades out. */}
+      <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
+        {reviewError ? (
+          <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
+        ) : null}
+
+        {running || handingOver ? (
+          <RunLoader
+            kind="review"
+            running={running}
+            handingOver={handingOver}
+            runId={runId}
+            caption={label}
+            onLeft={shapesLeft}
+          />
+        ) : null}
+
+        {latest ? (
+          <>
+            <Section
+              title={sources.length > 1 ? "Reviews" : "Review"}
+              count={sources.length > 1 ? sources.length : undefined}
+              reveal
+            >
+              <ul className={css.findings}>
+                {sources.map((source) => (
+                  <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
+                ))}
+              </ul>
+            </Section>
+            {resolutions.length > 0 ? (
+              <Section title="Previous findings" count={resolutions.length} reveal>
+                <ul className={css.findings}>
+                  {resolutions.map(({ resolution, source }) => (
+                    <Resolution
+                      key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
+                      resolution={resolution}
+                      source={source}
+                    />
+                  ))}
+                </ul>
+              </Section>
+            ) : null}
+            <Section title={followUps ? "New findings" : "Findings"} count={findings.length} reveal>
+              {findings.length === 0 ? (
+                <p className={css.status}>
+                  {followUps
+                    ? "No new findings beyond the previous review."
+                    : "No findings — the diff came back clean."}
+                </p>
+              ) : (
+                <ul className={css.findings}>
+                  {findings.map(({ finding, source }) => (
+                    <Finding
+                      key={sourcedKey(source.engine, findingThreadKey(finding))}
+                      finding={finding}
+                      source={source}
+                      patch={patch}
+                      pr={pr}
+                    />
+                  ))}
+                </ul>
+              )}
+            </Section>
+            {/* Keyed on the review, so a fresh one resets the draft and the
+                preselected verdict to what it recommends. */}
+            <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
+          </>
+        ) : null}
+        <Fold
+          open={sources.length === 0 && !running && !handingOver && !reviewError}
+          className={css.notice}
+        >
+          <p className={css.status}>
+            Nothing runs until you press Review. Every engine's findings land here, kept per
+            comparison for when you come back.
+          </p>
+        </Fold>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The explanation: a walkthrough of the change for a reader who hasn't seen
+ * it, written to be skimmed. Its notes on individual files go to the diff.
+ */
+function ExplainTab() {
+  const stored = useTab((state) => state.explanation);
+  const explaining = useTab((state) => state.explaining);
+  const explainError = useTab((state) => state.explainError);
+  const dismissExplainError = useTab((state) => state.dismissExplainError);
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const agent = ENGINE_LABELS[useTab((state) => runningEngine(state, "explain")) ?? reviewEngine];
+
+  const { handingOver, label, runId, shown, revealed, shapesLeft } = useRunHandover(
+    explaining,
+    `${agent} is reading the change and the code around it.`,
+    stored,
+  );
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useRevealInOrder(bodyRef, revealed);
+
+  return (
+    <>
+      <AgentSettings />
+      <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
+        {explainError ? (
+          <ErrorNotice error={explainError} onDismiss={dismissExplainError} className={css.error} />
+        ) : null}
+        {explaining || handingOver ? (
+          <RunLoader
+            kind="explain"
+            running={explaining}
+            handingOver={handingOver}
+            runId={runId}
+            caption={label}
+            onLeft={shapesLeft}
+          />
+        ) : null}
+        {/* Keyed so a fresh explanation starts with its sections as they open. */}
+        {shown ? <Explanation key={shown.createdAt} stored={shown} /> : null}
+        <Fold open={!shown && !explaining && !handingOver && !explainError} className={css.notice}>
+          <p className={css.status}>
+            Nothing runs until you press Explain. You get a walkthrough of the change here, and a
+            short note at the top of each file in the diff that needs one.
+          </p>
+        </Fold>
+      </div>
+    </>
+  );
+}
+
+/**
+ * A tab's icon, or a spinner while its run is going, so a run shows from the
+ * other tabs too. The icon gives way when the panel is narrow; the spinner
+ * stays, being the part that says something.
+ */
+function TabIcon({ name, running }: { name: "sparkle" | "info"; running: boolean }) {
+  return running ? <Spinner /> : <Icon name={name} className={css.tabIcon} />;
+}
+
+export function ReviewPanel() {
+  const pr = useTab((state) => state.pr);
+  // A PR opening from the list gets its tab straight away, loading, so the
+  // panel doesn't switch tabs under the reader when the PR arrives.
+  const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
+  const reviewing = useTab((state) => state.reviewing || state.reReviewing);
+  const explaining = useTab((state) => state.explaining);
+  const [tab, setTab] = useState(persistedTab);
+  // With no PR there is no PR tab, whatever was last remembered.
+  const activeTab: PanelTab = tab === "pr" && !hasPr ? "ai" : tab;
+  function selectTab(next: PanelTab) {
+    setTab(next);
+    try {
+      localStorage.setItem(TAB_KEY, next);
+    } catch {
+      // The remembered tab is a convenience, never a dependency.
+    }
+  }
+
+  return (
     <Tabs.Root
       className={css.panel}
       value={activeTab}
@@ -1436,263 +1557,39 @@ export function ReviewPanel() {
               <Icon name="pull-request" className={css.tabIcon} /> PR
             </Tabs.Tab>
           ) : null}
+          {/* The short labels take over when the panel is too narrow for the long ones. */}
           <Tabs.Tab value="ai">
-            <Icon name="sparkle" className={css.tabIcon} /> AI review
+            <TabIcon name="sparkle" running={reviewing} />{" "}
+            <span className={css.tabLong}>AI review</span>
+            <span className={css.tabShort}>Review</span>
+          </Tabs.Tab>
+          <Tabs.Tab value="explain">
+            <TabIcon name="info" running={explaining} />{" "}
+            <span className={css.tabLong}>AI explain</span>
+            <span className={css.tabShort}>Explain</span>
           </Tabs.Tab>
         </Tabs.List>
         <div className={css.tabActions}>
           {activeTab === "pr" ? (
             <PrRefreshButton />
+          ) : activeTab === "ai" ? (
+            <ReviewButton />
           ) : (
-            /* One button that changes job: the first press reviews, and once a
-               review exists it becomes a follow-up — check the stored findings
-               against the current code, then look for new problems. */
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => void (stored ? runReReview() : runReview())}
-              disabled={busy || !hasDiff}
-              title={
-                hasDiff
-                  ? stored
-                    ? `Ask ${ENGINE_LABELS[reviewEngine]} to check that its previous findings were addressed, then review the changed code for new issues`
-                    : `Ask ${ENGINE_LABELS[reviewEngine]} to review this comparison`
-                  : "Nothing to review until a comparison has changes"
-              }
-            >
-              {/* No spinner while busy: the loader below already shows the run. */}
-              {busy ? null : <Icon name="sparkle" />}
-              {reviewing
-                ? "Reviewing…"
-                : reReviewing
-                  ? "Re-reviewing…"
-                  : explaining
-                    ? "Explaining…"
-                    : stored
-                      ? "Re-review"
-                      : "Review"}
-            </Button>
+            <ExplainButton />
           )}
         </div>
       </div>
-      {/* Both stay mounted so drafts and open composers survive a tab switch. */}
+      {/* All stay mounted so drafts, open composers and runs' loaders survive a tab switch. */}
       {hasPr ? (
         <Tabs.Panel value="pr" keepMounted className={css.tabPanel}>
           {pr ? <PrSection pr={pr} /> : <PrSkeleton />}
         </Tabs.Panel>
       ) : null}
       <Tabs.Panel value="ai" keepMounted className={css.tabPanel}>
-        <div className={css.controls}>
-          <Popover.Root>
-            <Popover.Trigger
-              render={<Button variant="ghost" size="sm" className={css.settingsTrigger} />}
-              disabled={busy}
-              title="Choose the review agent, model and effort"
-            >
-              <Icon name="sliders" />
-              <span className={css.settingsSummary}>
-                {[
-                  ENGINE_LABELS[reviewEngine],
-                  reviewModel.trim() || "default model",
-                  agentModels.efforts.includes(reviewEffort) ? `${reviewEffort} effort` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-              <Icon name="chevron-down" />
-            </Popover.Trigger>
-            <Popover.Popup align="start" className={css.settingsPopup}>
-              <Popover.Title className={css.settingsTitle}>Review agent</Popover.Title>
-              <div className={css.settingsField}>
-                <span className={css.settingsLabel}>Engine</span>
-                <Select
-                  size="sm"
-                  aria-label="Review engine"
-                  items={ENGINE_OPTIONS}
-                  value={reviewEngine}
-                  onValueChange={(engine) => engine && setReviewEngine(engine)}
-                  disabled={busy}
-                />
-              </div>
-              <div className={css.settingsField}>
-                <span className={css.settingsLabel}>Model</span>
-                {/*
-                 * Keyed on the engine so switching starts the field's internal query
-                 * state fresh alongside the engine's own remembered model.
-                 */}
-                <Combobox
-                  key={reviewEngine}
-                  ariaLabel="Model"
-                  value={reviewModel.trim() ? reviewModel : null}
-                  groups={[
-                    {
-                      label: agentModels.fromCatalog ? "Available models" : "Suggestions",
-                      items: agentModels.models,
-                    },
-                  ]}
-                  onChange={setReviewModel}
-                  placeholder="default model"
-                  className={css.modelField}
-                  commitTyped
-                  disabled={busy}
-                />
-              </div>
-              <div className={css.settingsField}>
-                <span className={css.settingsLabel}>Effort</span>
-                <Select
-                  size="sm"
-                  aria-label="Reasoning effort"
-                  items={[
-                    { value: "", label: "default effort" },
-                    ...agentModels.efforts.map((level) => ({
-                      value: level,
-                      label: `${level} effort`,
-                    })),
-                  ]}
-                  value={agentModels.efforts.includes(reviewEffort) ? reviewEffort : ""}
-                  onValueChange={(level) => setReviewEffort(level ?? "")}
-                  disabled={busy}
-                />
-              </div>
-              <p className={css.settingsHint}>
-                Leave the model blank to use the CLI's own default.
-              </p>
-            </Popover.Popup>
-          </Popover.Root>
-          <Tooltip content="Also explain the change in plain language, listed here with the findings">
-            <span className={css.explainToggle}>
-              <Checkbox
-                checked={explainMode}
-                onCheckedChange={(checked) => setExplainMode(checked)}
-                disabled={busy}
-              >
-                Explain
-              </Checkbox>
-            </span>
-          </Tooltip>
-        </div>
-
-        {/* While a finished run hands over, the review it replaces fades out. */}
-        <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
-          {reviewError ? (
-            <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
-          ) : null}
-
-          {/* Its own box: the two agents run independently, so one can fail
-              while the other returns something worth reading. */}
-          {explainError ? (
-            <ErrorNotice
-              error={explainError}
-              onDismiss={dismissExplainError}
-              className={css.error}
-            />
-          ) : null}
-
-          {/* Above the review: it is orientation, and orientation comes before
-              judgement. It also stands on its own — a review need not exist,
-              and the explanation outlives whichever engine wrote it. */}
-          <ExplanationList />
-
-          {/* One shape per changed file, within reason: enough to keep the scene
-              busy on a one-file change, few enough not to crowd it on a big one.
-              The agents can't say how far along they are, so it runs open-ended;
-              the line under it says whether the run is still writing anything. */}
-          {running || handingOver ? (
-            <Fold open appear className={css.notice}>
-              <ReviewLoader
-                key={runId}
-                count={Math.min(9, Math.max(5, fileCount))}
-                leaving={!running}
-                onLeft={shapesLeft}
-              />
-              <p
-                className={
-                  handingOver
-                    ? `${css.status} ${css.loaderStatus} ${css.statusLeaving}`
-                    : `${css.status} ${css.loaderStatus}`
-                }
-              >
-                {rerun
-                  ? `${ENGINE_LABELS[reviewEngine]} is checking whether its previous findings were addressed, then reviewing the changed code for new issues.`
-                  : `${ENGINE_LABELS[reviewEngine]} is reading the diff and the surrounding code.`}{" "}
-                This can take a few minutes on a large change.
-              </p>
-              {/* Cancel stops the explanation too: one press started both. */}
-              <RunProgress
-                kind="review"
-                cancels={["review", "explain"]}
-                agent={ENGINE_LABELS[reviewEngine]}
-                className={css.loaderProgress}
-              />
-            </Fold>
-          ) : null}
-
-          {latest ? (
-            <>
-              <Section
-                title={sources.length > 1 ? "Reviews" : "Review"}
-                count={sources.length > 1 ? sources.length : undefined}
-                reveal
-              >
-                <ul className={css.findings}>
-                  {sources.map((source) => (
-                    <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
-                  ))}
-                </ul>
-              </Section>
-              {resolutions.length > 0 ? (
-                <Section title="Previous findings" count={resolutions.length} reveal>
-                  <ul className={css.findings}>
-                    {resolutions.map(({ resolution, source }) => (
-                      <Resolution
-                        key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
-                        resolution={resolution}
-                        source={source}
-                      />
-                    ))}
-                  </ul>
-                </Section>
-              ) : null}
-              <Section
-                title={followUps ? "New findings" : "Findings"}
-                count={findings.length}
-                reveal
-              >
-                {findings.length === 0 ? (
-                  <p className={css.status}>
-                    {followUps
-                      ? "No new findings beyond the previous review."
-                      : "No findings — the diff came back clean."}
-                  </p>
-                ) : (
-                  <ul className={css.findings}>
-                    {findings.map(({ finding, source }) => (
-                      <Finding
-                        key={sourcedKey(source.engine, findingThreadKey(finding))}
-                        finding={finding}
-                        source={source}
-                        patch={patch}
-                        pr={pr}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </Section>
-              {/* Keyed on the review, so a fresh one resets the draft and the
-                  preselected verdict to what it recommends. */}
-              <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
-            </>
-          ) : null}
-          <Fold
-            open={sources.length === 0 && !running && !handingOver && !reviewError}
-            className={css.notice}
-          >
-            <p className={css.status}>
-              Nothing runs until you press Review. Every engine's findings land here, kept per
-              comparison for when you come back.
-            </p>
-          </Fold>
-        </div>
+        <ReviewTab />
+      </Tabs.Panel>
+      <Tabs.Panel value="explain" keepMounted className={css.tabPanel}>
+        <ExplainTab />
       </Tabs.Panel>
     </Tabs.Root>
   );

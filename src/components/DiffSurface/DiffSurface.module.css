@@ -179,3 +179,79 @@
     opacity: 0;
   }
 }
+
+/*
+ * An explanation's note at the top of a file. The renderer slots it into the
+ * code column, where it would inherit the code's font and spacing, so it sets
+ * its own. Tinted the info colour, apart from the accent that marks the
+ * selected file and from the added/deleted greens and reds.
+ */
+.fileNote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 72ch;
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--tk-text-sm);
+  line-height: var(--tk-leading-reading);
+  color: var(--text);
+  white-space: normal;
+  background: color-mix(in oklab, var(--tk-info-soft) 60%, var(--bg));
+  border-left: 2px solid var(--tk-info);
+  border-radius: var(--radius);
+}
+
+.fileNoteLabel {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tk-info);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fileNoteStale {
+  font-weight: 400;
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.fileNoteStale::before {
+  content: "· ";
+}
+
+.fileNoteText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fileNoteText > * {
+  margin: 0 0 var(--space-1);
+}
+
+.fileNoteText > :last-child {
+  margin-bottom: 0;
+}
+
+.fileNoteText ul,
+.fileNoteText ol {
+  padding-left: 1.25em;
+}
+
+.fileNoteText li::marker {
+  color: var(--accent);
+}
+
+.fileNoteText :global(.tk-code) {
+  overflow-wrap: anywhere;
+}
+
+.fileNoteText a {
+  color: var(--accent);
+}
