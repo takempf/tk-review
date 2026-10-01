@@ -70,6 +70,8 @@ export interface RepoInfo {
   /** `null` when HEAD is detached. */
   currentBranch: string | null;
   defaultBranch: string | null;
+  /** Who `gh` is signed in as on the repository's GitHub host; `null` with none. */
+  githubLogin: string | null;
 }
 
 export interface Branch {

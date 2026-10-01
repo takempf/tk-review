@@ -1,17 +1,37 @@
 # tk-review
 
-A local diff viewer for reviewing branches the way a pull request reads. Point it at a git repository on your machine, pick two refs, and read the changes file by file. Nothing leaves your machine and there's no remote to authenticate against.
+A desktop app for reviewing code changes the way a pull request reads. Point it at a git repository on your machine, then open one of its GitHub pull requests or compare any two branches, and read the changes file by file. An agent (Claude Code or Codex, through their own CLIs) can review the change or explain it, and you can send what it found back to the PR.
 
-Diffs are rendered with [`@pierre/diffs`](https://diffs.com/), through its `CodeView` surface: every changed file lives in one virtualized scroll region, the way a pull request reads. Git work happens in Rust by shelling out to the system `git` binary, so rename detection, merge-base resolution, and blob reads all behave exactly as git does.
+Diffs are rendered with [`@pierre/diffs`](https://diffs.com/), through its `CodeView` surface: every changed file lives in one virtualized scroll region, the way a pull request reads. Git work happens in Rust by shelling out to the system `git` binary, so rename detection, merge-base resolution, and blob reads all behave exactly as git does. Comparing branches works entirely offline. GitHub goes through the `gh` CLI, and the agents through `claude` and `codex`, so each uses the login you already have and there are no API keys to set up.
 
 ## Running it
 
-Requires Node with pnpm, and a Rust toolchain for the Tauri shell.
+It's built with [Tauri](https://tauri.app/) and used on macOS.
+
+You'll need:
+
+- Node 20.19+ or 22.12+ (what Vite 8 asks for), with [pnpm](https://pnpm.io/installation)
+- A Rust toolchain from [rustup](https://rustup.rs/), plus Tauri's [system prerequisites](https://tauri.app/start/prerequisites/) (on macOS, the Xcode Command Line Tools)
+- `git` on your PATH
+
+And for the parts that talk to other services, any of these you want to use:
+
+- [`gh`](https://cli.github.com/), logged in with `gh auth login`, to list, open and comment on pull requests
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) and/or [Codex](https://github.com/openai/codex) (`codex`), each logged in, for agent reviews and explanations
+
+The UI is built on [tk-design-system](https://github.com/takempf/tk-design-system), which is read from source in a checkout beside this one rather than installed from a registry. Clone both into the same folder:
 
 ```bash
+git clone https://github.com/takempf/tk-review.git
+git clone https://github.com/takempf/tk-design-system.git   # must sit next to tk-review
+(cd tk-design-system && npm install)
+
+cd tk-review
 pnpm install
 pnpm app        # tauri dev: builds the Rust binary and opens the window
 ```
+
+The first `pnpm app` compiles the whole Rust side, so give it a few minutes. Once the window is up, **Open repository…** picks a local clone. Its GitHub pull requests are listed if `gh` can see them, and **Compare branches** compares any two refs instead. Changes in the design system checkout show up live, since nothing is built in between.
 
 Other commands:
 
@@ -28,7 +48,7 @@ pnpm check      # biome lint + format, with fixes applied
 For the Rust side, from `src-tauri/`:
 
 ```bash
-cargo test      # 13 tests, including ones that build real repos in a temp dir
+cargo test      # including tests that build real repos in a temp dir
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -55,21 +75,31 @@ src/
   components/           one folder per component, each with a CSS module
 src-tauri/src/
   git.rs                the git layer and its tests
+  github.rs             pull requests through the gh CLI: list, open, refresh, post
   review.rs             the agent CLI layer (claude, codex): prompt, spawn, parsing
+  voice.md              how the explanations should sound (see Agent explanation)
+  runs.rs               agent runs in flight, so they can be cancelled and timed out
+  models.rs             model suggestions, read from each CLI's own cache
   commands.rs           the Tauri commands
   error.rs              GitError, serialized with a stable `kind` for the frontend
 ```
 
-The git layer returns plain serializable structs and knows nothing about the UI. That's deliberate: an LLM analysis layer needs the same `DiffSummary` and per-file contents, and `@pierre/diffs` can anchor arbitrary React content to diff lines through its annotation API, so that feature should slot in beside `ipc/` rather than through it.
+The git layer returns plain serializable structs and knows nothing about the UI. The agent layer reads the same `DiffSummary` and patch the diff surface does, and what it writes back reaches the diff through `@pierre/diffs`' annotation API (the file notes) rather than through the git layer.
+
+## Pull requests
+
+The home screen lists the open pull requests of the repository's GitHub remote, through `gh`, with a filter that also takes a pasted PR link. Opening one fetches its head and base refs into the local clone and compares them the same way as any two branches (below). Each pull request or comparison opens in a tab of its own, so an agent can work through one while you read another.
+
+The review panel's **PR** tab shows the description and the existing discussion. Findings can be sent to the PR as comments (inline on their lines where GitHub allows it), and a review's conclusion can be submitted as an approval, a request for changes, or a comment (only a comment on your own PR, since GitHub refuses the other two there).
 
 ## Agent review
 
-The third column holds an on-demand review: press **Review** and the whole
+The review panel's **AI review** tab holds an on-demand review: press **Review** and the whole
 comparison — including uncommitted changes when that box is ticked — goes to an
 agent, which reports a summary and per-file findings with severities. Clicking
 a finding's path jumps the diff surface to that file.
 
-Two engines are supported, picked from the selector above the results:
+Two engines are supported, picked in the agent settings above the results:
 **Claude Code** (`claude -p`) and **Codex** (`codex exec`, sandboxed
 read-only, with the review shape enforced through `--output-schema`). Both are
 shelled out to in headless mode, the same way the git layer shells out to
@@ -93,20 +123,27 @@ and the diff is read again for new issues (fixes introduce their own bugs).
 The prior findings live on under "Previous findings" with their verdicts and
 comment threads, kept apart from the new findings and their fresh threads.
 
-Reviews persist in localStorage, keyed per repo, ref pair, and engine — so
+Reviews persist in localStorage, keyed per repo, ref pair, engine, and the
+account `gh` is signed in as (so two GitHub accounts on one computer each see
+their own; whatever was stored before that, or with nobody signed in, goes to
+the first account to open the repo) — so
 revisiting a comparison shows its old reviews (with a timestamp), and a Codex
-review and a Claude review of the same diff sit side by side behind the engine
-selector. Each finding carries a comment thread, and there is one for the
+review and a Claude review of the same diff show together, each finding tagged
+with the engine and model that wrote it. Each finding carries a comment thread, and there is one for the
 review as a whole: replies come from the engine that wrote the review, in
 character as the reviewer. Threads are stateless on the CLI side — every reply
 request re-sends the finding, its file's diff, and the conversation so far —
 so they keep working across app restarts without depending on CLI session
 files.
 
-Claude runs are capped at 30 agentic turns. A run that hits the cap has usually
+Claude runs get a turn budget that grows with the diff (30, plus one per two
+files, up to 100). A run that hits it has usually
 done most of its reading, so instead of failing, the session is resumed once
 with its tools taken away (`--resume <id> --tools ""`) and the model asked to
 answer from what it has. A review rescued this way is marked as cut short.
+While a run goes, the panel shows how long it's been going and when the CLI
+last wrote anything, next to a **Cancel** button. A run that writes nothing for
+15 minutes, or is still going after an hour, is stopped.
 When something does fail, the panel leads with a sentence on what went wrong
 and keeps the CLI's raw output (the JSON envelope, or the codex or `gh` log)
 behind **Show details**, with a copy button for bug reports. The dev harness
@@ -138,7 +175,7 @@ register from. Edit it to change the tone without touching the prompt.
 One explanation is kept per comparison, whichever engine wrote it, alongside
 the reviews in localStorage.
 
-
+## Rendering
 
 There is deliberately no file-size limit. [Pierre's write-up on rendering
 diffs](https://pierre.computer/writing/on-rendering-diffs) sets the bar at "you
@@ -180,6 +217,5 @@ when someone expands the context around a hunk.
   commit was recorded, and ones whose commit a rebase rewrote, are placed by
   time instead.
 - `j` and `k` move through the file list, which scrolls the surface to that file.
-  The viewed checkboxes persist per repo and ref pair.
 - Paths are parsed NUL-delimited throughout, so filenames containing spaces or
   newlines survive.

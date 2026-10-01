@@ -20,6 +20,7 @@ import {
 import type { LineSpan } from "../lib/lineSpan";
 import type { PrPostLocation } from "../lib/prComment";
 import { invalidatePrLists } from "../lib/queries";
+import { storageRoot } from "./account";
 import { recordReview } from "./history";
 
 /**
@@ -575,7 +576,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           // costs the list, not the review.
           gitApi.listCommits(repo.root, summary.mergeBase, target).catch(() => null),
         ]);
-        const viewed = readViewed(repo.root, base, viewedScope(compare, worktree));
+        const viewed = readViewed(storageRoot(repo), base, viewedScope(compare, worktree));
         const previous = get().selectedPath;
         set({
           summary,
@@ -586,8 +587,8 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           expanded: new Set(),
           loadingDiff: false,
           // Reviews belong to one comparison; load what this one has on record.
-          reviews: readReviews(repo.root, base, viewedScope(compare, worktree)),
-          explanation: readExplanation(repo.root, base, viewedScope(compare, worktree)),
+          reviews: readReviews(storageRoot(repo), base, viewedScope(compare, worktree)),
+          explanation: readExplanation(storageRoot(repo), base, viewedScope(compare, worktree)),
           reviewError: null,
           explainError: null,
           replyingTo: null,
@@ -858,7 +859,12 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
 
         set({ viewed: nextViewed, expanded: nextExpanded });
         if (base && compare) {
-          writeViewed(repo.root, base, viewedScope(compare, reviewsWorkingTree(get())), nextViewed);
+          writeViewed(
+            storageRoot(repo),
+            base,
+            viewedScope(compare, reviewsWorkingTree(get())),
+            nextViewed,
+          );
         }
       },
 
@@ -902,7 +908,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           );
           // Re-read rather than spread state: another engine's slot may have
           // changed while this review ran.
-          const current = readReviews(repo.root, base, scope);
+          const current = readReviews(storageRoot(repo), base, scope);
           const stored: StoredReview = {
             review: result,
             engine: reviewEngine,
@@ -915,9 +921,9 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             earlier: earlierThan(current[reviewEngine]),
           };
           const next = { ...current, [reviewEngine]: stored };
-          writeReviews(repo.root, base, scope, next);
+          writeReviews(storageRoot(repo), base, scope, next);
           if (pr) {
-            recordReview(repo.root, pr, {
+            recordReview(storageRoot(repo), pr, {
               engine: reviewEngine,
               createdAt: stored.createdAt,
               findings: result.findings.length,
@@ -968,7 +974,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             mergeBase: summary.mergeBase,
             createdAt: new Date().toISOString(),
           };
-          writeExplanation(repo.root, base, scope, stored);
+          writeExplanation(storageRoot(repo), base, scope, stored);
           set(stillCurrent() ? { explanation: stored, explaining: false } : { explaining: false });
         } catch (error) {
           set(
@@ -1036,7 +1042,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             const old = prior.threads[findingThreadKey(resolution.finding)];
             if (old?.length) threads[resolutionThreadKey(resolution.finding)] = old;
           }
-          const current = readReviews(repo.root, base, scope);
+          const current = readReviews(storageRoot(repo), base, scope);
           const stored: StoredReview = {
             review: {
               summary: result.summary,
@@ -1056,9 +1062,9 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             earlier: earlierThan(current[reviewEngine] ?? prior),
           };
           const next = { ...current, [reviewEngine]: stored };
-          writeReviews(repo.root, base, scope, next);
+          writeReviews(storageRoot(repo), base, scope, next);
           if (pr) {
-            recordReview(repo.root, pr, {
+            recordReview(storageRoot(repo), pr, {
               engine: reviewEngine,
               createdAt: stored.createdAt,
               findings: result.findings.length,
@@ -1089,8 +1095,8 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         // Reads and writes go through localStorage so a reply landing after the
         // user navigated away is kept for when they come back.
         const persist = (updated: StoredReview): ReviewsByEngine => {
-          const next = { ...readReviews(repo.root, base, scope), [engine]: updated };
-          writeReviews(repo.root, base, scope, next);
+          const next = { ...readReviews(storageRoot(repo), base, scope), [engine]: updated };
+          writeReviews(storageRoot(repo), base, scope, next);
           return next;
         };
 
@@ -1168,8 +1174,8 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         const stillCurrent = () =>
           get().compare === compare && reviewsWorkingTree(get()) === worktree;
         const persist = (updated: StoredReview): ReviewsByEngine => {
-          const next = { ...readReviews(repo.root, base, scope), [stored.engine]: updated };
-          writeReviews(repo.root, base, scope, next);
+          const next = { ...readReviews(storageRoot(repo), base, scope), [stored.engine]: updated };
+          writeReviews(storageRoot(repo), base, scope, next);
           return next;
         };
 
@@ -1222,8 +1228,8 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
               submitted: { url: posted.url, verdict, at: new Date().toISOString() },
             },
           };
-          const next = { ...readReviews(repo.root, base, scope), [stored.engine]: updated };
-          writeReviews(repo.root, base, scope, next);
+          const next = { ...readReviews(storageRoot(repo), base, scope), [stored.engine]: updated };
+          writeReviews(storageRoot(repo), base, scope, next);
           set(stillCurrent() ? { reviews: next, postingTo: null } : { postingTo: null });
           return true;
         } catch (error) {

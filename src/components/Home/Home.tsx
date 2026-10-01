@@ -19,6 +19,7 @@ import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
 import { buildStacks, groupStacks } from "../../lib/stacks";
 import { relativeTime } from "../../lib/time";
 import { warmHighlighter } from "../../lib/warmHighlighter";
+import { storageRoot } from "../../store/account";
 import { useAppStore } from "../../store/appStore";
 import { type ReviewedPr, readReviewedPrs } from "../../store/history";
 import type { PrPreview } from "../../store/tabStore";
@@ -57,11 +58,11 @@ const PR_REFERENCE = /(?:\/pulls?\/\d+)|(?:^[\w.-]+\/[\w.-]+#\d+$)/;
  * show and the full list fetch; the others read the cache for their counts,
  * and fetch when opened.
  */
-function usePrListings(root: string, shown: PrListFilter) {
+function usePrListings(root: string, login: string | null, shown: PrListFilter) {
   // Stacks come from the full list too: a filtered tab can leave out the PR
   // another one is stacked on.
   const listing = (filter: PrListFilter) => ({
-    ...prListQuery(root, filter),
+    ...prListQuery(root, login, filter),
     enabled: filter === shown || filter === "all",
   });
   return {
@@ -77,13 +78,16 @@ interface Reviewed {
   byNumber: Map<number, ReviewedPr>;
 }
 
-/** The latest review of each PR, keyed by number, for the badges on every tab. */
-function useReviewed(root: string): Reviewed {
+/**
+ * The latest review of each PR, keyed by number, for the badges on every tab.
+ * `scope` is the repository's storage root, so it is the signed-in account's.
+ */
+function useReviewed(scope: string): Reviewed {
   // Read once per visit: reviews are only written from the review screen.
   return useMemo(() => {
-    const reviewed = readReviewedPrs(root);
+    const reviewed = readReviewedPrs(scope);
     return { list: reviewed, byNumber: new Map(reviewed.map((entry) => [entry.number, entry])) };
-  }, [root]);
+  }, [scope]);
 }
 
 function matches(query: string, ...fields: (string | number | null | undefined)[]): boolean {
@@ -166,7 +170,7 @@ function ListMessage({ children }: { children: React.ReactNode }) {
   return <p className={css.message}>{children}</p>;
 }
 
-function PrBrowser({ root, name }: { root: string; name: string }) {
+function PrBrowser({ root, login }: { root: string; login: string | null }) {
   const openPr = useAppStore((state) => state.openPr);
   const compareBranches = useAppStore((state) => state.compareBranches);
   const tabs = useAppStore((state) => state.tabs);
@@ -176,7 +180,7 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
   const [opening, setOpening] = useState<string | null>(null);
   const [columns, setColumns] = useColumnVisibility();
   const defaultBranch = useAppStore((state) => state.repo?.defaultBranch ?? null);
-  const reviewed = useReviewed(root);
+  const reviewed = useReviewed(storageRoot({ root, githubLogin: login }));
   // A PR already open in a tab is carried into the review by its tab, from the
   // tab bar, rather than by its row: one name, one holder. One whose tab closed
   // on the way here gets its number and title back from that tab.
@@ -190,7 +194,7 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
 
   // The reviewed tab reads its open/closed state and freshness from the full list.
   const needed: PrListFilter = tab === "reviewed" ? "all" : tab;
-  const listings = usePrListings(root, needed);
+  const listings = usePrListings(root, login, needed);
   const listing = listings[needed];
   const all = listings.all;
   // Rows already on screen stay up while their lists refetch; only the
@@ -256,7 +260,6 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
     <div className={css.browser}>
       <header className={css.browserHeader}>
         <div className={css.titleBlock}>
-          <Eyebrow>{name}</Eyebrow>
           <h1 className={css.title}>
             {/* Becomes the review's back button, and comes back out of it. */}
             <ScreenMorph id="home" part="heading">
@@ -397,7 +400,7 @@ function Welcome() {
     <div className={css.welcome}>
       <Panel className={css.hero}>
         <SceneryWindow />
-        <Eyebrow>tk-review</Eyebrow>
+        <Eyebrow>TK Review</Eyebrow>
         <p className={css.heroTitle}>Read the change before you judge it.</p>
         <p className={css.heroText}>
           Open a local checkout to see its pull requests, review one with Claude Code or Codex, and
@@ -430,7 +433,11 @@ export function Home() {
   return (
     <main className={css.home}>
       {error ? <ErrorNotice error={error} onDismiss={dismissError} className={css.error} /> : null}
-      {repo ? <PrBrowser key={repo.root} root={repo.root} name={repo.name} /> : <Welcome />}
+      {repo ? (
+        <PrBrowser key={storageRoot(repo)} root={repo.root} login={repo.githubLogin} />
+      ) : (
+        <Welcome />
+      )}
     </main>
   );
 }

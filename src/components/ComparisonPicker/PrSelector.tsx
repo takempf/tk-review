@@ -30,6 +30,7 @@ export function PrSelector({
   onOpened?: () => void;
 }) {
   const root = useTab((state) => state.repo.root);
+  const login = useTab((state) => state.repo.githubLogin);
   const tab = useTabStore();
   const openPr = useAppStore((state) => state.openPr);
   const [openingPr, setOpeningPr] = useState(false);
@@ -38,7 +39,7 @@ export function PrSelector({
   // on whatever that last listed. Listing costs a `gh` round trip, so it never
   // fetches by itself: it re-lists each time the popup opens, since PRs are
   // raised and merged while the app is running.
-  const listing = useQuery({ ...prListQuery(root, "all"), enabled: false });
+  const listing = useQuery({ ...prListQuery(root, login, "all"), enabled: false });
   const prs = listing.data;
 
   function load(open: boolean) {

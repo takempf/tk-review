@@ -1,4 +1,5 @@
-import { MarkdownClient } from "@comark/react";
+import { MarkdownDocument } from "@comark/react";
+import { createMarkdownParser, type MarkdownDocument as ParsedMarkdown } from "comark";
 import emoji from "comark/plugins/emoji";
 import footnotes from "comark/plugins/footnotes";
 import DOMPurify from "dompurify";
@@ -10,12 +11,20 @@ import {
   isValidElement,
   type ReactNode,
   type SourceHTMLAttributes,
+  Suspense,
+  use,
+  useDeferredValue,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { Checkbox, Code, CodeBlock } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
-import { dropReferenceDefinitions, inlineHtmlEntities } from "../../lib/comarkFixes";
+import {
+  dropReferenceDefinitions,
+  inlineHtmlEntities,
+  parseWithDetails,
+} from "../../lib/comarkFixes";
 
 /**
  * GitHub-flavoured Markdown, for PR descriptions and comments and for what the
@@ -226,14 +235,33 @@ function safePrMarkdown(markdown: string): string {
   return String(DOMPurify.sanitize(withoutComponents, GITHUB_HTML_OPTIONS));
 }
 
-export function GitHubMarkdown({ markdown, className }: { markdown: string; className?: string }) {
+const parseMarkdown = createMarkdownParser({
+  ...GITHUB_MARKDOWN_OPTIONS,
+  plugins: GITHUB_MARKDOWN_PLUGINS,
+});
+
+async function parseGitHubMarkdown(markdown: string): Promise<ParsedMarkdown> {
+  const nodes = await parseWithDetails(safePrMarkdown(markdown), parseMarkdown);
+  return { nodes, frontmatter: {}, meta: {} };
+}
+
+function Parsed({ parsing, className }: { parsing: Promise<ParsedMarkdown>; className?: string }) {
   return (
-    <MarkdownClient
-      className={className}
-      value={safePrMarkdown(markdown)}
-      options={GITHUB_MARKDOWN_OPTIONS}
-      plugins={GITHUB_MARKDOWN_PLUGINS}
+    <MarkdownDocument
+      value={use(parsing)}
       components={GITHUB_MARKDOWN_COMPONENTS}
+      className={className}
     />
+  );
+}
+
+export function GitHubMarkdown({ markdown, className }: { markdown: string; className?: string }) {
+  const parsing = useMemo(() => parseGitHubMarkdown(markdown), [markdown]);
+  // While a new parse is pending the last one stays up, rather than blanking.
+  const shown = useDeferredValue(parsing);
+  return (
+    <Suspense fallback={null}>
+      <Parsed parsing={shown} className={className} />
+    </Suspense>
   );
 }

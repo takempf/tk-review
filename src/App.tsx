@@ -58,7 +58,7 @@ function useWindowTitle() {
       const title =
         state?.base && state.compare
           ? `${state.repo.name} — ${state.base} … ${state.compare}${suffix}`
-          : (name ?? "tk-review");
+          : (name ?? "TK Review");
       // The tab's store changes far more often than its title does.
       if (title === last) return;
       last = title;

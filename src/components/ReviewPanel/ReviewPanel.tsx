@@ -23,6 +23,7 @@ import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
 import { postBodyForFinding, postLocationForFinding } from "../../lib/prComment";
 import { absoluteTime, shortTime } from "../../lib/time";
 import { knownVerdict } from "../../lib/verdict";
+import { isSignedInAs } from "../../store/account";
 import { useAppStore } from "../../store/appStore";
 import {
   type AgentRunKind,
@@ -901,11 +902,17 @@ function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] 
  * stays visible. Without a PR there is nowhere to submit, but the verdict still
  * says where the change stands. With several engines' reviews on record, the
  * most recent one's conclusion is the one offered.
+ *
+ * GitHub won't take an approval or a request for changes on your own pull
+ * request, so on one of those the review can only go in as a comment, and the
+ * choice gives way to a note saying why.
  */
 function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null }) {
   const { review } = source;
+  const own = useTab((state) => pr != null && isSignedInAs(state.repo, pr.author));
   const suggested = knownVerdict(review.verdict);
-  const [verdict, setVerdict] = useState<ReviewVerdict>(suggested ?? "comment");
+  const [chosen, setVerdict] = useState<ReviewVerdict>(suggested ?? "comment");
+  const verdict = own ? "comment" : chosen;
   const [body, setBody] = useState(review.conclusion ?? "");
   const [confirming, setConfirming] = useState(false);
   const postingTo = useTab((state) => state.postingTo);
@@ -932,23 +939,25 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
 
   return (
     <Section title="Conclusion" tag={<SourceTag source={source} />} reveal>
-      <RadioGroup
-        className={css.verdicts}
-        aria-label="Review verdict"
-        value={verdict}
-        onValueChange={(value) => {
-          setVerdict(value as ReviewVerdict);
-          setConfirming(false);
-        }}
-        disabled={busy}
-      >
-        {VERDICTS.map((item) => (
-          <Radio key={item.value} value={item.value}>
-            {item.label}
-            {item.value === suggested ? <span className={css.suggested}>suggested</span> : null}
-          </Radio>
-        ))}
-      </RadioGroup>
+      {own ? null : (
+        <RadioGroup
+          className={css.verdicts}
+          aria-label="Review verdict"
+          value={verdict}
+          onValueChange={(value) => {
+            setVerdict(value as ReviewVerdict);
+            setConfirming(false);
+          }}
+          disabled={busy}
+        >
+          {VERDICTS.map((item) => (
+            <Radio key={item.value} value={item.value}>
+              {item.label}
+              {item.value === suggested ? <span className={css.suggested}>suggested</span> : null}
+            </Radio>
+          ))}
+        </RadioGroup>
+      )}
       <Textarea
         className={css.composerInput}
         value={body}
@@ -963,6 +972,9 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
         {pr
           ? `Submits to #${pr.number} as ${option?.noun ?? "a review"}.`
           : "Only a pull request can take a submitted review."}
+        {own
+          ? " It's your own pull request, which GitHub won't let you approve or request changes on."
+          : null}
       </p>
       {confirming && pr ? (
         <p className={css.composerWarning}>

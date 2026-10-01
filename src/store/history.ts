@@ -16,6 +16,7 @@ export interface RecentRepo {
 
 /** The latest review of one pull request, whichever engine wrote it. */
 export interface ReviewedPr {
+  /** The repository's storage root (`storageRoot`): its path, and the account. */
   root: string;
   number: number;
   /** Absent for reviews stored before the index existed. */
@@ -143,7 +144,27 @@ function legacyReviews(root: string): ReviewedPr[] {
   return found;
 }
 
-/** Every reviewed pull request in one repository, most recent review first. */
+/**
+ * Moves one storage root's review history to another, for
+ * `claimUnscopedStorage`. An entry the destination already has keeps its own.
+ */
+export function moveReviewHistory(from: string, to: string): void {
+  const index = readIndex();
+  let moved = false;
+  for (const [key, entry] of Object.entries(index)) {
+    if (entry.root !== from) continue;
+    const destination = indexKey(to, entry.number);
+    if (!index[destination]) index[destination] = { ...entry, root: to };
+    delete index[key];
+    moved = true;
+  }
+  if (moved) writeJson(REVIEW_INDEX_KEY, index);
+}
+
+/**
+ * Every reviewed pull request in one repository, most recent review first.
+ * `root` is the repository's storage root (`storageRoot`).
+ */
 export function readReviewedPrs(root: string): ReviewedPr[] {
   const byNumber = new Map<number, ReviewedPr>();
   for (const legacy of legacyReviews(root)) byNumber.set(legacy.number, legacy);

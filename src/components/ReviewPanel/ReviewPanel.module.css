@@ -298,6 +298,16 @@
   color: var(--accent);
 }
 
+/* A rule clears a whole line on each side, in the accent at half strength. */
+.prMarkdown hr,
+.prCommentMarkdown hr,
+.agentMarkdown hr {
+  height: 0;
+  margin: 1lh 0;
+  border: 0;
+  border-top: 1px solid color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
 .prMarkdown blockquote,
 .prCommentMarkdown blockquote,
 .agentMarkdown blockquote {

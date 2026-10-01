@@ -8,6 +8,7 @@ import {
   toAppError,
 } from "../ipc/git";
 import { prMorphKey, screenSettling, transitionScreen } from "../lib/screenTransition";
+import { claimUnscopedStorage } from "./account";
 import { forgetRepo, rememberRepo } from "./history";
 import {
   createTabStore,
@@ -285,6 +286,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set({ loadingRepo: true, error: null });
     try {
       const repo = await gitApi.selectRepo(path);
+      claimUnscopedStorage(repo);
       const branches = await gitApi.listBranches(repo.root);
       set({ loadingRepo: false });
       // Tabs stay open, whichever repository they are in; the list is what changes.

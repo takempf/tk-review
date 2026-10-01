@@ -79,10 +79,13 @@ export const persistOptions: PersistQueryClientProviderProps["persistOptions"] =
 /** Every cached pull-request list for one repository. */
 const prListsKey = (root: string) => ["prs", root] as const;
 
-/** One `gh pr list`, cached per repository and filter. */
-export function prListQuery(root: string, filter: PrListFilter) {
+/**
+ * One `gh pr list`, cached per repository, account and filter: "Mine" and
+ * "Review requested" are whoever `gh` is signed in as.
+ */
+export function prListQuery(root: string, login: string | null, filter: PrListFilter) {
   return queryOptions({
-    queryKey: [...prListsKey(root), filter] as const,
+    queryKey: [...prListsKey(root), login, filter] as const,
     queryFn: () => gitApi.listPrs(root, filter),
   });
 }

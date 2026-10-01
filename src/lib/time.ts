@@ -27,19 +27,21 @@ export function absoluteTime(iso: string): string {
 }
 
 /**
- * "3:47 PM" today, "Sep 27, 3:47 PM" before that, with the year once it is not
- * this one: a stamp that stays true on a screen that is not re-rendered as time
- * passes, unlike a relative one.
+ * "3:47 PM" today, "9/27 3:47 PM" within the past year, with the year once it is
+ * older than that (when the day alone could mean two dates): a stamp that stays
+ * true on a screen that is not re-rendered as time passes, unlike a relative one.
  */
 export function shortTime(iso: string, now = new Date()): string {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return "";
   const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   if (when.toDateString() === now.toDateString()) return time;
+  const yearAgo = new Date(now);
+  yearAgo.setFullYear(now.getFullYear() - 1);
   const date = when.toLocaleDateString(undefined, {
-    month: "short",
+    month: "numeric",
     day: "numeric",
-    year: when.getFullYear() === now.getFullYear() ? undefined : "numeric",
+    year: when > yearAgo ? undefined : "numeric",
   });
-  return `${date}, ${time}`;
+  return `${date} ${time}`;
 }

@@ -19,6 +19,8 @@ export const REPO: RepoInfo = {
   name: "tk-review",
   currentBranch: "feature/diff-viewer",
   defaultBranch: "main",
+  // The author of #131 in `PR_LIST`, so "Mine" lists it.
+  githubLogin: "tkempf",
 };
 
 export const BRANCHES: Branch[] = [
@@ -621,6 +623,8 @@ export function findingsFor(path: string, review: Review): Finding[] {
 }
 \`\`\`
 
+---
+
 ## Checklist
 
 - [x] Migration runs on an empty database
@@ -667,6 +671,34 @@ Run \`pnpm harness\` and open the pull request fixture.
         '<a href="https://vercel.com/vercel-agent/request-review?owner=acme&repo=web&pr=47" rel="noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://agents-vade-review.vercel.sh/request-review-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://agents-vade-review.vercel.sh/request-review-light.svg"><img src="https://agents-vade-review.vercel.sh/request-review-light.svg" alt="Request Review"></picture></a>',
       ].join("\n"),
       createdAt: "2026-08-06T18:30:00Z",
+      path: null,
+      line: null,
+      outdated: false,
+    },
+    // Linear's linkback, as its bot posts it: the whole issue folded into a
+    // <details>, its Markdown inside a <p> that blank lines split from the tags.
+    {
+      id: 105,
+      author: "linear-code[bot]",
+      body: [
+        "<!-- linear-linkback -->",
+        "<details>",
+        '<summary><a href="https://linear.app/example/issue/ENG-6701/folder-batches">ENG-6701 Folder batches are indistinguishable from regular Modify runs</a></summary>',
+        "<p>",
+        "",
+        "## Summary",
+        "",
+        "Folder batches write job rows that look exactly like a normal Modify run.",
+        "",
+        "- Each item's prompt check writes its own `nsfw_prompt_filter` row.",
+        "- Worker logs don't carry the batch ID.",
+        "",
+        "</p>",
+        "</details>",
+        "<!-- linear-review-link -->",
+        '<p><a href="https://linear.app/example/review/folder-batches">Review in Linear</a></p>',
+      ].join("\n"),
+      createdAt: "2026-08-06T18:32:00Z",
       path: null,
       line: null,
       outdated: false,

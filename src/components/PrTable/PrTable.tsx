@@ -11,7 +11,7 @@ import {
   tableFeatures,
   useTable,
 } from "@tanstack/react-table";
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import { Badge, Button, Icon, Menu } from "tk-design-system";
 import type { PrLabel, PrSummary, ReviewEngine } from "../../ipc/git";
 import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
@@ -423,6 +423,25 @@ export function ColumnMenu({
 const SORT_ICONS = { asc: "chevron-up", desc: "chevron-down" } as const;
 
 /**
+ * The Size column's two slots, each as wide as its longest count among the
+ * rows (sign included), so every row's additions and deletions sit in the same
+ * places, right-aligned, and read down the column as two.
+ */
+function sizeSlots(rows: PrRow[]): React.CSSProperties {
+  let added = 1;
+  let deleted = 1;
+  for (const { pr } of rows) {
+    if (!pr) continue;
+    added = Math.max(added, String(pr.additions).length);
+    deleted = Math.max(deleted, String(pr.deletions).length);
+  }
+  return {
+    "--added-width": `${added + 1}ch`,
+    "--deleted-width": `${deleted + 1}ch`,
+  } as React.CSSProperties;
+}
+
+/**
  * The pull requests as a table: every column sorts (shift-click to add a
  * second), and a sort clicked off returns the list to its own order, with
  * stacks grouped. The sort is remembered across tabs and launches.
@@ -452,9 +471,11 @@ export function PrTable({
     },
   });
 
+  const slots = useMemo(() => sizeSlots(rows), [rows]);
+
   return (
     <Context value={{ ...context, grouped: sorting.length === 0 }}>
-      <table className={css.table}>
+      <table className={css.table} style={slots}>
         <thead>
           {table.getHeaderGroups().map((group) => (
             <tr key={group.id}>

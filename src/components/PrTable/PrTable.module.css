@@ -279,14 +279,21 @@
   display: inline-flex;
   gap: var(--tk-space-2);
   font-family: var(--tk-font-mono);
+  /* Untracked, or each figure outgrows its `ch` and the slots below overflow. */
+  letter-spacing: 0;
 }
 
+/* Mono, so a `ch` is a digit (or a sign): the slots come from `sizeSlots`. */
 .added {
+  min-width: var(--added-width);
   color: var(--added);
+  text-align: right;
 }
 
 .deleted {
+  min-width: var(--deleted-width);
   color: var(--deleted);
+  text-align: right;
 }
 
 .muted {

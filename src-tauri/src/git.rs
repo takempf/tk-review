@@ -73,6 +73,9 @@ pub struct RepoInfo {
     /// `None` when HEAD is detached.
     pub current_branch: Option<String>,
     pub default_branch: Option<String>,
+    /// Who `gh` is signed in as on the repository's GitHub host. The git layer
+    /// leaves it `None`; the command layer fills it in (`github::signed_in_login`).
+    pub github_login: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -217,6 +220,7 @@ pub fn select_repo(path: &Path) -> Result<RepoInfo, GitError> {
         // Fails on a detached HEAD, which is a valid state to review from.
         current_branch: run_git_text(&root_path, &["symbolic-ref", "--short", "HEAD"]).ok(),
         default_branch: detect_default_branch(&root_path),
+        github_login: None,
     })
 }
 

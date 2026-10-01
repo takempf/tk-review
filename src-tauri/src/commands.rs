@@ -4,7 +4,7 @@
 //! can take a noticeable moment on a large repository, which would otherwise
 //! stall the async runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -43,7 +43,12 @@ fn agent_run(app: &AppHandle, runs: &AgentRuns, run_id: String) -> AgentRun {
 
 #[tauri::command]
 pub async fn select_repo(path: String) -> Result<RepoInfo, GitError> {
-    blocking(move || git::select_repo(&PathBuf::from(path))).await
+    blocking(move || {
+        let mut repo = git::select_repo(&PathBuf::from(path))?;
+        repo.github_login = github::signed_in_login(Path::new(&repo.root));
+        Ok(repo)
+    })
+    .await
 }
 
 #[tauri::command]

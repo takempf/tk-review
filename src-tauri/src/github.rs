@@ -404,10 +404,11 @@ fn parse_pr_list(raw: &[u8]) -> Result<Vec<PrSummary>, GitError> {
     Ok(prs)
 }
 
-/// The `host/owner/repo` to list from. Remotes are searched in `gh`'s own order
-/// of preference — `upstream` before `origin` — so a fork lists the pull
-/// requests of the repository it was forked from, which is where they live.
-fn list_target(root: &Path) -> Result<String, GitError> {
+/// The GitHub repository this checkout's remotes point at, as `(host, owner,
+/// repo)`. Remotes are searched in `gh`'s own order of preference — `upstream`
+/// before `origin` — so a fork finds the repository it was forked from, which
+/// is where its pull requests live.
+fn github_remote(root: &Path) -> Result<Option<(String, String, String)>, GitError> {
     let remotes = git::remote_urls(root)?;
     let named = |wanted: &str| {
         remotes
@@ -415,16 +416,31 @@ fn list_target(root: &Path) -> Result<String, GitError> {
             .find(|(name, _)| name == wanted)
             .and_then(|(_, url)| remote_repo(url))
     };
-    let found = named("upstream")
+    Ok(named("upstream")
         .or_else(|| named("origin"))
-        .or_else(|| remotes.iter().find_map(|(_, url)| remote_repo(url)));
-    found
+        .or_else(|| remotes.iter().find_map(|(_, url)| remote_repo(url))))
+}
+
+/// The `host/owner/repo` to list from.
+fn list_target(root: &Path) -> Result<String, GitError> {
+    github_remote(root)?
         .map(|(host, owner, repo)| format!("{host}/{owner}/{repo}"))
         .ok_or_else(|| {
             GitError::Command(
                 "This repository has no GitHub remote to list pull requests from.".into(),
             )
         })
+}
+
+/// Who `gh` is signed in as on this checkout's GitHub host: the account its
+/// lists, posts and reviews go out as. Read from `gh`'s own config rather than
+/// asked of GitHub, so it is instant and works offline, and follows `gh auth
+/// switch`. `None` with no GitHub remote, no `gh`, or no login on that host.
+pub fn signed_in_login(root: &Path) -> Option<String> {
+    let (host, _, _) = github_remote(root).ok()??;
+    let raw = run_gh(&["config", "get", "--host", &host, "user"]).ok()?;
+    let login = String::from_utf8_lossy(&raw).trim().to_owned();
+    (!login.is_empty()).then_some(login)
 }
 
 pub fn refresh_pr(

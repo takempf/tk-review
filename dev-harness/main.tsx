@@ -9,6 +9,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type { GitError, PrContext } from "../src/ipc/git";
 import { Root } from "../src/Root";
+import { storageRoot } from "../src/store/account";
 import "../src/styles/global.css";
 import {
   BRANCHES,
@@ -46,6 +47,14 @@ const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(
  * - `silent`: they take ten minutes and write nothing, so the line warns.
  */
 const runMode = new URLSearchParams(location.search).get("run");
+
+/**
+ * Who `gh` is signed in as, from `?login=`: `?login=octocat` to be the author
+ * of the PR the harness opens (#47), `?login=` for nobody signed in.
+ */
+const loginParam = new URLSearchParams(location.search).get("login");
+const repo = { ...REPO, githubLogin: loginParam === null ? REPO.githubLogin : loginParam || null };
+const scope = storageRoot(repo);
 
 /** Cancels for the agent runs in flight, by run id. */
 const cancels = new Map<string, () => void>();
@@ -114,7 +123,7 @@ function prFor(url: string): PrContext {
 function answer(command: string, payload: unknown): unknown {
   switch (command) {
     case "select_repo":
-      return REPO;
+      return repo;
     case "list_branches":
       return BRANCHES;
     // Delayed so the "Fetching…" state is visible in the harness.
@@ -265,7 +274,7 @@ localStorage.setItem(
     hoursAgo: number,
     findings: number,
   ) => ({
-    root: REPO.root,
+    root: scope,
     number,
     title,
     url: `https://github.com/example/tk-review/pull/${number}`,
@@ -278,9 +287,9 @@ localStorage.setItem(
   localStorage.setItem(
     "tk-review:review-index",
     JSON.stringify({
-      [`${REPO.root}#118`]: reviewed(118, "Fix stale diffs after a force push", "118b", 4, 0),
-      [`${REPO.root}#47`]: reviewed(47, "Render review findings in the PR workflow", "old", 30, 3),
-      [`${REPO.root}#96`]: reviewed(96, "Split the review panel into tabs", "96z", 120, 2),
+      [`${scope}#118`]: reviewed(118, "Fix stale diffs after a force push", "118b", 4, 0),
+      [`${scope}#47`]: reviewed(47, "Render review findings in the PR workflow", "old", 30, 3),
+      [`${scope}#96`]: reviewed(96, "Split the review panel into tabs", "96z", 120, 2),
     }),
   );
 }
@@ -294,7 +303,7 @@ for (const comparison of [
   "main...feature/diff-viewer",
 ]) {
   localStorage.setItem(
-    `tk-review:explanations:${REPO.root}:${comparison}`,
+    `tk-review:explanations:${scope}:${comparison}`,
     JSON.stringify({
       explanation: EXPLANATION,
       engine: "claude",
