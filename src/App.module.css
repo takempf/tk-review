@@ -1,9 +1,15 @@
-/* The app's own title bar over whichever screen is showing. */
+/* The app's own title bar, tab bar included, over whichever screen is showing. */
 .window {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
+}
+
+.screen {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  min-height: 0;
 }
 
 .headerGroup {
@@ -14,43 +20,20 @@
   min-width: 0;
 }
 
-/* Typeset exactly like the PR's row on the home screen (Home.module.css
-   `.number` and `.rowTitle`): the two morph into each other at true size. */
-.prHeading {
-  display: flex;
-  gap: var(--tk-space-3);
-  align-items: baseline;
-  min-width: 0;
-  margin: 0;
-  font: inherit;
-}
-
-.prNumber {
-  flex: none;
-  font-family: var(--tk-font-mono);
-  font-size: var(--tk-text-sm);
-  color: var(--tk-fg-subtle);
-}
-
-.prTitle {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--tk-text-md);
-  font-weight: var(--tk-weight-medium);
-  line-height: var(--tk-leading-tight);
-  color: var(--tk-fg);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* The file list over the commits. Each takes the height it needs; short of
+   room, they share it evenly, so a short one keeps its full height and only a
+   long one scrolls. */
+.sidebar {
+  display: grid;
+  flex: 1;
+  grid-template-rows: minmax(0, max-content) minmax(0, max-content);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  min-height: 0;
 }
 
 .spacer {
   flex: 1;
-}
-
-.divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
 }
 
 .placeholder {

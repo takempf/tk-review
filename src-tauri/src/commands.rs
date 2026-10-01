@@ -6,14 +6,19 @@
 
 use std::path::PathBuf;
 
+use tauri::{AppHandle, Emitter, State};
+
 use crate::error::GitError;
-use crate::git::{self, Branch, DiffSummary, FileVersions, RepoInfo};
+use crate::git::{self, Branch, CommitLog, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
     self, PostedPrComment, PrCommentDestination, PrContext, PrListFilter, PrReviewVerdict,
     PrSummary, RefreshPrResult,
 };
 use crate::models::{self, EngineModels};
-use crate::review::{self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment};
+use crate::review::{
+    self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment,
+};
+use crate::runs::{AgentRun, AgentRuns};
 
 async fn blocking<T, F>(task: F) -> Result<T, GitError>
 where
@@ -23,6 +28,17 @@ where
     tauri::async_runtime::spawn_blocking(task)
         .await
         .map_err(|err| GitError::Command(format!("git task failed to run: {err}")))?
+}
+
+/// Registers an agent run under the page's id, so the page can cancel it, and
+/// tells the page (`agent-run-output`, carrying the id) whenever its CLI writes
+/// something, so the page can show that the run is still alive.
+fn agent_run(app: &AppHandle, runs: &AgentRuns, run_id: String) -> AgentRun {
+    let app = app.clone();
+    let id = run_id.clone();
+    runs.start(run_id, move || {
+        let _ = app.emit("agent-run-output", &id);
+    })
 }
 
 #[tauri::command]
@@ -48,13 +64,17 @@ pub async fn list_prs(root: String, filter: PrListFilter) -> Result<Vec<PrSummar
 }
 
 #[tauri::command]
-pub async fn open_pr(root: String, url: String) -> Result<PrContext, GitError> {
-    blocking(move || github::open_pr(&PathBuf::from(root), &url)).await
+pub async fn open_pr(root: String, url: String, keep: Vec<u64>) -> Result<PrContext, GitError> {
+    blocking(move || github::open_pr(&PathBuf::from(root), &url, &keep)).await
 }
 
 #[tauri::command]
-pub async fn refresh_pr(root: String, pr: PrContext) -> Result<RefreshPrResult, GitError> {
-    blocking(move || github::refresh_pr(&PathBuf::from(root), &pr)).await
+pub async fn refresh_pr(
+    root: String,
+    pr: PrContext,
+    keep: Vec<u64>,
+) -> Result<RefreshPrResult, GitError> {
+    blocking(move || github::refresh_pr(&PathBuf::from(root), &pr, &keep)).await
 }
 
 #[tauri::command]
@@ -118,11 +138,26 @@ pub async fn get_patch(
     blocking(move || git::get_patch(&PathBuf::from(root), &merge_base, compare.as_deref())).await
 }
 
+/// The commits on the compare side since the merge base; a `None` compare
+/// lists the ones under the working tree.
+#[tauri::command]
+pub async fn list_commits(
+    root: String,
+    merge_base: String,
+    compare: Option<String>,
+) -> Result<CommitLog, GitError> {
+    blocking(move || git::list_commits(&PathBuf::from(root), &merge_base, compare.as_deref())).await
+}
+
 /// Reviews the comparison with an agent CLI (`claude` or `codex`). Slow — an
 /// agentic session reading real files — so it runs on the blocking pool like
 /// everything else. A `None` model or effort uses the CLI's own default.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn review_diff(
+    app: AppHandle,
+    runs: State<'_, AgentRuns>,
+    run_id: String,
     root: String,
     merge_base: String,
     compare: Option<String>,
@@ -131,6 +166,7 @@ pub async fn review_diff(
     effort: Option<String>,
     pr_context: Option<PrContext>,
 ) -> Result<ReviewResult, GitError> {
+    let run = agent_run(&app, &runs, run_id);
     blocking(move || {
         review::review_diff(
             &PathBuf::from(root),
@@ -140,6 +176,7 @@ pub async fn review_diff(
             model.as_deref(),
             effort.as_deref(),
             pr_context.as_ref(),
+            &run,
         )
     })
     .await
@@ -151,6 +188,9 @@ pub async fn review_diff(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn re_review_diff(
+    app: AppHandle,
+    runs: State<'_, AgentRuns>,
+    run_id: String,
     root: String,
     merge_base: String,
     compare: Option<String>,
@@ -161,6 +201,7 @@ pub async fn re_review_diff(
     prior_findings: Vec<ReviewFinding>,
     pr_context: Option<PrContext>,
 ) -> Result<ReReviewResult, GitError> {
+    let run = agent_run(&app, &runs, run_id);
     blocking(move || {
         review::re_review_diff(
             &PathBuf::from(root),
@@ -172,6 +213,7 @@ pub async fn re_review_diff(
             &prior_summary,
             &prior_findings,
             pr_context.as_ref(),
+            &run,
         )
     })
     .await
@@ -180,7 +222,11 @@ pub async fn re_review_diff(
 /// Explains the comparison in plain language — an overview plus one entry per
 /// file. Runs the same agent CLIs as `review_diff`, and just as slowly.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn explain_diff(
+    app: AppHandle,
+    runs: State<'_, AgentRuns>,
+    run_id: String,
     root: String,
     merge_base: String,
     compare: Option<String>,
@@ -189,6 +235,7 @@ pub async fn explain_diff(
     effort: Option<String>,
     pr_context: Option<PrContext>,
 ) -> Result<ExplainResult, GitError> {
+    let run = agent_run(&app, &runs, run_id);
     blocking(move || {
         review::explain_diff(
             &PathBuf::from(root),
@@ -198,6 +245,7 @@ pub async fn explain_diff(
             model.as_deref(),
             effort.as_deref(),
             pr_context.as_ref(),
+            &run,
         )
     })
     .await
@@ -207,6 +255,9 @@ pub async fn explain_diff(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn review_reply(
+    app: AppHandle,
+    runs: State<'_, AgentRuns>,
+    run_id: String,
     root: String,
     merge_base: String,
     compare: Option<String>,
@@ -219,6 +270,7 @@ pub async fn review_reply(
     comment: String,
     pr_context: Option<PrContext>,
 ) -> Result<String, GitError> {
+    let run = agent_run(&app, &runs, run_id);
     blocking(move || {
         review::review_reply(
             &PathBuf::from(root),
@@ -232,9 +284,25 @@ pub async fn review_reply(
             &thread,
             &comment,
             pr_context.as_ref(),
+            &run,
         )
     })
     .await
+}
+
+/// Stops an agent run the page started. The run's own command then fails
+/// with a `cancelled` error, which the page treats as no error at all.
+#[tauri::command]
+pub fn cancel_agent_run(runs: State<'_, AgentRuns>, run_id: String) {
+    runs.cancel(&run_id);
+}
+
+/// Stops every agent run. The page calls this as it loads: a reloaded page has
+/// lost whatever the one before it was waiting on, and could never receive or
+/// save the results.
+#[tauri::command]
+pub fn abandon_agent_runs(runs: State<'_, AgentRuns>) {
+    runs.cancel_all();
 }
 
 #[tauri::command]

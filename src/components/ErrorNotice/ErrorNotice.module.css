@@ -1,0 +1,104 @@
+/* Tinted rather than painted: the title and icon carry the red, so the
+   explanation under them reads as ordinary prose. */
+.notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  color: var(--text);
+  background: var(--danger-bg);
+  border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
+  border-radius: var(--radius);
+}
+
+.notice[data-variant="banner"] {
+  border-width: 0 0 1px;
+  border-color: var(--border);
+  border-radius: 0;
+}
+
+/* Centred on the title's first line. */
+.icon {
+  margin-top: 0.2em;
+  color: var(--danger);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.message {
+  margin: 0;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Pulled up level with the title, whose line it shares. */
+.dismiss {
+  width: 1.5rem;
+  min-height: 1.5rem;
+  margin-top: -0.1em;
+  color: var(--text-faint);
+}
+
+.dismiss:hover,
+.dismiss:focus-visible {
+  color: var(--text);
+}
+
+.detailBar {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.detailToggle {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  font: inherit;
+  font-size: var(--tk-text-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.detailToggle:hover,
+.detailToggle:focus-visible {
+  color: var(--text);
+}
+
+.detailFold {
+  grid-column: 1 / -1;
+}
+
+/* Wrapped rather than scrolled sideways: the review column is narrow, and a
+   long command line is still worth reading whole. */
+.detail {
+  max-height: 20rem;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  background: var(--bg-sunken);
+  border-radius: var(--radius);
+}

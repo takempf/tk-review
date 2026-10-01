@@ -3,7 +3,7 @@ import { Checkbox } from "tk-design-system";
 import type { ChangeStatus, FileChange } from "../../ipc/git";
 import type { TreeNode } from "../../lib/fileChange";
 import { buildFileTree, describeChange, STATUS_META, splitPath } from "../../lib/fileChange";
-import { useReviewStore } from "../../store/reviewStore";
+import { useTab } from "../../store/tabStore";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./FileList.module.css";
 
@@ -96,10 +96,10 @@ interface NodesProps {
 }
 
 function Nodes({ nodes, depth, collapsed, onToggleCollapsed }: NodesProps) {
-  const selectedPath = useReviewStore((state) => state.selectedPath);
-  const viewed = useReviewStore((state) => state.viewed);
-  const selectFile = useReviewStore((state) => state.selectFile);
-  const toggleViewed = useReviewStore((state) => state.toggleViewed);
+  const selectedPath = useTab((state) => state.selectedPath);
+  const viewed = useTab((state) => state.viewed);
+  const selectFile = useTab((state) => state.selectFile);
+  const toggleViewed = useTab((state) => state.toggleViewed);
 
   return (
     <ul className={css.list}>
@@ -197,10 +197,10 @@ function FileListSkeleton() {
 }
 
 export function FileList() {
-  const summary = useReviewStore((state) => state.summary);
-  const loading = useReviewStore((state) => state.loadingDiff || state.openingPr);
-  const selectedPath = useReviewStore((state) => state.selectedPath);
-  const viewed = useReviewStore((state) => state.viewed);
+  const summary = useTab((state) => state.summary);
+  const loading = useTab((state) => state.loadingDiff || state.openingPr);
+  const selectedPath = useTab((state) => state.selectedPath);
+  const viewed = useTab((state) => state.viewed);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   // Keyboard navigation walks the flat file order, so it can land inside a

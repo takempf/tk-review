@@ -7,18 +7,11 @@
 }
 
 .error {
-  display: flex;
-  gap: var(--tk-space-3);
-  align-items: center;
   margin: var(--tk-space-5) var(--tk-space-8) 0;
-  padding: var(--tk-space-2) var(--tk-space-2) var(--tk-space-2) var(--tk-space-4);
-  color: var(--tk-danger);
-  background: var(--tk-danger-soft);
+}
 
-  & p {
-    flex: 1;
-    white-space: pre-wrap;
-  }
+.listError {
+  margin: var(--tk-space-2) var(--tk-space-3);
 }
 
 .browser {
@@ -26,9 +19,7 @@
   flex: 1;
   flex-direction: column;
   width: 100%;
-  max-width: 96rem;
   min-height: 0;
-  margin: 0 auto;
   padding: var(--tk-space-8) var(--tk-space-8) 0;
 }
 
@@ -51,63 +42,14 @@
   font-size: var(--tk-text-2xl);
 }
 
+/* Its own box, the text's size, for the back button's label to scale from. */
+.titleText {
+  display: inline-block;
+}
+
 .headerActions {
   display: flex;
   gap: var(--tk-space-2);
-}
-
-/* Back into whatever comparison is already loaded. */
-.resume {
-  display: flex;
-  gap: var(--tk-space-3);
-  align-items: center;
-  margin-bottom: var(--tk-space-6);
-  padding: var(--tk-space-3) var(--tk-space-4);
-  color: var(--tk-fg);
-  text-align: left;
-  background: var(--tk-surface-raised);
-  border: var(--tk-border-width) solid var(--tk-border-subtle);
-  border-radius: var(--tk-radius-lg);
-  transition:
-    background-color var(--tk-duration-1) var(--tk-ease-fade),
-    border-color var(--tk-duration-1) var(--tk-ease-fade);
-
-  &:hover {
-    background: var(--bg-hover);
-    border-color: var(--tk-border);
-  }
-
-  & > :global(.tk-icon) {
-    flex: none;
-    color: var(--tk-fg-muted);
-  }
-}
-
-/* Number and title are set like a row's, so the review header morphs into
-   either one at true size. */
-.resumeHeading {
-  display: flex;
-  flex: 1;
-  gap: var(--tk-space-3);
-  align-items: baseline;
-  min-width: 0;
-}
-
-.resumeNumber {
-  flex: none;
-  font-family: var(--tk-font-mono);
-  font-size: var(--tk-text-sm);
-  color: var(--tk-fg-subtle);
-}
-
-.resumeTitle {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--tk-text-md);
-  font-weight: var(--tk-weight-medium);
-  line-height: var(--tk-leading-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tabs {
@@ -142,12 +84,18 @@
   color: var(--tk-fg-subtle);
 }
 
+.toolbarEnd {
+  display: flex;
+  gap: var(--tk-space-2);
+  align-items: center;
+  margin-bottom: var(--tk-space-2);
+}
+
 .search {
   position: relative;
   display: flex;
   align-items: center;
   width: min(100%, 18rem);
-  margin-bottom: var(--tk-space-2);
 }
 
 .searchIcon {
@@ -166,130 +114,17 @@
   flex: 1;
   min-height: 0;
   margin: 0 calc(var(--tk-space-3) * -1);
-  padding: var(--tk-space-3) var(--tk-space-3) var(--tk-space-8);
-  overflow-y: auto;
-}
+  padding: 0 var(--tk-space-3) var(--tk-space-8);
+  overflow: auto;
 
-/* On a cold load, rows arrive with the `gh` round trip, well after the screen:
-   fade them in rather than let them pop over the loading message. */
-.list {
-  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.row {
-  display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
-  gap: var(--tk-space-4);
-  align-items: center;
-  width: 100%;
-  padding: var(--tk-space-3) var(--tk-space-3);
-  color: var(--tk-fg);
-  text-align: left;
-  background: none;
-  border: 0;
-  border-radius: var(--tk-radius);
-  transition: background-color var(--tk-duration-1) var(--tk-ease-fade);
-
-  &:hover:not(:disabled) {
-    background: var(--bg-hover);
+  /* The space under the tabs, as a spacer that scrolls away rather than as
+     padding: the table's sticky header sticks inside the padding, which left a
+     strip above it for scrolled rows to show through. */
+  &::before {
+    display: block;
+    height: var(--tk-space-3);
+    content: "";
   }
-
-  &:disabled {
-    cursor: default;
-  }
-
-  &:disabled:not([aria-busy]) {
-    opacity: 0.6;
-  }
-}
-
-.number {
-  align-self: start;
-  padding-top: 0.1em;
-  font-family: var(--tk-font-mono);
-  font-size: var(--tk-text-sm);
-  color: var(--tk-fg-subtle);
-}
-
-.rowMain {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tk-space-1);
-  min-width: 0;
-}
-
-.rowTitle {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tk-space-2);
-  align-items: center;
-  font-size: var(--tk-text-md);
-  font-weight: var(--tk-weight-medium);
-  line-height: var(--tk-leading-tight);
-}
-
-.rowMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 var(--tk-space-4);
-  font-size: var(--tk-text-xs);
-  color: var(--tk-fg-muted);
-}
-
-.branch {
-  display: inline-flex;
-  gap: var(--tk-space-1);
-  align-items: center;
-  max-width: 24rem;
-  overflow: hidden;
-  font-family: var(--tk-font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  & :global(.tk-icon) {
-    flex: none;
-    color: var(--tk-fg-subtle);
-  }
-}
-
-.rowSide {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tk-space-1);
-  align-items: flex-end;
-}
-
-.reviewState {
-  display: flex;
-  gap: var(--tk-space-2);
-  align-items: center;
-}
-
-.reviewMeta {
-  font-size: var(--tk-text-xs);
-  color: var(--tk-fg-subtle);
-  white-space: nowrap;
-}
-
-.stats {
-  display: flex;
-  gap: var(--tk-space-2);
-  font-family: var(--tk-font-mono);
-  font-size: var(--tk-text-xs);
-}
-
-.added {
-  color: var(--added);
-}
-
-.deleted {
-  color: var(--deleted);
 }
 
 .message {
@@ -372,13 +207,6 @@
   max-width: 40ch;
   font-size: var(--tk-text-lg);
   color: var(--tk-fg);
-}
-
-/* A PR stacked on the one above it: indented one step per level, with a rule
-   tying it to its stack. */
-.stacked {
-  margin-left: calc(min(var(--stack-depth), 4) * var(--tk-space-6));
-  border-left: var(--tk-border-width) solid var(--tk-border);
 }
 
 @keyframes fade-in {

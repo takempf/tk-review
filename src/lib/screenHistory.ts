@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { type AppView, useReviewStore } from "../store/reviewStore";
+import { type AppView, useAppStore } from "../store/appStore";
 
 interface ScreenEntry {
   view: AppView;
@@ -17,13 +17,14 @@ function entryView(state: unknown): AppView | null {
  *
  * History holds at most two entries: the list, and the review in front of it.
  * Entering the review pushes; leaving it from inside the app goes back, so a
- * forward swipe can return to it.
+ * forward swipe can return to it. Tabs are not entries: switching between them
+ * stays on the review, and forward returns to whichever was shown last.
  */
 export function useScreenHistory() {
   useEffect(() => {
-    history.replaceState({ view: useReviewStore.getState().view } satisfies ScreenEntry, "");
+    history.replaceState({ view: useAppStore.getState().view } satisfies ScreenEntry, "");
 
-    const unsubscribe = useReviewStore.subscribe((state, previous) => {
+    const unsubscribe = useAppStore.subscribe((state, previous) => {
       if (state.view === previous.view) return;
       // Already there: the change came from history itself.
       if (entryView(history.state) === state.view) return;
@@ -36,7 +37,7 @@ export function useScreenHistory() {
 
     function onPopState(event: PopStateEvent) {
       const view = entryView(event.state) ?? "home";
-      const { repo, view: current, goHome, showReview } = useReviewStore.getState();
+      const { view: current, goHome, showReview } = useAppStore.getState();
       // Our own `history.back()` catching up with a screen already left.
       if (view === current) return;
       // A swipe slides WebKit's own snapshot of the screen; animating on top of
@@ -49,12 +50,12 @@ export function useScreenHistory() {
 
       if (view === "home") {
         goHome({ animate });
-      } else if (repo) {
-        void showReview({ animate });
-      } else {
-        // The repository this review belonged to has since been closed.
-        history.replaceState({ view: "home" } satisfies ScreenEntry, "");
+        return;
       }
+      void showReview({ animate }).then((shown) => {
+        // The tab this review belonged to has since been closed.
+        if (!shown) history.replaceState({ view: "home" } satisfies ScreenEntry, "");
+      });
     }
 
     window.addEventListener("popstate", onPopState);

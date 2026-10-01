@@ -19,6 +19,9 @@ pub enum GitError {
     BadRevision(String),
     #[error("{0}")]
     Command(String),
+    /// The page cancelled the agent run; nothing went wrong.
+    #[error("the run was cancelled")]
+    Cancelled,
     /// A failure explained in a sentence or two, with the raw output behind it
     /// kept for debugging: the app shows `message` and keeps `detail` one
     /// click away.
@@ -37,6 +40,7 @@ impl GitError {
             Self::GhNotFound => "ghNotFound",
             Self::NotARepo(_) => "notARepo",
             Self::BadRevision(_) => "badRevision",
+            Self::Cancelled => "cancelled",
             Self::Command(_) | Self::Detailed { .. } => "command",
         }
     }

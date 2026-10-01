@@ -7,22 +7,12 @@ import css from "./CopyButton.module.css";
 const COPIED_MS = 1500;
 
 /**
- * An icon button that puts `text` on the clipboard, turning into a check for a
- * moment to say it worked. Sized to sit at the end of a line of print rather
- * than in a row of controls.
+ * Puts `text` on the clipboard on `copy()`, and reports `copied` for a moment
+ * after it worked. A failure is a toast: there is nothing to retry in place.
  */
-export function CopyButton({
-  text,
-  label = "Copy",
-  className,
-}: {
-  text: string;
-  label?: string;
-  className?: string;
-}) {
+export function useCopy(text: string) {
   // A time rather than a flag, so copying again restarts the check's timer.
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
-  const copied = copiedAt !== null;
 
   useEffect(() => {
     if (copiedAt === null) return;
@@ -41,6 +31,25 @@ export function CopyButton({
         }),
     );
   }
+
+  return { copied: copiedAt !== null, copy };
+}
+
+/**
+ * An icon button that puts `text` on the clipboard, turning into a check for a
+ * moment to say it worked. Sized to sit at the end of a line of print rather
+ * than in a row of controls.
+ */
+export function CopyButton({
+  text,
+  label = "Copy",
+  className,
+}: {
+  text: string;
+  label?: string;
+  className?: string;
+}) {
+  const { copied, copy } = useCopy(text);
 
   return (
     <Tooltip content={copied ? "Copied" : label}>

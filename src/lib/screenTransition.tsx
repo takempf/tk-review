@@ -11,21 +11,47 @@ import { Morph, type MorphProps, morph } from "tk-design-system";
 import css from "./screenTransition.module.css";
 
 /**
- * Switching between the pull-request list and the review: the PR's number and
- * title — shown in both — glide across as shared elements of a view transition,
- * while the screens themselves crossfade as live layers underneath.
+ * Switching between the pull-request list and the review, and between tabs: a
+ * PR's number and title — shown in its row and its tab — glide from one to the
+ * other as shared elements of a view transition, and the tabs slide as others
+ * come and go, while the screens themselves crossfade as live layers
+ * underneath.
  *
  * The screens are never snapshotted. WebKit's snapshot of the review screen
  * costs more per frame the bigger the diff — hundreds of ms on a large PR —
  * whereas a live layer fading is composited. Only `<Morph>`s in this scope take
- * part, so the list's own morphs stay out of it. Title timing is in global.css.
+ * part, so the list's own morphs stay out of it. Their timing is in global.css,
+ * under the transition's `screen` type.
  */
 const SCREEN_SCOPE = "screen";
 
-const NAMES = {
-  prNumber: "screen-pr-number",
-  prTitle: "screen-pr-title",
-} as const;
+/**
+ * The parts that move between screens: a tab's, and the list's "Pull requests"
+ * heading, which becomes the review's way back to it (`id` "home").
+ */
+type ScreenPart = "number" | "title" | "tab" | "heading";
+
+/**
+ * FNV-1a: a short, stable name for a repository path, which can't go into a
+ * view-transition name as it is.
+ */
+function hash(text: string): string {
+  let value = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    value ^= text.charCodeAt(index);
+    value = Math.imul(value, 0x01000193);
+  }
+  return (value >>> 0).toString(36);
+}
+
+/**
+ * What a PR's parts are named by, wherever they show. The same PR's row on the
+ * list and its tab share it, so either can carry its number and title into the
+ * review, before the tab has an id of its own.
+ */
+export function prMorphKey(root: string, number: number): string {
+  return `pr-${hash(root)}-${number}`;
+}
 
 /** The crossfade, in ms. The screen arriving takes longer than the one leaving. */
 export const SCREEN_FADE = { out: 180, in: 300 } as const;
@@ -51,7 +77,7 @@ export function transitionScreen(update: () => void): Promise<void> {
         startFade();
         resolve();
       },
-      { scope: SCREEN_SCOPE },
+      { scope: SCREEN_SCOPE, type: "screen" },
     );
     if (!transition) return;
     // Set before the update runs, so the new screen renders knowing it is
@@ -149,15 +175,18 @@ export function ScreenStack<K extends string>({
 }
 
 /**
- * Marks an element as one of a screen's shared parts. A name may be held by one
- * element per screen, so every holder but one turns itself off with `active`.
+ * Marks an element as one of a tab's shared parts: `id` is the tab's
+ * `morphKey`. A name may be held by one element at a time, so every holder but
+ * one turns itself off with `active`.
  */
 export function ScreenMorph({
+  id,
   part,
   active = true,
   children,
 }: {
-  part: keyof typeof NAMES;
+  id: string;
+  part: ScreenPart;
   active?: boolean;
   children: MorphProps["children"];
 }) {
@@ -170,11 +199,12 @@ export function ScreenMorph({
   }
   return (
     <Morph
-      name={NAMES[part]}
+      name={`screen-${id}-${part}`}
       scope={SCREEN_SCOPE}
-      // Text glides at its true size; the list and the header set the number
-      // and title identically, so nothing needs to scale.
-      fit="text"
+      // Text glides at its true size, so nothing needs to scale. The tab
+      // itself is a box, sliding over as the tabs around it come and go, and
+      // the list's heading scales down into the back button's label.
+      fit={part === "tab" || part === "heading" ? "box" : "text"}
       active={active}
     >
       {children}

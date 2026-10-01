@@ -1,0 +1,47 @@
+/* An icon's box, whatever is in it, so a tab's text doesn't shift as its
+   status changes. */
+.status {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  aspect-ratio: 1;
+  color: var(--tk-fg-muted);
+
+  &[data-status="opening"],
+  &[data-status="none"] {
+    color: var(--tk-fg-subtle);
+  }
+
+  &[data-status="working"] {
+    color: var(--tk-fg);
+  }
+
+  &[data-status="error"],
+  &[data-status="request_changes"] {
+    color: var(--tk-danger);
+  }
+
+  &[data-status="moved"] {
+    color: var(--tk-warning);
+  }
+
+  &[data-status="approve"] {
+    color: var(--tk-success);
+  }
+}
+
+/* Finished while the tab was out of sight: a dot on the mark's corner, the way
+   an app icon carries a badge. */
+.unseen {
+  position: absolute;
+  top: -0.1em;
+  right: -0.15em;
+  width: 0.45em;
+  aspect-ratio: 1;
+  background: var(--tk-accent);
+  border: 1.5px solid var(--bg);
+  border-radius: var(--tk-radius-round);
+}

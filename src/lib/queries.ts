@@ -28,7 +28,7 @@ const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
  * Bump whenever a cached shape (`PrSummary`) changes, so a cache written by an
  * older build is dropped rather than read as the new one.
  */
-const CACHE_VERSION = "1";
+const CACHE_VERSION = "3";
 
 export const queryClient = new QueryClient({
   defaultOptions: {

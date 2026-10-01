@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -81,6 +82,32 @@ pub struct Branch {
     pub is_remote: bool,
     pub is_head: bool,
 }
+
+/// One commit of a comparison, as the commit list shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Commit {
+    pub sha: String,
+    /// The first line of the message.
+    pub subject: String,
+    pub author: String,
+    /// Committer date, ISO 8601: when the commit took its current form, which a
+    /// rebase or an amend moves along with the commit itself.
+    pub committed_at: String,
+}
+
+/// The commits a comparison is made of, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitLog {
+    pub commits: Vec<Commit>,
+    /// There were more than `MAX_COMMITS`, and only the newest are listed.
+    pub truncated: bool,
+}
+
+/// A branch is a handful of commits; comparing two distant refs can be
+/// thousands, which no sidebar list is worth paying for.
+const MAX_COMMITS: usize = 250;
 
 /// Full contents of both sides of a file. `None` means the file does not exist
 /// on that side, which is normal for an addition or a deletion.
@@ -248,16 +275,33 @@ pub fn remote_urls(root: &Path) -> Result<Vec<(String, String)>, GitError> {
         .collect()
 }
 
+/// Held across pruning and fetching PR refs. Two tabs opening at once would
+/// otherwise race: PRs that share a base both update its remote-tracking ref,
+/// and git refuses the second with `cannot lock ref`, while one tab's prune can
+/// delete the ref another has just fetched. One lock for every repository,
+/// since a fetch is a network round trip either way and opening is rare.
+static PR_REFS: Mutex<()> = Mutex::new(());
+
 /// Fetch a PR's immutable-on-purpose local review ref and its base branch.
 /// The `pull/N/head` ref belongs to the base repository, including for fork
 /// PRs, which avoids needing to add an untrusted fork as a remote.
+///
+/// `keep` names the other PRs whose refs are still in use — those open in
+/// tabs — so fetching this one doesn't pull their diffs out from under them.
 pub fn fetch_pr_head(
     root: &Path,
     remote: &str,
     number: u64,
     base_ref: &str,
+    keep: &[u64],
 ) -> Result<(String, String), GitError> {
-    prune_pr_refs(root, number)?;
+    // A poisoned lock only means another fetch panicked; the refs are still git's.
+    let _refs = PR_REFS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut kept: HashSet<u64> = keep.iter().copied().collect();
+    kept.insert(number);
+    prune_pr_refs(root, &kept)?;
     let compare_ref = format!("refs/tk-review/pr/{number}");
     let pull_refspec = format!("+pull/{number}/head:{compare_ref}");
     let base_refspec = format!("+refs/heads/{base_ref}:refs/remotes/{remote}/{base_ref}");
@@ -278,15 +322,20 @@ pub fn fetch_pr_head(
     Ok((compare_ref.trim_start_matches("refs/").to_owned(), head_sha))
 }
 
-/// PR review refs are an app-owned cache, not user branches. Keep only the PR
-/// about to be fetched so opening many unrelated PRs cannot accumulate refs.
-fn prune_pr_refs(root: &Path, keep: u64) -> Result<(), GitError> {
+/// PR review refs are an app-owned cache, not user branches. Keep only the PRs
+/// still open in a tab, so opening many unrelated PRs cannot accumulate refs.
+fn prune_pr_refs(root: &Path, keep: &HashSet<u64>) -> Result<(), GitError> {
     let refs = run_git_text(
         root,
         &["for-each-ref", "--format=%(refname)", "refs/tk-review/pr"],
     )?;
-    let keep_ref = format!("refs/tk-review/pr/{keep}");
-    for reference in refs.lines().filter(|reference| *reference != keep_ref) {
+    let kept = |reference: &str| {
+        reference
+            .strip_prefix("refs/tk-review/pr/")
+            .and_then(|number| number.parse::<u64>().ok())
+            .is_some_and(|number| keep.contains(&number))
+    };
+    for reference in refs.lines().filter(|reference| !kept(reference)) {
         run_git(root, &["update-ref", "-d", reference])?;
     }
     Ok(())
@@ -626,6 +675,49 @@ pub fn get_patch(root: &Path, merge_base: &str, compare: Option<&str>) -> Result
         }
     }
     Ok(patch)
+}
+
+/// The commits on `compare` since `merge_base`, newest first — or, when
+/// `compare` is `None`, the ones the working tree sits on top of.
+pub fn list_commits(
+    root: &Path,
+    merge_base: &str,
+    compare: Option<&str>,
+) -> Result<CommitLog, GitError> {
+    let range = format!("{merge_base}..{}", compare.unwrap_or("HEAD"));
+    // One past the cap, to tell a log that ends there from one that goes on.
+    let limit = format!("--max-count={}", MAX_COMMITS + 1);
+    // NUL between fields and, with `-z`, between commits: neither can appear in
+    // a subject or a name.
+    let raw = run_git(
+        root,
+        &[
+            "log",
+            "-z",
+            "--no-show-signature",
+            "--format=%H%x00%an%x00%cI%x00%s",
+            &limit,
+            &range,
+        ],
+    )?;
+    let mut commits = parse_log(&raw);
+    let truncated = commits.len() > MAX_COMMITS;
+    commits.truncate(MAX_COMMITS);
+    Ok(CommitLog { commits, truncated })
+}
+
+fn parse_log(raw: &[u8]) -> Vec<Commit> {
+    let fields: Vec<&[u8]> = raw.split(|&byte| byte == 0).collect();
+    // The log ends on a NUL, leaving one empty field that `chunks_exact` drops.
+    fields
+        .chunks_exact(4)
+        .map(|chunk| Commit {
+            sha: lossy(chunk[0]),
+            author: lossy(chunk[1]),
+            committed_at: lossy(chunk[2]),
+            subject: lossy(chunk[3]),
+        })
+        .collect()
 }
 
 /// The unified diff for a single file of the comparison, for prompts that
@@ -1380,6 +1472,88 @@ mod tests {
     }
 
     #[test]
+    fn lists_the_commits_since_the_merge_base_newest_first() {
+        let repo = TestRepo::new();
+        repo.write("shared.txt", "start\n");
+        repo.commit("base");
+
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("feature.txt", "one\n");
+        repo.commit("first feature commit");
+        repo.write("feature.txt", "one\ntwo\n");
+        repo.git(&["add", "-A"]);
+        repo.git(&[
+            "commit",
+            "-q",
+            "-m",
+            "second feature commit",
+            "-m",
+            "with a body",
+        ]);
+
+        repo.git(&["checkout", "-q", "main"]);
+        repo.write("main-only.txt", "main moved on\n");
+        repo.commit("later work on main");
+
+        let summary = diff_branches(repo.path(), "main", Some("feature")).expect("diff branches");
+        let log = list_commits(repo.path(), &summary.merge_base, Some("feature")).expect("log");
+        let subjects: Vec<&str> = log.commits.iter().map(|c| c.subject.as_str()).collect();
+
+        // Main's later commit is not part of the comparison, and a body stays
+        // out of the subject.
+        assert_eq!(
+            subjects,
+            vec!["second feature commit", "first feature commit"]
+        );
+        assert_eq!(
+            log.commits[0].sha,
+            repo.git(&["rev-parse", "feature"]),
+            "the newest commit is the compare head"
+        );
+        assert_eq!(log.commits[0].author, "Test");
+        assert!(!log.commits[0].committed_at.is_empty());
+        assert!(!log.truncated);
+    }
+
+    #[test]
+    fn lists_the_commits_under_the_working_tree() {
+        let repo = TestRepo::new();
+        repo.write("shared.txt", "start\n");
+        repo.commit("base");
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("feature.txt", "one\n");
+        repo.commit("feature work");
+        repo.write("feature.txt", "uncommitted\n");
+
+        let summary = diff_branches(repo.path(), "main", None).expect("diff branches");
+        let log = list_commits(repo.path(), &summary.merge_base, None).expect("log");
+        let subjects: Vec<&str> = log.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["feature work"]);
+    }
+
+    #[test]
+    fn caps_a_long_log_at_the_newest_commits() {
+        let repo = TestRepo::new();
+        repo.write("shared.txt", "start\n");
+        repo.commit("base");
+        let base = repo.git(&["rev-parse", "HEAD"]);
+        for index in 0..=MAX_COMMITS {
+            repo.git(&[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("commit {index}"),
+            ]);
+        }
+
+        let log = list_commits(repo.path(), &base, Some("main")).expect("log");
+        assert!(log.truncated);
+        assert_eq!(log.commits.len(), MAX_COMMITS);
+        assert_eq!(log.commits[0].subject, format!("commit {MAX_COMMITS}"));
+    }
+
+    #[test]
     fn patch_covers_every_file_in_the_range() {
         let repo = TestRepo::new();
         repo.write("kept.txt", "one\ntwo\n");
@@ -1577,10 +1751,47 @@ mod tests {
         repo.git(&["push", "origin", "HEAD:refs/pull/7/head"]);
 
         let (compare_ref, head) =
-            fetch_pr_head(repo.path(), "origin", 7, "main").expect("fetch PR");
+            fetch_pr_head(repo.path(), "origin", 7, "main", &[]).expect("fetch PR");
         assert_eq!(compare_ref, "tk-review/pr/7");
         assert_eq!(head, expected);
         assert_eq!(repo.git(&["rev-parse", "tk-review/pr/7"]), expected);
+    }
+
+    #[test]
+    fn fetching_a_pr_keeps_the_refs_of_prs_still_open() {
+        let repo = TestRepo::new();
+        repo.write("shared.txt", "base\n");
+        repo.commit("base");
+
+        let remote = tempfile::tempdir().expect("remote dir");
+        let remote_path = remote.path().display().to_string();
+        let output = Command::new("git")
+            .args(["init", "--bare", &remote_path])
+            .output()
+            .expect("init bare remote");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        repo.git(&["remote", "add", "origin", &remote_path]);
+        repo.git(&["push", "origin", "main"]);
+        for number in [7, 8, 9] {
+            repo.git(&["checkout", "-q", "-B", &format!("pr-{number}"), "main"]);
+            repo.write(&format!("pr-{number}.txt"), "review me\n");
+            repo.commit(&format!("pr {number}"));
+            repo.git(&["push", "origin", &format!("HEAD:refs/pull/{number}/head")]);
+        }
+
+        fetch_pr_head(repo.path(), "origin", 7, "main", &[]).expect("fetch 7");
+        fetch_pr_head(repo.path(), "origin", 8, "main", &[7]).expect("fetch 8");
+        let refs = repo.git(&["for-each-ref", "--format=%(refname)", "refs/tk-review/pr"]);
+        assert_eq!(refs, "refs/tk-review/pr/7\nrefs/tk-review/pr/8");
+
+        // 7's tab closed: fetching 9 lets its ref go.
+        fetch_pr_head(repo.path(), "origin", 9, "main", &[8]).expect("fetch 9");
+        let refs = repo.git(&["for-each-ref", "--format=%(refname)", "refs/tk-review/pr"]);
+        assert_eq!(refs, "refs/tk-review/pr/8\nrefs/tk-review/pr/9");
     }
 
     #[test]

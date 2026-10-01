@@ -4,8 +4,11 @@ pub mod git;
 pub mod github;
 pub mod models;
 pub mod review;
+pub mod runs;
 
 use tauri::Manager;
+
+use crate::runs::AgentRuns;
 
 /// The page zoom the UI starts at, set before the first paint so it never
 /// flashes at 100%. `src/lib/zoom.ts` owns the level from there; keep the two
@@ -17,6 +20,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(AgentRuns::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_zoom(DEFAULT_ZOOM)?;
@@ -47,13 +51,21 @@ pub fn run() {
             commands::get_github_image,
             commands::diff_branches,
             commands::get_patch,
+            commands::list_commits,
             commands::get_file_versions,
             commands::review_diff,
             commands::re_review_diff,
             commands::explain_diff,
             commands::review_reply,
             commands::list_agent_models,
+            commands::cancel_agent_run,
+            commands::abandon_agent_runs,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<AgentRuns>().kill_all();
+            }
+        });
 }

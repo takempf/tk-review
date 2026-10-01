@@ -1,0 +1,19 @@
+.progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-1) var(--tk-space-3);
+  align-items: center;
+  font-size: var(--tk-text-sm);
+  color: var(--tk-fg-subtle);
+}
+
+/* Mono, so the clock doesn't jitter as it counts. */
+.clock {
+  font-family: var(--tk-font-mono);
+  color: var(--tk-fg-muted);
+}
+
+.silent {
+  color: var(--tk-warning);
+  text-wrap: balance;
+}

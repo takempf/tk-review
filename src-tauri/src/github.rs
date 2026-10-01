@@ -46,6 +46,8 @@ pub struct PrContext {
     pub is_draft: bool,
     pub base_ref: String,
     pub base_remote: String,
+    /// The PR's branch as GitHub names it; the diff reads `compare_ref` instead.
+    pub head_ref: String,
     pub head_sha: String,
     pub compare_ref: String,
     pub comments: Vec<PrComment>,
@@ -61,6 +63,7 @@ pub struct PrSummary {
     pub author: String,
     pub is_draft: bool,
     pub url: String,
+    pub labels: Vec<PrLabel>,
     pub head_ref: String,
     pub base_ref: String,
     /// Whether the head branch lives in a fork. A fork's branch names say
@@ -70,12 +73,24 @@ pub struct PrSummary {
     /// The head commit, so a stored review can tell it is out of date.
     pub head_sha: String,
     /// ISO 8601, as GitHub reports it.
+    pub created_at: String,
+    /// ISO 8601, as GitHub reports it.
     pub updated_at: String,
     pub additions: u64,
     pub deletions: u64,
+    pub changed_files: u64,
     /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` when the
     /// repository asks for no review.
     pub review_decision: Option<String>,
+}
+
+/// A label as GitHub shows it: `color` is six hex digits, without the `#`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrLabel {
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
 }
 
 /// Which open pull requests to list, in `gh`'s own terms of the signed-in user.
@@ -151,6 +166,7 @@ struct GhPr {
     state: String,
     is_draft: bool,
     base_ref_name: String,
+    head_ref_name: String,
     head_ref_oid: String,
 }
 
@@ -162,16 +178,22 @@ struct GhPrSummary {
     author: GhAuthor,
     is_draft: bool,
     url: String,
+    #[serde(default)]
+    labels: Vec<PrLabel>,
     head_ref_name: String,
     base_ref_name: String,
     #[serde(default)]
     is_cross_repository: bool,
     head_ref_oid: String,
+    #[serde(default)]
+    created_at: String,
     updated_at: String,
     #[serde(default)]
     additions: u64,
     #[serde(default)]
     deletions: u64,
+    #[serde(default)]
+    changed_files: u64,
     #[serde(default)]
     review_decision: Option<String>,
 }
@@ -280,13 +302,19 @@ fn invalid_pr_ref(value: &str) -> GitError {
 }
 
 /// Opens a PR, fetches the head ref into a stable local namespace, and returns
-/// enough metadata for both the review panel and later comment posting.
-pub fn open_pr(root: &Path, url: &str) -> Result<PrContext, GitError> {
+/// enough metadata for both the review panel and later comment posting. `keep`
+/// is every other PR open in a tab, whose refs must survive the fetch.
+pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitError> {
     let reference = parse_pr_ref(url)?;
     let pr = read_pr(&reference)?;
     let base_remote = find_remote(root, &reference)?;
-    let (compare_ref, head_sha) =
-        git::fetch_pr_head(root, &base_remote, reference.number, &pr.base_ref_name)?;
+    let (compare_ref, head_sha) = git::fetch_pr_head(
+        root,
+        &base_remote,
+        reference.number,
+        &pr.base_ref_name,
+        keep,
+    )?;
     let comments = read_comments(&reference)?;
     Ok(PrContext {
         url: pr.url,
@@ -298,6 +326,7 @@ pub fn open_pr(root: &Path, url: &str) -> Result<PrContext, GitError> {
         is_draft: pr.is_draft,
         base_ref: pr.base_ref_name,
         base_remote,
+        head_ref: pr.head_ref_name,
         head_sha,
         compare_ref,
         comments,
@@ -310,7 +339,7 @@ pub fn open_pr(root: &Path, url: &str) -> Result<PrContext, GitError> {
 const PR_LIST_LIMIT: &str = "50";
 
 const PR_LIST_FIELDS: &str =
-    "number,title,author,isDraft,url,headRefName,baseRefName,isCrossRepository,headRefOid,updatedAt,additions,deletions,reviewDecision";
+    "number,title,author,isDraft,url,labels,headRefName,baseRefName,isCrossRepository,headRefOid,createdAt,updatedAt,additions,deletions,changedFiles,reviewDecision";
 
 /// Open pull requests on the repository this checkout's remotes point at,
 /// most recently updated first.
@@ -357,13 +386,16 @@ fn parse_pr_list(raw: &[u8]) -> Result<Vec<PrSummary>, GitError> {
             author: pr.author.login,
             is_draft: pr.is_draft,
             url: pr.url,
+            labels: pr.labels,
             head_ref: pr.head_ref_name,
             base_ref: pr.base_ref_name,
             is_cross_repository: pr.is_cross_repository,
             head_sha: pr.head_ref_oid,
+            created_at: pr.created_at,
             updated_at: pr.updated_at,
             additions: pr.additions,
             deletions: pr.deletions,
+            changed_files: pr.changed_files,
             review_decision: pr.review_decision.filter(|decision| !decision.is_empty()),
         })
         .collect();
@@ -395,8 +427,12 @@ fn list_target(root: &Path) -> Result<String, GitError> {
         })
 }
 
-pub fn refresh_pr(root: &Path, previous: &PrContext) -> Result<RefreshPrResult, GitError> {
-    let pr = open_pr(root, &previous.url)?;
+pub fn refresh_pr(
+    root: &Path,
+    previous: &PrContext,
+    keep: &[u64],
+) -> Result<RefreshPrResult, GitError> {
+    let pr = open_pr(root, &previous.url, keep)?;
     Ok(RefreshPrResult {
         head_moved: pr.head_sha != previous.head_sha,
         pr,
@@ -410,7 +446,7 @@ fn read_pr(reference: &PrRef) -> Result<GhPr, GitError> {
         "view",
         &target,
         "--json",
-        "url,number,title,body,author,state,isDraft,baseRefName,headRefOid",
+        "url,number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid",
     ])?;
     if raw.iter().all(u8::is_ascii_whitespace) {
         return Err(GitError::Command(
@@ -933,6 +969,7 @@ mod tests {
             is_draft: false,
             base_ref: "main".into(),
             base_remote: "origin".into(),
+            head_ref: "avoid-duplicate-widgets".into(),
             head_sha: "abc123".into(),
             compare_ref: "tk-review/pr/7".into(),
             comments: Vec::new(),
@@ -951,7 +988,8 @@ mod tests {
              "additions":3,"deletions":1,"reviewDecision":""},
             {"number":2,"title":"New","author":{"login":"b"},"isDraft":true,"url":"u2",
              "headRefName":"two","baseRefName":"main","isCrossRepository":true,"headRefOid":"bbb","updatedAt":"2026-09-20T10:00:00Z",
-             "additions":10,"deletions":0,"reviewDecision":"APPROVED"}
+             "createdAt":"2026-09-18T10:00:00Z","additions":10,"deletions":0,"changedFiles":4,"reviewDecision":"APPROVED",
+             "labels":[{"id":"L1","name":"bug","description":"","color":"d73a4a"}]}
         ]"#;
         let prs = parse_pr_list(raw).unwrap();
         assert_eq!(prs.iter().map(|pr| pr.number).collect::<Vec<_>>(), [2, 1]);
@@ -960,6 +998,15 @@ mod tests {
         assert_eq!(prs[0].head_ref, "two");
         assert!(prs[0].is_cross_repository);
         assert!(!prs[1].is_cross_repository);
+        assert_eq!(
+            prs[0].labels,
+            [PrLabel {
+                name: "bug".into(),
+                color: "d73a4a".into()
+            }]
+        );
+        assert_eq!(prs[0].changed_files, 4);
+        assert!(prs[1].labels.is_empty());
         assert!(parse_pr_list(b"  \n").unwrap().is_empty());
     }
 

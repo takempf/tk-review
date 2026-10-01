@@ -50,7 +50,8 @@ The one deliberate exception is the **Uncommitted** checkbox next to the ref sel
 ```
 src/
   ipc/git.ts            typed wrappers over the Rust commands
-  store/reviewStore.ts  repo, refs, diff summary, selection
+  store/appStore.ts     the repo the list shows, review settings, open tabs
+  store/tabStore.ts     one per tab: refs, diff summary, selection, reviews, agent runs
   components/           one folder per component, each with a CSS module
 src-tauri/src/
   git.rs                the git layer and its tests
@@ -102,6 +103,16 @@ request re-sends the finding, its file's diff, and the conversation so far —
 so they keep working across app restarts without depending on CLI session
 files.
 
+Claude runs are capped at 30 agentic turns. A run that hits the cap has usually
+done most of its reading, so instead of failing, the session is resumed once
+with its tools taken away (`--resume <id> --tools ""`) and the model asked to
+answer from what it has. A review rescued this way is marked as cut short.
+When something does fail, the panel leads with a sentence on what went wrong
+and keeps the CLI's raw output (the JSON envelope, or the codex or `gh` log)
+behind **Show details**, with a copy button for bug reports. The dev harness
+acts out each failure with `?fail=review`, `turns`, `explain`, `post`, `list`
+or `refresh`.
+
 
 
 There is deliberately no file-size limit. [Pierre's write-up on rendering
@@ -137,6 +148,12 @@ when someone expands the context around a hunk.
   start collapsed. So do files ticked as viewed. Selecting a file opens it again.
 - The viewed checkbox appears both in the sidebar and in each file's header, and
   persists per repo and ref pair.
+- Under the files, the commit list shows the commits the comparison is made of,
+  newest first, each marked with the reviews that read it in the verdict's
+  colour and glyph, as on the tab. A re-review keeps a stamp of the review it
+  replaced, so earlier reviews stay on the list. Reviews from before the head
+  commit was recorded, and ones whose commit a rebase rewrote, are placed by
+  time instead.
 - `j` and `k` move through the file list, which scrolls the surface to that file.
   The viewed checkboxes persist per repo and ref pair.
 - Paths are parsed NUL-delimited throughout, so filenames containing spaces or

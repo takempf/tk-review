@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Icon, Popover } from "tk-design-system";
-import { reviewsWorkingTree, useReviewStore } from "../../store/reviewStore";
+import { reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { BranchSelector } from "../BranchSelector/BranchSelector";
 import css from "./ComparisonPicker.module.css";
 import { PrSelector } from "./PrSelector";
@@ -8,16 +8,16 @@ import { PrSelector } from "./PrSelector";
 /**
  * The header control for a branch comparison. The button reads back the
  * current pair; the popover behind it offers a pull request search first, and
- * the manual base/compare pair below. A PR under review shows as a plain
- * heading instead (see `App`), since it was chosen from the list.
+ * the manual base/compare pair below. A PR under review shows its branches
+ * instead (see `App`), since it was chosen from the list.
  *
  * Keyed on the repository by the caller: another project's pull requests are
  * not this one's, so the list starts empty rather than stale.
  */
 export function ComparisonPicker() {
-  const base = useReviewStore((state) => state.base);
-  const compare = useReviewStore((state) => state.compare);
-  const worktree = useReviewStore(reviewsWorkingTree);
+  const base = useTab((state) => state.base);
+  const compare = useTab((state) => state.compare);
+  const worktree = useTab(reviewsWorkingTree);
   const [open, setOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(true);
 

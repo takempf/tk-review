@@ -8,20 +8,45 @@
 //! directory, which gives the agent's read-only tools the surrounding code, so
 //! findings can account for context beyond the diff itself.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::GitError;
 use crate::git;
 use crate::github::PrContext;
+use crate::runs::{AgentRun, Stop, QUIET_LIMIT, RUN_LIMIT};
 
-/// Ceiling on agentic turns for claude, as a backstop against a runaway
-/// session. Generous enough for the model to read context around a sizeable
-/// diff.
-const MAX_TURNS: &str = "30";
+/// Fewest agentic turns a claude run gets: enough to read around a small diff.
+const MIN_TURNS: usize = 30;
+
+/// Most agentic turns a claude run gets, however large the diff. The run's
+/// time limit (`RUN_LIMIT`) is the real backstop against a runaway session,
+/// and a run stopped by it leaves nothing, where one stopped here can still
+/// answer from what it read. So this stays well short of what an hour holds.
+const MAX_TURNS: usize = 100;
+
+/// Agentic turns for a claude run over `patch`. A flat limit that suits a
+/// small change starves a large one, where most of the turns go on reading
+/// around the changed files, so the budget grows with how many there are.
+fn turn_budget(patch: &str) -> usize {
+    let files = patch
+        .lines()
+        .filter(|line| line.starts_with("diff --git "))
+        .count();
+    (MIN_TURNS + files / 2).min(MAX_TURNS)
+}
+
+/// Tells claude its turn budget, which it otherwise cannot see. A turn is one
+/// response however many tool calls it makes, so batching independent reads
+/// is what stretches the budget; reading the riskiest changes first is what
+/// makes a run that does stop short still worth having.
+fn turn_budget_note(turns: usize) -> String {
+    format!(
+        "This run has a budget of {turns} turns, and a turn is one of your responses however many tool calls it makes. Make independent reads and searches in the same response rather than one per turn, look at the riskiest changes first, and stop investigating in good time to write the answer."
+    )
+}
 
 /// How every prose field the agent writes should read. Shared by all the
 /// prompts so the review, the explanation, and replies sound like one
@@ -154,6 +179,10 @@ pub struct ReviewResult {
     /// A draft body for that GitHub review, addressed to the author.
     #[serde(default)]
     pub conclusion: String,
+    /// The agent ran out of turns and answered from what it had read by then,
+    /// so the review may have gaps. Set by the app, never by the model.
+    #[serde(default, skip_deserializing)]
+    pub cut_short: bool,
 }
 
 /// Reviews the whole comparison with the chosen engine and returns structured
@@ -162,6 +191,7 @@ pub struct ReviewResult {
 /// `compare: None` reviews against the working tree, matching `diff_branches`.
 /// `model: None` and `effort: None` use whatever the CLI itself is configured
 /// to default to.
+#[allow(clippy::too_many_arguments)]
 pub fn review_diff(
     root: &Path,
     merge_base: &str,
@@ -170,6 +200,7 @@ pub fn review_diff(
     model: Option<&str>,
     effort: Option<&str>,
     pr_context: Option<&PrContext>,
+    run: &AgentRun,
 ) -> Result<ReviewResult, GitError> {
     // Validated up front so a typo reports as itself rather than as whatever
     // the git plumbing happens to say first.
@@ -187,12 +218,20 @@ pub fn review_diff(
     }
 
     let prompt = build_prompt(compare, &patch, pr_context);
-    let result_text = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort)?
+    let answer = if engine == "claude" {
+        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?
     } else {
-        codex_result_text(root, &prompt, model, effort, Some(REVIEW_SCHEMA))?
+        AgentText::complete(codex_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            Some(REVIEW_SCHEMA),
+            run,
+        )?)
     };
-    let mut result: ReviewResult = parse_agent_json(&result_text)?;
+    let mut result: ReviewResult = parse_agent_json(&answer.text)?;
+    result.cut_short = answer.cut_short;
     for finding in &mut result.findings {
         finding.tidy_span();
     }
@@ -228,6 +267,9 @@ pub struct ReReviewResult {
     pub verdict: String,
     #[serde(default)]
     pub conclusion: String,
+    /// As on `ReviewResult`.
+    #[serde(default, skip_deserializing)]
+    pub cut_short: bool,
 }
 
 /// Re-reviews the comparison against an earlier review: judges whether each
@@ -246,6 +288,7 @@ pub fn re_review_diff(
     prior_summary: &str,
     prior_findings: &[ReviewFinding],
     pr_context: Option<&PrContext>,
+    run: &AgentRun,
 ) -> Result<ReReviewResult, GitError> {
     if !matches!(engine, "claude" | "codex") {
         return Err(GitError::Command(format!(
@@ -266,12 +309,20 @@ pub fn re_review_diff(
     }
 
     let prompt = build_re_review_prompt(compare, prior_summary, prior_findings, &patch, pr_context);
-    let result_text = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort)?
+    let answer = if engine == "claude" {
+        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?
     } else {
-        codex_result_text(root, &prompt, model, effort, Some(RE_REVIEW_SCHEMA))?
+        AgentText::complete(codex_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            Some(RE_REVIEW_SCHEMA),
+            run,
+        )?)
     };
-    let mut result: ReReviewResult = parse_agent_json(&result_text)?;
+    let mut result: ReReviewResult = parse_agent_json(&answer.text)?;
+    result.cut_short = answer.cut_short;
     for finding in &mut result.findings {
         finding.tidy_span();
     }
@@ -396,6 +447,7 @@ pub struct ExplainResult {
 /// Deliberately a separate CLI run from `review_diff` rather than an extra
 /// field on the review: the two jobs want different framing, and a failure in
 /// one should not cost the other.
+#[allow(clippy::too_many_arguments)]
 pub fn explain_diff(
     root: &Path,
     merge_base: &str,
@@ -404,6 +456,7 @@ pub fn explain_diff(
     model: Option<&str>,
     effort: Option<&str>,
     pr_context: Option<&PrContext>,
+    run: &AgentRun,
 ) -> Result<ExplainResult, GitError> {
     if !matches!(engine, "claude" | "codex") {
         return Err(GitError::Command(format!(
@@ -420,9 +473,9 @@ pub fn explain_diff(
 
     let prompt = build_explain_prompt(compare, &patch, pr_context);
     let result_text = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort)?
+        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?.text
     } else {
-        codex_result_text(root, &prompt, model, effort, Some(EXPLAIN_SCHEMA))?
+        codex_result_text(root, &prompt, model, effort, Some(EXPLAIN_SCHEMA), run)?
     };
     parse_agent_json(&result_text)
 }
@@ -540,6 +593,7 @@ pub fn review_reply(
     thread: &[ThreadComment],
     comment: &str,
     pr_context: Option<&PrContext>,
+    run: &AgentRun,
 ) -> Result<String, GitError> {
     if !matches!(engine, "claude" | "codex") {
         return Err(GitError::Command(format!(
@@ -556,9 +610,9 @@ pub fn review_reply(
         compare, summary, finding, thread, comment, &patch, pr_context,
     );
     let reply = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort)?
+        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), run)?.text
     } else {
-        codex_result_text(root, &prompt, model, effort, None)?
+        codex_result_text(root, &prompt, model, effort, None, run)?
     };
     Ok(reply.trim().to_owned())
 }
@@ -762,17 +816,23 @@ pub(crate) fn cli_candidates(name: &str) -> Vec<CliCandidate> {
 }
 
 /// Spawns the first launchable candidate for `name`, feeds it the prompt on
-/// stdin, and returns its output. The prompt goes through stdin rather than
-/// argv because a patch can easily exceed the argument-size limit.
-fn run_cli(
+/// stdin, and waits for it to exit, successfully or not — or for `run` to stop
+/// it: cancelled, gone quiet, or run too long. The prompt goes through stdin
+/// rather than argv because a patch can easily exceed the argument-size limit.
+fn spawn_cli(
     root: &Path,
     name: &str,
     args: &[&str],
     prompt: &str,
     not_found: GitError,
-) -> Result<std::process::Output, GitError> {
+    run: &AgentRun,
+) -> Result<Output, GitError> {
     if !root.is_dir() {
         return Err(GitError::NotARepo(root.display().to_string()));
+    }
+    // Cancelled between one process of the run and the next.
+    if run.is_cancelled() {
+        return Err(GitError::Cancelled);
     }
 
     let mut spawned = None;
@@ -801,43 +861,74 @@ fn run_cli(
             Err(err) => return Err(GitError::Command(err.to_string())),
         }
     }
-    let mut child = spawned.ok_or(not_found)?;
+    let child = spawned.ok_or(not_found)?;
 
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| GitError::Command(format!("could not open {name} stdin")))?
-        .write_all(prompt.as_bytes())
+    let finished = run
+        .wait(child, prompt)
         .map_err(|err| GitError::Command(err.to_string()))?;
+    match finished.stopped {
+        None => Ok(finished.output),
+        Some(Stop::Cancelled) => Err(GitError::Cancelled),
+        Some(Stop::Quiet) => Err(GitError::detailed(
+            format!(
+                "{name} wrote nothing for {} minutes, so it was stopped. It may have lost its connection.",
+                QUIET_LIMIT.as_secs() / 60
+            ),
+            failure_log(&finished.output, prompt),
+        )),
+        Some(Stop::TooLong) => Err(GitError::detailed(
+            format!(
+                "{name} was still going after {} minutes, so it was stopped.",
+                RUN_LIMIT.as_secs() / 60
+            ),
+            failure_log(&finished.output, prompt),
+        )),
+    }
+}
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| GitError::Command(err.to_string()))?;
-
+/// `spawn_cli`, with a non-zero exit turned into an error.
+fn run_cli(
+    root: &Path,
+    name: &str,
+    args: &[&str],
+    prompt: &str,
+    not_found: GitError,
+    run: &AgentRun,
+) -> Result<Output, GitError> {
+    let output = spawn_cli(root, name, args, prompt, not_found, run)?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // On failure these CLIs often write the explanation to stdout instead.
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let log = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-        let detail = failure_detail(&log, prompt);
-        return Err(GitError::Command(format!("{name} failed: {detail}")));
+        return Err(cli_failure(name, &output, prompt));
     }
     Ok(output)
 }
 
-/// Lines of a failed CLI's log kept when no explicit error line is found.
-const FAILURE_TAIL_LINES: usize = 20;
+/// A failed CLI run as an error: the CLI's own explanation up front, and its
+/// output behind it for debugging.
+fn cli_failure(name: &str, output: &Output, prompt: &str) -> GitError {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // On failure these CLIs often write the explanation to stdout instead.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let log = if stderr.trim().is_empty() {
+        &stdout
+    } else {
+        &stderr
+    };
+    GitError::detailed(
+        format!("{name} failed: {}", failure_summary(log, prompt)),
+        failure_log(output, prompt),
+    )
+}
 
-/// The part of a failed CLI's log worth showing. Codex's stderr is its whole
-/// session log, which echoes the prompt (patch included) before the error, so
-/// the raw log buries a one-line explanation under the diff. Codex reports each
-/// failure as an `ERROR: ` line, often a JSON API error, so those come first;
-/// failing that, the tail of the log with the prompt echo cut out.
-fn failure_detail(log: &str, prompt: &str) -> String {
+/// Lines of a failed CLI's log kept when no explicit error line is found. The
+/// whole log is in the error's detail, so this only needs to be a pointer.
+const FAILURE_TAIL_LINES: usize = 5;
+
+/// The part of a failed CLI's log worth leading with. Codex's stderr is its
+/// whole session log, which echoes the prompt (patch included) before the
+/// error, so the raw log buries a one-line explanation under the diff. Codex
+/// reports each failure as an `ERROR: ` line, often a JSON API error, so those
+/// come first; failing that, the tail of the log with the prompt echo cut out.
+fn failure_summary(log: &str, prompt: &str) -> String {
     let mut errors: Vec<String> = Vec::new();
     for line in log.lines() {
         let Some(rest) = line.strip_prefix("ERROR: ") else {
@@ -856,56 +947,279 @@ fn failure_detail(log: &str, prompt: &str) -> String {
         return errors.join("\n");
     }
 
-    let prompt = prompt.trim();
-    let log = if prompt.is_empty() {
-        log.to_owned()
-    } else {
-        log.replace(prompt, "")
-    };
+    let log = without_prompt(log, prompt);
     let lines: Vec<&str> = log.trim().lines().collect();
     lines[lines.len().saturating_sub(FAILURE_TAIL_LINES)..].join("\n")
 }
 
-/// Runs `claude -p` and unwraps the CLI's JSON envelope down to the model's
-/// final text.
+/// Bytes kept from the end of each output stream in a failure's detail. A
+/// codex session log carries every tool call's output, so it can run to
+/// megabytes, and the end is where it went wrong.
+const FAILURE_LOG_BYTES: usize = 64 * 1024;
+
+/// A failed run's exit status and both output streams, for the error's detail.
+fn failure_log(output: &Output, prompt: &str) -> String {
+    let mut log = format!("{}\n", output.status);
+    for (label, stream) in [("stderr", &output.stderr), ("stdout", &output.stdout)] {
+        let text = without_prompt(&String::from_utf8_lossy(stream), prompt);
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let mut start = text.len().saturating_sub(FAILURE_LOG_BYTES);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        let elided = if start > 0 { "…\n" } else { "" };
+        log.push_str(&format!("\n{label}:\n{elided}{}\n", &text[start..]));
+    }
+    log
+}
+
+/// The log with the CLI's echo of the prompt cut out.
+fn without_prompt(log: &str, prompt: &str) -> String {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        log.to_owned()
+    } else {
+        log.replace(prompt, "")
+    }
+}
+
+/// An agent's final text, and whether it answered before it had finished.
+struct AgentText {
+    text: String,
+    /// It hit the turn limit and was asked to answer from what it had read.
+    cut_short: bool,
+}
+
+impl AgentText {
+    fn complete(text: String) -> Self {
+        Self {
+            text,
+            cut_short: false,
+        }
+    }
+}
+
+/// What claude is told when a run stops at the turn limit. The pending tool
+/// calls are dropped, so it has to say where its answer rests on unfinished
+/// checks.
+const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: no more tool calls. Give your final answer now, in exactly the format the first message asked for, based on what you have read so far. Where you did not get to check something, say so where it matters rather than leaving it out.";
+
+/// Runs `claude -p` and unwraps the CLI's result envelope down to the model's
+/// final text. Its events stream as it works, which is what shows the run is
+/// still alive; the envelope is the last of them.
+///
+/// It gets `turns` agentic turns, and is told so. A run that stops at the
+/// limit has usually done most of its reading, so rather than throw that away,
+/// the session is resumed once with its tools taken away and the model asked
+/// to answer from what it has.
 fn claude_result_text(
     root: &Path,
     prompt: &str,
     model: Option<&str>,
     effort: Option<&str>,
-) -> Result<String, GitError> {
-    let mut args = vec!["-p", "--output-format", "json", "--max-turns", MAX_TURNS];
+    turns: usize,
+    run: &AgentRun,
+) -> Result<AgentText, GitError> {
+    let max_turns = turns.to_string();
+    let budget_note = turn_budget_note(turns);
+    let mut args = vec![
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--max-turns",
+        &max_turns,
+        "--append-system-prompt",
+        &budget_note,
+    ];
+    push_model_and_effort(&mut args, model, effort);
+    let output = spawn_cli(root, "claude", &args, prompt, GitError::ClaudeNotFound, run)?;
+    let stopped = match read_claude_output(&output) {
+        ClaudeOutcome::Answer(text) => return Ok(AgentText::complete(text)),
+        ClaudeOutcome::Failed(error) => return Err(error),
+        ClaudeOutcome::OutOfTurns(stopped) => stopped,
+    };
+
+    let mut args = vec![
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--resume",
+        &stopped.session_id,
+        "--tools",
+        "",
+        "--max-turns",
+        "1",
+    ];
+    push_model_and_effort(&mut args, model, effort);
+    let wrap_up = spawn_cli(
+        root,
+        "claude",
+        &args,
+        WRAP_UP_PROMPT,
+        GitError::ClaudeNotFound,
+        run,
+    );
+    let failure = match wrap_up.map(|output| read_claude_output(&output)) {
+        // Stopping the run is not the wrap-up failing.
+        Err(GitError::Cancelled) => return Err(GitError::Cancelled),
+        Ok(ClaudeOutcome::Answer(text)) => {
+            return Ok(AgentText {
+                text,
+                cut_short: true,
+            });
+        }
+        Ok(ClaudeOutcome::Failed(error)) => error,
+        Ok(ClaudeOutcome::OutOfTurns(again)) => again.error,
+        Err(error) => error,
+    };
+    let mut message = "Claude used all its turns before it finished, and then could not answer from what it had read.".to_owned();
+    if let Some(note) = &stopped.denials {
+        message.push(' ');
+        message.push_str(note);
+    }
+    Err(GitError::detailed(
+        message,
+        format!(
+            "The run that ran out of turns:\n{}\n\nAsked to answer from what it had read, it failed with: {failure}\n{}",
+            stopped.error.detail().unwrap_or_default(),
+            failure.detail().unwrap_or_default(),
+        ),
+    ))
+}
+
+fn push_model_and_effort<'a>(
+    args: &mut Vec<&'a str>,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+) {
     if let Some(model) = model {
         args.extend(["--model", model]);
     }
     if let Some(effort) = effort {
         args.extend(["--effort", effort]);
     }
-
-    let output = run_cli(root, "claude", &args, prompt, GitError::ClaudeNotFound)?;
-    unwrap_claude_envelope(&output.stdout)
 }
 
-/// Parses `claude -p --output-format json`: an envelope whose `result` field
-/// carries the model's final text.
-fn unwrap_claude_envelope(raw: &[u8]) -> Result<String, GitError> {
-    let text = String::from_utf8_lossy(raw);
-    match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(envelope) => {
-            if envelope["is_error"].as_bool() == Some(true) {
-                return Err(GitError::Command(format!(
-                    "claude reported an error: {}",
-                    envelope["result"].as_str().unwrap_or("unknown failure")
-                )));
-            }
-            match envelope["result"].as_str() {
-                Some(result) => Ok(result.to_owned()),
-                // Not the envelope shape — treat the whole output as the answer.
-                None => Ok(text.into_owned()),
-            }
+/// How a `claude -p` run ended.
+enum ClaudeOutcome {
+    Answer(String),
+    /// Stopped at the turn limit, in a session that can be resumed.
+    OutOfTurns(OutOfTurns),
+    Failed(GitError),
+}
+
+struct OutOfTurns {
+    session_id: String,
+    /// What to report if resuming doesn't produce an answer either.
+    error: GitError,
+    denials: Option<String>,
+}
+
+/// Reads a claude run's stdout: an envelope whose `result` field carries the
+/// model's final text, or on failure says what went wrong. The envelope comes
+/// on stdout whatever the exit status, so it is read first.
+fn read_claude_output(output: &Output) -> ClaudeOutcome {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(envelope) = result_envelope(&stdout) else {
+        return if output.status.success() {
+            // Not the envelope shape — treat the whole output as the answer.
+            ClaudeOutcome::Answer(stdout.into_owned())
+        } else {
+            ClaudeOutcome::Failed(cli_failure("claude", output, ""))
+        };
+    };
+
+    if envelope["is_error"].as_bool() != Some(true) {
+        if let Some(result) = envelope["result"].as_str() {
+            return ClaudeOutcome::Answer(result.to_owned());
         }
-        Err(_) => Ok(text.into_owned()),
     }
+
+    let denials = permission_denials_note(&envelope);
+    let subtype = envelope["subtype"].as_str().unwrap_or_default();
+    let errors: Vec<&str> = envelope["errors"]
+        .as_array()
+        .map(|errors| errors.iter().filter_map(|error| error.as_str()).collect())
+        .unwrap_or_default();
+    let mut message = match subtype {
+        "error_max_turns" => "Claude used all its turns before it finished.".to_owned(),
+        "error_max_budget_usd" => {
+            "Claude reached its spending limit before it finished.".to_owned()
+        }
+        _ => match envelope["result"].as_str().map(str::trim) {
+            Some(result) if !result.is_empty() => format!("Claude reported an error: {result}"),
+            _ if !errors.is_empty() => {
+                format!("Claude stopped partway through: {}", errors.join("; "))
+            }
+            _ => "Claude stopped without an answer or a reason.".to_owned(),
+        },
+    };
+    if let Some(note) = &denials {
+        message.push(' ');
+        message.push_str(note);
+    }
+    let detail = serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| stdout.into_owned());
+    let error = GitError::detailed(message, detail);
+
+    match envelope["session_id"].as_str() {
+        Some(session_id) if subtype == "error_max_turns" => ClaudeOutcome::OutOfTurns(OutOfTurns {
+            session_id: session_id.to_owned(),
+            error,
+            denials,
+        }),
+        _ => ClaudeOutcome::Failed(error),
+    }
+}
+
+/// The `result` envelope a claude run ends with: the last line of its
+/// `stream-json` output, or the whole of it from `--output-format json`.
+fn result_envelope(stdout: &str) -> Option<serde_json::Value> {
+    let is_result = |value: &serde_json::Value| value["type"] == "result";
+    serde_json::from_str(stdout.trim())
+        .ok()
+        .filter(is_result)
+        .or_else(|| {
+            stdout
+                .lines()
+                .rev()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .find(is_result)
+        })
+}
+
+/// Tool calls the CLI refused the model, which on a run that failed are often
+/// where its turns went: `"8 of its tool calls were refused permission (Bash
+/// ×7, Write)."`
+fn permission_denials_note(envelope: &serde_json::Value) -> Option<String> {
+    let denials = envelope["permission_denials"].as_array()?;
+    if denials.is_empty() {
+        return None;
+    }
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for denial in denials {
+        let tool = denial["tool_name"].as_str().unwrap_or("unknown tool");
+        match counts.iter_mut().find(|(name, _)| *name == tool) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((tool, 1)),
+        }
+    }
+    let tools = counts
+        .iter()
+        .map(|(tool, count)| match count {
+            1 => (*tool).to_owned(),
+            _ => format!("{tool} ×{count}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(match denials.len() {
+        1 => format!("One of its tool calls was refused permission ({tools})."),
+        count => format!("{count} of its tool calls were refused permission ({tools})."),
+    })
 }
 
 /// JSON Schema for the review shape, enforced by codex on its final message.
@@ -1012,6 +1326,7 @@ fn codex_result_text(
     model: Option<&str>,
     effort: Option<&str>,
     schema: Option<&str>,
+    run: &AgentRun,
 ) -> Result<String, GitError> {
     let unique = format!(
         "tk-review-codex-{}-{}",
@@ -1052,13 +1367,13 @@ fn codex_result_text(
     // Read the prompt from stdin.
     args.push("-");
 
-    let run = run_cli(root, "codex", &args, prompt, GitError::CodexNotFound);
+    let finished = run_cli(root, "codex", &args, prompt, GitError::CodexNotFound, run);
     let message = std::fs::read_to_string(&out_path);
     // Best effort: the temp files are small, but don't leave a pair per review.
     let _ = std::fs::remove_file(&out_path);
     let _ = std::fs::remove_file(&schema_path);
 
-    run?;
+    finished?;
     message.map_err(|err| GitError::Command(format!("could not read codex output: {err}")))
 }
 
@@ -1087,6 +1402,26 @@ fn extract_json_object(text: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
+    /// What a finished claude run left behind: its exit status and stdout.
+    fn claude_output(stdout: &str, succeeded: bool) -> Output {
+        use std::os::unix::process::ExitStatusExt;
+        Output {
+            // A raw wait status: the exit code sits in the second byte.
+            status: std::process::ExitStatus::from_raw(if succeeded { 0 } else { 1 << 8 }),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// A clean exit's stdout down to the model's text, or the error it reports.
+    fn unwrap_claude_envelope(raw: &[u8]) -> Result<String, GitError> {
+        match read_claude_output(&claude_output(&String::from_utf8_lossy(raw), true)) {
+            ClaudeOutcome::Answer(text) => Ok(text),
+            ClaudeOutcome::OutOfTurns(stopped) => Err(stopped.error),
+            ClaudeOutcome::Failed(error) => Err(error),
+        }
+    }
+
     /// The claude path end to end: envelope in, structured review out.
     fn parse_claude(raw: &[u8]) -> Result<ReviewResult, GitError> {
         parse_agent_json(&unwrap_claude_envelope(raw)?)
@@ -1105,6 +1440,42 @@ mod tests {
              "title": "Stale comment.", "body": "The comment describes removed behavior."}
         ]
     }"#;
+
+    /// A patch touching `files` files, as `git diff` writes one.
+    fn patch_of(files: usize) -> String {
+        (0..files)
+            .map(|n| format!("diff --git a/f{n} b/f{n}\n--- a/f{n}\n+++ b/f{n}\n@@ -1 +1 @@\n-diff --git\n+x\n"))
+            .collect()
+    }
+
+    #[test]
+    fn the_turn_budget_grows_with_the_diff_within_bounds() {
+        assert_eq!(turn_budget(&patch_of(1)), MIN_TURNS);
+        assert_eq!(turn_budget(&patch_of(40)), MIN_TURNS + 20);
+        // The size of the pull request that prompted this: 139 files.
+        assert!(turn_budget(&patch_of(139)) > 90);
+        assert_eq!(turn_budget(&patch_of(1000)), MAX_TURNS);
+    }
+
+    #[test]
+    fn the_budget_note_names_the_budget_and_asks_for_batched_reads() {
+        let note = turn_budget_note(64);
+        assert!(note.contains("64 turns"), "{note}");
+        assert!(note.contains("same response"), "{note}");
+    }
+
+    #[test]
+    fn reads_the_envelope_at_the_end_of_a_stream() {
+        let stream = [
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#.to_owned(),
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"{ not the answer }"}]}}"#
+                .to_owned(),
+            envelope(REVIEW_JSON),
+        ]
+        .join("\n");
+        let review = parse_claude(stream.as_bytes()).expect("parse");
+        assert_eq!(review.summary, "Small, focused change.");
+    }
 
     #[test]
     fn parses_review_from_the_claude_envelope() {
@@ -1257,6 +1628,106 @@ mod tests {
         assert!(err.to_string().contains("not logged in"), "{err}");
     }
 
+    /// Trimmed from a real re-review that hit the turn limit after spending a
+    /// quarter of its turns on shell commands it wasn't allowed to run.
+    const OUT_OF_TURNS_ENVELOPE: &str = r#"{
+        "type": "result",
+        "subtype": "error_max_turns",
+        "is_error": true,
+        "num_turns": 31,
+        "stop_reason": "tool_use",
+        "session_id": "d87f50d5-6f14-4858-9539-0244f050e9e4",
+        "terminal_reason": "max_turns",
+        "errors": ["Reached maximum number of turns (30)"],
+        "permission_denials": [
+            {"tool_name": "Bash", "tool_use_id": "toolu_1", "tool_input": {"command": "pnpm --version"}},
+            {"tool_name": "Bash", "tool_use_id": "toolu_2", "tool_input": {"command": "gh pr checks 7927"}},
+            {"tool_name": "Write", "tool_use_id": "toolu_3", "tool_input": {"file_path": "/tmp/test.sh"}},
+            {"tool_name": "Bash", "tool_use_id": "toolu_4", "tool_input": {"command": "ls ~/Library/pnpm"}}
+        ]
+    }"#;
+
+    #[test]
+    fn a_run_out_of_turns_can_be_resumed() {
+        let ClaudeOutcome::OutOfTurns(stopped) =
+            read_claude_output(&claude_output(OUT_OF_TURNS_ENVELOPE, false))
+        else {
+            panic!("expected a resumable run");
+        };
+
+        assert_eq!(stopped.session_id, "d87f50d5-6f14-4858-9539-0244f050e9e4");
+        assert_eq!(
+            stopped.error.to_string(),
+            "Claude used all its turns before it finished. 4 of its tool calls were refused permission (Bash ×3, Write)."
+        );
+        assert_eq!(
+            stopped.denials.as_deref(),
+            Some("4 of its tool calls were refused permission (Bash ×3, Write).")
+        );
+    }
+
+    /// The envelope is the debugging record, so none of it is dropped.
+    #[test]
+    fn a_failed_run_keeps_its_envelope_as_the_detail() {
+        let ClaudeOutcome::OutOfTurns(stopped) =
+            read_claude_output(&claude_output(OUT_OF_TURNS_ENVELOPE, false))
+        else {
+            panic!("expected a resumable run");
+        };
+        let detail = stopped.error.detail().expect("detail");
+
+        assert!(
+            detail.contains("\"command\": \"gh pr checks 7927\""),
+            "{detail}"
+        );
+        assert!(detail.contains("\"num_turns\": 31"), "{detail}");
+    }
+
+    #[test]
+    fn a_run_out_of_turns_without_a_session_is_a_plain_failure() {
+        let raw = r#"{"type": "result", "subtype": "error_max_turns", "is_error": true}"#;
+
+        let ClaudeOutcome::Failed(error) = read_claude_output(&claude_output(raw, false)) else {
+            panic!("nothing to resume without a session id");
+        };
+        assert_eq!(
+            error.to_string(),
+            "Claude used all its turns before it finished."
+        );
+    }
+
+    #[test]
+    fn an_execution_error_reports_what_the_cli_said() {
+        let raw = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true,
+            "errors": ["API Error: 529 overloaded"]}"#;
+
+        let error = unwrap_claude_envelope(raw.as_bytes()).expect_err("should fail");
+        assert_eq!(
+            error.to_string(),
+            "Claude stopped partway through: API Error: 529 overloaded"
+        );
+    }
+
+    #[test]
+    fn a_failed_run_without_an_envelope_reports_its_output() {
+        let mut output = claude_output("", false);
+        output.stderr = b"Error: unknown option '--effrot'".to_vec();
+
+        let ClaudeOutcome::Failed(error) = read_claude_output(&output) else {
+            panic!("a non-zero exit without an envelope is a failure");
+        };
+        assert_eq!(
+            error.to_string(),
+            "claude failed: Error: unknown option '--effrot'"
+        );
+        let detail = error.detail().expect("detail");
+        assert!(detail.contains("exit status: 1"), "{detail}");
+        assert!(
+            detail.contains("stderr:\nError: unknown option"),
+            "{detail}"
+        );
+    }
+
     #[test]
     fn rejects_output_without_a_json_object() {
         let err =
@@ -1327,7 +1798,15 @@ mod tests {
             assert!(prompt.ends_with(patch), "{prompt}");
         }
 
-        let reply = build_reply_prompt(Some("feature"), "Summary.", Some(&finding), &[], "Why?", patch, None);
+        let reply = build_reply_prompt(
+            Some("feature"),
+            "Summary.",
+            Some(&finding),
+            &[],
+            "Why?",
+            patch,
+            None,
+        );
         assert!(reply.contains(WRITING_GUIDANCE), "{reply}");
         assert!(!reply.contains("plain text"), "{reply}");
     }
@@ -1343,6 +1822,7 @@ mod tests {
             is_draft: false,
             base_ref: "main".into(),
             base_remote: "origin".into(),
+            head_ref: "avoid-duplicate-widgets".into(),
             head_sha: "abc123".into(),
             compare_ref: "tk-review/pr/7".into(),
             comments: vec![crate::github::PrComment {
@@ -1370,11 +1850,12 @@ mod tests {
     #[test]
     fn rejects_an_unknown_engine() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let err =
-            review_diff(dir.path(), "HEAD", None, "gemini", None, None, None).expect_err("unknown");
+        let run = AgentRun::detached();
+        let err = review_diff(dir.path(), "HEAD", None, "gemini", None, None, None, &run)
+            .expect_err("unknown");
         assert!(err.to_string().contains("unknown review engine"), "{err}");
 
-        let err = explain_diff(dir.path(), "HEAD", None, "gemini", None, None, None)
+        let err = explain_diff(dir.path(), "HEAD", None, "gemini", None, None, None, &run)
             .expect_err("unknown");
         assert!(err.to_string().contains("unknown review engine"), "{err}");
 
@@ -1388,6 +1869,7 @@ mod tests {
             "Earlier summary.",
             &[],
             None,
+            &run,
         )
         .expect_err("unknown");
         assert!(err.to_string().contains("unknown review engine"), "{err}");
@@ -1396,8 +1878,19 @@ mod tests {
     #[test]
     fn a_re_review_needs_a_previous_review() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let err = re_review_diff(dir.path(), "HEAD", None, "claude", None, None, "  ", &[], None)
-            .expect_err("nothing to check");
+        let err = re_review_diff(
+            dir.path(),
+            "HEAD",
+            None,
+            "claude",
+            None,
+            None,
+            "  ",
+            &[],
+            None,
+            &AgentRun::detached(),
+        )
+        .expect_err("nothing to check");
         assert!(err.to_string().contains("no previous review"), "{err}");
     }
 
@@ -1474,9 +1967,18 @@ mod tests {
             "{prompt}"
         );
         // Both jobs, and the guard against double-reporting.
-        assert!(prompt.contains("judge whether it has been addressed"), "{prompt}");
-        assert!(prompt.contains("Review the current diff for NEW problems"), "{prompt}");
-        assert!(prompt.contains("Do not re-report the numbered findings"), "{prompt}");
+        assert!(
+            prompt.contains("judge whether it has been addressed"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Review the current diff for NEW problems"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Do not re-report the numbered findings"),
+            "{prompt}"
+        );
         assert!(prompt.contains("diff --git a/src/a.ts"), "{prompt}");
     }
 
@@ -1522,7 +2024,10 @@ mod tests {
         );
         assert!(prompt.contains("No findings, no verdicts"), "{prompt}");
         // Length guidance is what keeps a complex file from getting one line.
-        assert!(prompt.contains("one to three sentences for a typical file"), "{prompt}");
+        assert!(
+            prompt.contains("one to three sentences for a typical file"),
+            "{prompt}"
+        );
         assert!(
             prompt.contains("short list for a genuinely tricky one"),
             "{prompt}"
@@ -1561,23 +2066,23 @@ ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","mes
 "#;
 
     #[test]
-    fn a_codex_failure_shows_only_its_error_message() {
-        let detail = failure_detail(CODEX_FAILURE_LOG, "Review this change.\ndiff --git a/a b/a");
+    fn a_codex_failure_leads_with_its_error_message() {
+        let summary = failure_summary(CODEX_FAILURE_LOG, "Review this change.\ndiff --git a/a b/a");
 
         assert_eq!(
-            detail,
+            summary,
             "The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account."
         );
     }
 
     #[test]
     fn a_plain_error_line_is_kept_as_written() {
-        let detail = failure_detail(
+        let summary = failure_summary(
             "user\nprompt\nERROR: stream disconnected before completion\n",
             "prompt",
         );
 
-        assert_eq!(detail, "stream disconnected before completion");
+        assert_eq!(summary, "stream disconnected before completion");
     }
 
     #[test]
@@ -1588,9 +2093,38 @@ ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","mes
             .join("\n");
         let log = format!("header\nuser\n{prompt}\n\nsomething went wrong\n");
 
-        let detail = failure_detail(&log, &prompt);
+        let summary = failure_summary(&log, &prompt);
 
-        assert!(!detail.contains("patch line"), "{detail}");
-        assert!(detail.ends_with("something went wrong"), "{detail}");
+        assert!(!summary.contains("patch line"), "{summary}");
+        assert!(summary.ends_with("something went wrong"), "{summary}");
+    }
+
+    /// The detail keeps the whole log, minus the prompt the CLI echoed back.
+    #[test]
+    fn a_failure_log_keeps_both_streams_without_the_prompt() {
+        let prompt = "Review this change.\ndiff --git a/a b/a";
+        let mut output = claude_output("partial output", false);
+        output.stderr = CODEX_FAILURE_LOG.as_bytes().to_vec();
+
+        let log = failure_log(&output, prompt);
+
+        assert!(log.starts_with("exit status: 1\n"), "{log}");
+        assert!(log.contains("stderr:\nOpenAI Codex v0.146.1"), "{log}");
+        assert!(log.contains("worker quit with fatal"), "{log}");
+        assert!(log.contains("stdout:\npartial output"), "{log}");
+        assert!(!log.contains("diff --git"), "{log}");
+    }
+
+    /// A codex session log can run to megabytes; its end is what matters.
+    #[test]
+    fn a_failure_log_keeps_the_end_of_a_long_stream() {
+        let mut output = claude_output("", false);
+        output.stderr = format!("{}the end", "é".repeat(FAILURE_LOG_BYTES)).into_bytes();
+
+        let log = failure_log(&output, "");
+
+        assert!(log.len() < FAILURE_LOG_BYTES + 64, "{}", log.len());
+        assert!(log.contains("stderr:\n…\n"), "elided start");
+        assert!(log.trim_end().ends_with("the end"));
     }
 }

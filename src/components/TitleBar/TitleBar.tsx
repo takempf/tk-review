@@ -1,10 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { cx, Icon, Logo, Menu, SceneryWindow } from "tk-design-system";
 import { chooseFolder } from "../../lib/chooseFolder";
+import { useAppStore } from "../../store/appStore";
 import { type RecentRepo, readRecentRepos } from "../../store/history";
-import { useReviewStore } from "../../store/reviewStore";
 import { Spinner } from "../Spinner/Spinner";
 import css from "./TitleBar.module.css";
 
@@ -50,9 +50,9 @@ function useTrafficLightInset(): boolean {
 const shortPath = (root: string) => root.replace(/^\/Users\/[^/]+/, "~");
 
 function RepoSelect() {
-  const repo = useReviewStore((state) => state.repo);
-  const loading = useReviewStore((state) => state.loadingRepo);
-  const openRepo = useReviewStore((state) => state.openRepo);
+  const repo = useAppStore((state) => state.repo);
+  const loading = useAppStore((state) => state.loadingRepo);
+  const openRepo = useAppStore((state) => state.openRepo);
   // A small localStorage read; opening a repository re-renders this and reorders it.
   const recent: RecentRepo[] = readRecentRepos();
   const listed =
@@ -115,22 +115,28 @@ function RepoSelect() {
 /**
  * The window's top bar, drawn by the app rather than the OS, the way VS Code's
  * or Discord's is: the app's name and the repository switcher, centred as a
- * native window title would be, with the empty space dragging the window. Its backdrop is the theme's scene, the one the
- * welcome screen's hero shows, framed in the bar itself: the viewport-pinned
- * default would give it only the top 40px of the illustration, which is sky.
+ * native window title would be, with the empty space dragging the window.
+ * `children` is a second row under it (the tab bar), on the same backdrop.
+ *
+ * The backdrop is the theme's scene, the one the welcome screen's hero shows,
+ * framed in the bar itself: the viewport-pinned default would give it only the
+ * top 40px of the illustration, which is sky.
  */
-export function TitleBar() {
+export function TitleBar({ children }: { children?: ReactNode }) {
   const inset = useTrafficLightInset();
 
   return (
-    <header className={css.bar} data-tauri-drag-region="deep" data-inset={inset || undefined}>
-      <SceneryWindow attachment="local" />
-      <span className={css.brand}>
-        <Logo className={css.mark} />
-        Review
-      </span>
-      <span className={css.divider} />
-      <RepoSelect />
+    <header className={css.chrome} data-tauri-drag-region="deep">
+      <SceneryWindow attachment="local" className={css.scenery} />
+      <div className={css.bar} data-inset={inset || undefined}>
+        <span className={css.brand}>
+          <Logo className={css.mark} />
+          Review
+        </span>
+        <span className={css.divider} />
+        <RepoSelect />
+      </div>
+      {children}
     </header>
   );
 }

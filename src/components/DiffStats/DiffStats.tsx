@@ -1,4 +1,4 @@
-import { useReviewStore } from "../../store/reviewStore";
+import { useTab } from "../../store/tabStore";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffStats.module.css";
 
@@ -16,8 +16,8 @@ function ChangeBar({ additions, deletions }: { additions: number; deletions: num
 }
 
 export function DiffStats() {
-  const summary = useReviewStore((state) => state.summary);
-  const loading = useReviewStore((state) => state.loadingDiff || state.openingPr);
+  const summary = useTab((state) => state.summary);
+  const loading = useTab((state) => state.loadingDiff || state.openingPr);
 
   // Nothing to count yet: hold the space. A refresh keeps the old counts up.
   if (loading && !summary) {

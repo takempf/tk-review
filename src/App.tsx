@@ -2,23 +2,26 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { Button, Icon } from "tk-design-system";
 import css from "./App.module.css";
+import { CommitList } from "./components/CommitList/CommitList";
 import { ComparisonPicker } from "./components/ComparisonPicker/ComparisonPicker";
 import { DiffStats } from "./components/DiffStats/DiffStats";
 import { DiffSkeleton, DiffSurface } from "./components/DiffSurface/DiffSurface";
 import { FileList } from "./components/FileList/FileList";
 import { Home } from "./components/Home/Home";
 import { Layout } from "./components/Layout/Layout";
+import { PrBranches } from "./components/PrBranches/PrBranches";
 import { ReviewPanel } from "./components/ReviewPanel/ReviewPanel";
 import { Spinner } from "./components/Spinner/Spinner";
+import { TabBar } from "./components/TabBar/TabBar";
 import { TitleBar } from "./components/TitleBar/TitleBar";
+import { gitApi } from "./ipc/git";
 import { useScreenHistory } from "./lib/screenHistory";
-import { ScreenMorph, ScreenStack } from "./lib/screenTransition";
-import { reviewsWorkingTree, useReviewStore } from "./store/reviewStore";
+import { ScreenStack } from "./lib/screenTransition";
+import { findTab, shownTab, useAppStore } from "./store/appStore";
+import { reviewsWorkingTree, TabProvider, useTab } from "./store/tabStore";
 
 /** `j`/`k` move through the file list, the way a pager would. */
 function useFileKeyboardNav() {
-  const moveSelection = useReviewStore((state) => state.moveSelection);
-
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -27,6 +30,9 @@ function useFileKeyboardNav() {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, select, textarea, [contenteditable='true']")) return;
 
+      const tab = shownTab(useAppStore.getState());
+      if (!tab) return;
+      const { moveSelection } = tab.store.getState();
       if (event.key === "j") moveSelection(1);
       else if (event.key === "k") moveSelection(-1);
       else return;
@@ -36,61 +42,71 @@ function useFileKeyboardNav() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [moveSelection]);
+  }, []);
 }
 
+/** The comparison on screen, or the repository the list shows. */
 function useWindowTitle() {
-  const name = useReviewStore((state) => state.repo?.name ?? null);
-  const base = useReviewStore((state) => state.base);
-  const compare = useReviewStore((state) => state.compare);
-  const worktree = useReviewStore(reviewsWorkingTree);
+  const name = useAppStore((state) => state.repo?.name ?? null);
+  const tab = useAppStore(shownTab);
 
   useEffect(() => {
-    const suffix = worktree ? " + uncommitted" : "";
-    const title =
-      name && base && compare ? `${name} — ${base} … ${compare}${suffix}` : (name ?? "tk-review");
-    document.title = title;
-    // Best effort: the native title bar is separate from the document title, and
-    // may be denied by capabilities without that meaning anything is broken.
-    void getCurrentWindow()
-      .setTitle(title)
-      .catch(() => {});
-  }, [name, base, compare, worktree]);
+    let last = "";
+    const apply = () => {
+      const state = tab?.store.getState();
+      const suffix = state && reviewsWorkingTree(state) ? " + uncommitted" : "";
+      const title =
+        state?.base && state.compare
+          ? `${state.repo.name} — ${state.base} … ${state.compare}${suffix}`
+          : (name ?? "tk-review");
+      // The tab's store changes far more often than its title does.
+      if (title === last) return;
+      last = title;
+      document.title = title;
+      // Best effort: the native title bar is separate from the document title, and
+      // may be denied by capabilities without that meaning anything is broken.
+      void getCurrentWindow()
+        .setTitle(title)
+        .catch(() => {});
+    };
+    apply();
+    return tab?.store.subscribe(apply);
+  }, [name, tab]);
 }
 
-/** The pull request under review, set like its row in the list so the two can morph. */
+/** Keeps each agent run's last-output time current, for its progress line. */
+function useAgentRunOutput() {
+  const noteRunOutput = useAppStore((state) => state.noteRunOutput);
+  useEffect(() => {
+    const listening = gitApi.onAgentRunOutput(noteRunOutput);
+    return () => void listening.then((stop) => stop());
+  }, [noteRunOutput]);
+}
+
+/**
+ * The pull request's branches. Its number, title and status are its tab's to
+ * show, in the tab bar above.
+ */
 function PrHeading() {
-  // While it opens, the list's number and title stand in for the fetched ones.
-  const pr = useReviewStore((state) => state.pr ?? state.pendingPr);
-  if (!pr) return null;
-  return (
-    <h1 className={css.prHeading} title={pr.title}>
-      <ScreenMorph part="prNumber">
-        <span className={css.prNumber}>#{pr.number}</span>
-      </ScreenMorph>
-      <ScreenMorph part="prTitle">
-        <span className={css.prTitle}>{pr.title}</span>
-      </ScreenMorph>
-    </h1>
-  );
+  // While it opens, the list's branches stand in for the fetched ones.
+  const pr = useTab((state) => state.pr ?? state.pendingPr);
+  if (!pr?.headRef || !pr.baseRef) return null;
+  return <PrBranches headRef={pr.headRef} baseRef={pr.baseRef} />;
 }
 
-/** A comparison open in the diff, with the file list and the review beside it. */
+/** A tab's comparison open in the diff, with the file list and the review beside it. */
 function ReviewScreen() {
-  const repo = useReviewStore((state) => state.repo);
-  const hasPr = useReviewStore((state) => state.pr != null || state.pendingPr != null);
-  const openingPr = useReviewStore((state) => state.openingPr);
-  const error = useReviewStore((state) => state.error);
-  const summary = useReviewStore((state) => state.summary);
-  const loadingDiff = useReviewStore((state) => state.loadingDiff);
+  const root = useTab((state) => state.repo.root);
+  const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
+  const openingPr = useTab((state) => state.openingPr);
+  const error = useTab((state) => state.error);
+  const summary = useTab((state) => state.summary);
+  const loadingDiff = useTab((state) => state.loadingDiff);
   // With a PR open, refreshing re-reads it from GitHub before the diff reloads;
   // the button stays busy for that leg too, not only for the diff.
-  const refreshingPr = useReviewStore((state) => state.refreshingPr);
-  const refresh = useReviewStore((state) => state.refresh);
-  const dismissError = useReviewStore((state) => state.dismissError);
-  const goHome = useReviewStore((state) => state.goHome);
-
-  if (!repo) return null;
+  const refreshingPr = useTab((state) => state.refreshingPr);
+  const refresh = useTab((state) => state.refresh);
+  const dismissError = useTab((state) => state.dismissError);
 
   return (
     <Layout
@@ -99,18 +115,8 @@ function ReviewScreen() {
       header={
         <>
           <div className={css.headerGroup}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => goHome()}
-              title="Back to pull requests"
-            >
-              <Icon name="arrow-left" />
-              Pull requests
-            </Button>
-            <span className={css.divider} />
             {/* A PR is chosen from the list; only a branch comparison is picked here. */}
-            {hasPr ? <PrHeading /> : <ComparisonPicker key={repo.root} />}
+            {hasPr ? <PrHeading /> : <ComparisonPicker key={root} />}
           </div>
           <span className={css.spacer} />
           <DiffStats />
@@ -131,7 +137,12 @@ function ReviewScreen() {
           </Button>
         </>
       }
-      sidebar={<FileList />}
+      sidebar={
+        <div className={css.sidebar}>
+          <FileList />
+          <CommitList />
+        </div>
+      }
       aside={<ReviewPanel />}
       main={
         summary ? (
@@ -146,13 +157,27 @@ function ReviewScreen() {
   );
 }
 
+type Screen = "home" | `tab:${string}`;
+
+function renderScreen(screen: Screen) {
+  if (screen === "home") return <Home />;
+  // Found even once closed, so its screen can fade out.
+  const tab = findTab(screen.slice("tab:".length));
+  if (!tab) return null;
+  return (
+    <TabProvider value={tab}>
+      <ReviewScreen />
+    </TabProvider>
+  );
+}
+
 export function App() {
-  const view = useReviewStore((state) => state.view);
-  const repo = useReviewStore((state) => state.repo);
-  const restoreLastRepo = useReviewStore((state) => state.restoreLastRepo);
+  const tab = useAppStore(shownTab);
+  const restoreLastRepo = useAppStore((state) => state.restoreLastRepo);
 
   useFileKeyboardNav();
   useWindowTitle();
+  useAgentRunOutput();
   useScreenHistory();
 
   useEffect(() => {
@@ -161,11 +186,12 @@ export function App() {
 
   return (
     <div className={css.window}>
-      <TitleBar />
-      <ScreenStack
-        screen={!repo || view === "home" ? "home" : "review"}
-        render={(screen) => (screen === "home" ? <Home /> : <ReviewScreen />)}
-      />
+      <TitleBar>
+        <TabBar />
+      </TitleBar>
+      <div className={css.screen}>
+        <ScreenStack<Screen> screen={tab ? `tab:${tab.id}` : "home"} render={renderScreen} />
+      </div>
     </div>
   );
 }

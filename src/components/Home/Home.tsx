@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import {
-  Badge,
   Button,
   Eyebrow,
   Icon,
@@ -13,15 +12,18 @@ import {
   SceneryWindow,
   Tabs,
 } from "tk-design-system";
-import { errorMessage, type PrListFilter, type PrSummary } from "../../ipc/git";
+import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
-import { ScreenMorph } from "../../lib/screenTransition";
-import { buildStacks, groupStacks, type StackLinks } from "../../lib/stacks";
-import { absoluteTime, relativeTime } from "../../lib/time";
+import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
+import { buildStacks, groupStacks } from "../../lib/stacks";
+import { relativeTime } from "../../lib/time";
 import { warmHighlighter } from "../../lib/warmHighlighter";
+import { useAppStore } from "../../store/appStore";
 import { type ReviewedPr, readReviewedPrs } from "../../store/history";
-import { type PrPreview, useReviewStore } from "../../store/reviewStore";
+import type { PrPreview } from "../../store/tabStore";
+import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
+import { ColumnMenu, type PrRow, PrTable, useColumnVisibility } from "../PrTable/PrTable";
 import { Spinner } from "../Spinner/Spinner";
 import css from "./Home.module.css";
 
@@ -69,8 +71,14 @@ function usePrListings(root: string, shown: PrListFilter) {
   } satisfies Record<PrListFilter, unknown>;
 }
 
+interface Reviewed {
+  /** Most recent review first. */
+  list: ReviewedPr[];
+  byNumber: Map<number, ReviewedPr>;
+}
+
 /** The latest review of each PR, keyed by number, for the badges on every tab. */
-function useReviewed(root: string) {
+function useReviewed(root: string): Reviewed {
   // Read once per visit: reviews are only written from the review screen.
   return useMemo(() => {
     const reviewed = readReviewedPrs(root);
@@ -84,165 +92,74 @@ function matches(query: string, ...fields: (string | number | null | undefined)[
   return fields.some((field) => field != null && String(field).toLowerCase().includes(needle));
 }
 
-function ReviewState({ reviewed, headSha }: { reviewed: ReviewedPr; headSha: string | null }) {
-  const stale = headSha != null && reviewed.headSha != null && reviewed.headSha !== headSha;
-  const findings =
-    reviewed.findings === 0
-      ? "clean"
-      : `${reviewed.findings} finding${reviewed.findings === 1 ? "" : "s"}`;
-  return (
-    <span
-      className={css.reviewState}
-      title={`Reviewed ${absoluteTime(reviewed.createdAt)} via ${reviewed.engine}`}
-    >
-      {stale ? (
-        <Badge tone="warning">New commits</Badge>
-      ) : (
-        <Badge tone="accent">
-          <Icon name="check" /> Reviewed
-        </Badge>
-      )}
-      <span className={css.reviewMeta}>
-        {relativeTime(reviewed.createdAt)} · {findings}
-      </span>
-    </span>
-  );
-}
+const NO_PRS: PrSummary[] = [];
 
-function Decision({ decision }: { decision: string | null }) {
-  if (decision === "APPROVED") return <Badge tone="accent">Approved</Badge>;
-  if (decision === "CHANGES_REQUESTED") return <Badge tone="danger">Changes requested</Badge>;
-  return null;
-}
-
-function PrRow({
-  pr,
-  reviewed,
-  stack,
-  depth = 0,
-  opening,
-  onOpen,
-}: {
-  pr: PrSummary;
-  reviewed: ReviewedPr | undefined;
-  stack: StackLinks | undefined;
-  /** Indent under the stacked PRs listed above it. */
-  depth?: number;
-  opening: boolean;
-  onOpen: () => void;
-}) {
-  const parent = stack?.parent;
-  const children = stack?.children ?? [];
-  return (
-    <li
-      className={depth > 0 ? css.stacked : undefined}
-      style={depth > 0 ? ({ "--stack-depth": depth } as React.CSSProperties) : undefined}
-    >
-      <button
-        type="button"
-        className={css.row}
-        onClick={onOpen}
-        disabled={opening}
-        aria-busy={opening || undefined}
-      >
-        {/* The row being opened carries its number and title into the review. */}
-        <ScreenMorph part="prNumber" active={opening}>
-          <span className={css.number}>#{pr.number}</span>
-        </ScreenMorph>
-        <span className={css.rowMain}>
-          <span className={css.rowTitle}>
-            <ScreenMorph part="prTitle" active={opening}>
-              <span>{pr.title}</span>
-            </ScreenMorph>
-            {pr.isDraft ? <Badge>Draft</Badge> : null}
-            {parent ? (
-              <Badge title={`Targets #${parent.number}: ${parent.title}`}>
-                Stacked on #{parent.number}
-              </Badge>
-            ) : null}
-            <Decision decision={pr.reviewDecision} />
-          </span>
-          <span className={css.rowMeta}>
-            <span>@{pr.author}</span>
-            <span className={css.branch} title={`${pr.headRef} into ${pr.baseRef}`}>
-              {pr.headRef} <Icon name="arrow-right" /> {pr.baseRef}
-            </span>
-            {children.length > 0 ? (
-              <span title={children.map((child) => `#${child.number}: ${child.title}`).join("\n")}>
-                {children.map((child) => `#${child.number}`).join(", ")} stacked on this
-              </span>
-            ) : null}
-            <span title={absoluteTime(pr.updatedAt)}>updated {relativeTime(pr.updatedAt)}</span>
-          </span>
-        </span>
-        <span className={css.rowSide}>
-          {opening ? (
-            <span className={css.reviewMeta}>
-              <Spinner /> Opening…
-            </span>
-          ) : reviewed ? (
-            <ReviewState reviewed={reviewed} headSha={pr.headSha} />
-          ) : null}
-          <span className={css.stats}>
-            <span className={css.added}>+{pr.additions}</span>
-            <span className={css.deleted}>−{pr.deletions}</span>
-          </span>
-        </span>
-      </button>
-    </li>
+/**
+ * One tab's rows. The open tabs list GitHub's pull requests with their stacks
+ * grouped; "Reviewed" lists the review history, filled in from GitHub's list
+ * wherever the PR is still open.
+ */
+function buildRows(
+  tab: HomeTab,
+  query: string,
+  openPrs: PrSummary[],
+  allPrs: PrSummary[],
+  reviewed: Reviewed,
+  defaultBranch: string | null,
+): PrRow[] {
+  // The tab's own PRs as well as everyone's: "All open" is only the most
+  // recently updated few dozen, so an older stack listed under "Mine" would
+  // otherwise have no links at all. Newest first, as `buildStacks` expects.
+  const known = new Map([...allPrs, ...openPrs].map((pr) => [pr.number, pr]));
+  const stacks = buildStacks(
+    [...known.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    defaultBranch,
   );
-}
+  const labelNames = (pr: PrSummary | null | undefined) =>
+    pr?.labels.map((label) => label.name) ?? [];
 
-/** A reviewed PR that GitHub no longer lists as open, or that has not loaded. */
-function HistoryRow({
-  reviewed,
-  url,
-  listed,
-  opening,
-  onOpen,
-}: {
-  reviewed: ReviewedPr;
-  url: string | null;
-  /** Whether GitHub's open list has loaded, so absence from it means something. */
-  listed: boolean;
-  opening: boolean;
-  onOpen: (url: string) => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        className={css.row}
-        onClick={() => url && onOpen(url)}
-        disabled={!url || opening}
-        title={url ? undefined : "Load the open pull requests to reopen this one"}
-      >
-        <ScreenMorph part="prNumber" active={opening}>
-          <span className={css.number}>#{reviewed.number}</span>
-        </ScreenMorph>
-        <span className={css.rowMain}>
-          <span className={css.rowTitle}>
-            <ScreenMorph part="prTitle" active={opening}>
-              <span>{reviewed.title ?? `Pull request #${reviewed.number}`}</span>
-            </ScreenMorph>
-          </span>
-          <span className={css.rowMeta}>
-            {reviewed.author ? <span>@{reviewed.author}</span> : null}
-            {listed ? <span>no longer open</span> : null}
-          </span>
-        </span>
-        <span className={css.rowSide}>
-          {opening ? (
-            <span className={css.reviewMeta}>
-              <Spinner /> Opening…
-            </span>
-          ) : (
-            <ReviewState reviewed={reviewed} headSha={null} />
-          )}
-        </span>
-      </button>
-    </li>
-  );
+  if (tab !== "reviewed") {
+    const visible = openPrs.filter((pr) =>
+      matches(query, pr.number, pr.title, pr.author, pr.headRef, ...labelNames(pr)),
+    );
+    return groupStacks(visible, stacks).map(({ pr, depth }) => ({
+      number: pr.number,
+      title: pr.title,
+      author: pr.author,
+      url: pr.url,
+      pr,
+      reviewed: reviewed.byNumber.get(pr.number),
+      stack: stacks.get(pr.number),
+      depth,
+    }));
+  }
+
+  const openByNumber = new Map(openPrs.map((pr) => [pr.number, pr]));
+  // Any open PR's URL gives the repository's; older history entries lack their own.
+  const urlFor = (number: number) =>
+    openPrs[0]?.url.replace(/\/pull\/\d+$/, `/pull/${number}`) ?? null;
+  return reviewed.list.flatMap((entry): PrRow[] => {
+    const live = openByNumber.get(entry.number) ?? null;
+    const row: PrRow = {
+      number: entry.number,
+      title: live?.title ?? entry.title ?? `Pull request #${entry.number}`,
+      author: live?.author ?? entry.author,
+      url: live?.url ?? entry.url ?? urlFor(entry.number),
+      pr: live,
+      reviewed: entry,
+      stack: live ? stacks.get(live.number) : undefined,
+      depth: 0,
+    };
+    const shown = matches(
+      query,
+      row.number,
+      row.title,
+      row.author,
+      live?.headRef,
+      ...labelNames(live),
+    );
+    return shown ? [row] : [];
+  });
 }
 
 function ListMessage({ children }: { children: React.ReactNode }) {
@@ -250,17 +167,26 @@ function ListMessage({ children }: { children: React.ReactNode }) {
 }
 
 function PrBrowser({ root, name }: { root: string; name: string }) {
-  const openPr = useReviewStore((state) => state.openPr);
-  const showReview = useReviewStore((state) => state.showReview);
-  const current = useReviewStore((state) => state.pr);
-  const hasComparison = useReviewStore((state) => state.summary != null);
-  const base = useReviewStore((state) => state.base);
-  const compare = useReviewStore((state) => state.compare);
+  const openPr = useAppStore((state) => state.openPr);
+  const compareBranches = useAppStore((state) => state.compareBranches);
+  const tabs = useAppStore((state) => state.tabs);
+  const returning = useAppStore((state) => state.returning);
   const [tab, setTab] = useState<HomeTab>(readTab);
   const [query, setQuery] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
-  const defaultBranch = useReviewStore((state) => state.repo?.defaultBranch ?? null);
+  const [columns, setColumns] = useColumnVisibility();
+  const defaultBranch = useAppStore((state) => state.repo?.defaultBranch ?? null);
   const reviewed = useReviewed(root);
+  // A PR already open in a tab is carried into the review by its tab, from the
+  // tab bar, rather than by its row: one name, one holder. One whose tab closed
+  // on the way here gets its number and title back from that tab.
+  const inTabs = useMemo(
+    () => new Set(tabs.filter((open) => open.root === root).map((open) => open.number)),
+    [tabs, root],
+  );
+  const carries = (number: number, url: string | null) =>
+    prMorphKey(root, number) === returning ||
+    (url != null && opening === url && !inTabs.has(number));
 
   // The reviewed tab reads its open/closed state and freshness from the full list.
   const needed: PrListFilter = tab === "reviewed" ? "all" : tab;
@@ -294,48 +220,36 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
    */
   async function open(url: string, preview?: PrPreview) {
     // Committed before the screen changes, so the transition captures this
-    // row's number and title and carries them into the review's header.
+    // row's number and title and carries them into the PR's tab.
     flushSync(() => setOpening(url));
-    const ok = await openPr(url, preview);
+    const ok = await openPr(url, { preview });
     // On success the app has moved to the review screen and this unmounts.
     if (!ok) setOpening(null);
   }
 
-  const openPrs = listing.data ?? [];
-  const openByNumber = new Map(openPrs.map((pr) => [pr.number, pr]));
-  const stacks = buildStacks(all.data ?? openPrs, defaultBranch);
-  // Any open PR's URL gives the repository's; older history entries lack their own.
-  const urlFor = (number: number) =>
-    openPrs[0]?.url.replace(/\/pull\/\d+$/, `/pull/${number}`) ?? null;
+  const openPrs = listing.data ?? NO_PRS;
+  const allPrs = all.data ?? openPrs;
+  const rows = useMemo(
+    () => buildRows(tab, query, openPrs, allPrs, reviewed, defaultBranch),
+    [tab, query, openPrs, allPrs, reviewed, defaultBranch],
+  );
 
-  const visible =
-    tab === "reviewed"
-      ? reviewed.list.filter((entry) =>
-          matches(
-            query,
-            entry.number,
-            entry.title,
-            entry.author,
-            openByNumber.get(entry.number)?.headRef,
-          ),
-        )
-      : openPrs.filter((pr) => matches(query, pr.number, pr.title, pr.author, pr.headRef));
+  function openRow(row: PrRow) {
+    if (!row.url) return;
+    void open(row.url, {
+      number: row.number,
+      title: row.title,
+      headRef: row.pr?.headRef,
+      baseRef: row.pr?.baseRef,
+    });
+  }
 
   const reference = PR_REFERENCE.test(query.trim()) ? query.trim() : null;
 
   function onSearchKey(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
     if (reference) void open(reference);
-    else if (visible.length === 1) {
-      const only = visible[0];
-      const url = only && ("url" in only ? only.url : null);
-      if (only && url) {
-        void open(url, {
-          number: only.number,
-          title: only.title ?? `Pull request #${only.number}`,
-        });
-      }
-    }
+    else if (rows.length === 1 && rows[0]) openRow(rows[0]);
   }
 
   return (
@@ -343,10 +257,15 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
       <header className={css.browserHeader}>
         <div className={css.titleBlock}>
           <Eyebrow>{name}</Eyebrow>
-          <h1 className={css.title}>Pull requests</h1>
+          <h1 className={css.title}>
+            {/* Becomes the review's back button, and comes back out of it. */}
+            <ScreenMorph id="home" part="heading">
+              <span className={css.titleText}>Pull requests</span>
+            </ScreenMorph>
+          </h1>
         </div>
         <div className={css.headerActions}>
-          <Button variant="ghost" onClick={() => void showReview()}>
+          <Button variant="ghost" onClick={() => void compareBranches()}>
             <Icon name="branch" /> Compare branches
           </Button>
           <Button onClick={() => void invalidatePrLists(root)} disabled={refreshing}>
@@ -362,31 +281,6 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
           </Button>
         </div>
       </header>
-
-      {hasComparison ? (
-        <button type="button" className={css.resume} onClick={() => void showReview()}>
-          <Eyebrow as="span">Continue</Eyebrow>
-          {current ? (
-            // Where the review's number and title land on the way back — unless
-            // a row is being opened, which then holds them instead.
-            <span className={css.resumeHeading}>
-              <ScreenMorph part="prNumber" active={opening == null}>
-                <span className={css.resumeNumber}>#{current.number}</span>
-              </ScreenMorph>
-              <ScreenMorph part="prTitle" active={opening == null}>
-                <span className={css.resumeTitle}>{current.title}</span>
-              </ScreenMorph>
-            </span>
-          ) : (
-            <span className={css.resumeHeading}>
-              <span className={css.resumeTitle}>
-                {base} … {compare}
-              </span>
-            </span>
-          )}
-          <Icon name="arrow-right" />
-        </button>
-      ) : null}
 
       <Tabs.Root
         value={tab}
@@ -408,116 +302,91 @@ function PrBrowser({ root, name }: { root: string; name: string }) {
               );
             })}
           </Tabs.List>
-          <div className={css.search}>
-            <Icon name="search" className={css.searchIcon} />
-            <Input
-              size="sm"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={onSearchKey}
-              placeholder="Filter, or paste a PR link"
-              aria-label="Filter pull requests, or paste a pull request link"
-              className={css.searchInput}
-            />
+          <div className={css.toolbarEnd}>
+            <div className={css.search}>
+              <Icon name="search" className={css.searchIcon} />
+              <Input
+                size="sm"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={onSearchKey}
+                placeholder="Filter, or paste a PR link"
+                aria-label="Filter pull requests, or paste a pull request link"
+                className={css.searchInput}
+              />
+            </div>
+            <ColumnMenu visibility={columns} onChange={setColumns} />
           </div>
         </div>
 
-        <div className={css.listScroll}>
-          {reference ? (
-            <button type="button" className={css.pasted} onClick={() => void open(reference)}>
-              <Icon name="external" />
-              <span>
-                Open <code>{reference}</code>
-              </span>
-              <span className={css.pastedHint}>Enter</span>
-            </button>
-          ) : null}
+        {/* The scroll area is what rises in and sinks away, not the list inside
+            it: a view transition snapshots a named element whole, unclipped, so
+            a list scrolled down would paint its hidden rows over the header. A
+            tab of its own also starts at the top. */}
+        <Reveal key={tab} scope="home-list">
+          <div className={css.listScroll}>
+            {reference ? (
+              <button type="button" className={css.pasted} onClick={() => void open(reference)}>
+                <Icon name="external" />
+                <span>
+                  Open <code>{reference}</code>
+                </span>
+                <span className={css.pastedHint}>Enter</span>
+              </button>
+            ) : null}
 
-          {refreshFailed ? (
-            <p className={css.refreshFailed} role="status">
-              Could not refresh: {errorMessage(listing.error)} Showing what was listed{" "}
-              {relativeTime(new Date(listing.dataUpdatedAt).toISOString())}.
-            </p>
-          ) : null}
+            {refreshFailed ? (
+              <p className={css.refreshFailed} role="status">
+                Could not refresh: {errorMessage(listing.error)} Showing what was listed{" "}
+                {relativeTime(new Date(listing.dataUpdatedAt).toISOString())}.
+              </p>
+            ) : null}
 
-          {listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed" ? (
-            <ListMessage>
-              Could not list pull requests: {errorMessage(listing.error)} Pasting a PR link above
-              still works.
-            </ListMessage>
-          ) : tab !== "reviewed" && !listing.data ? (
-            // Only with nothing cached: no earlier visit or launch has listed this tab.
-            <ListMessage>
-              <Spinner /> Loading pull requests…
-            </ListMessage>
-          ) : visible.length === 0 ? (
-            <ListMessage>
-              {query
-                ? "Nothing matches that filter."
-                : tab === "reviewed"
-                  ? "Nothing reviewed in this repository yet. Reviews you run show up here."
-                  : tab === "reviewRequested"
-                    ? "No open pull requests are waiting on your review."
-                    : tab === "mine"
-                      ? "You have no open pull requests here."
-                      : "No open pull requests."}
-            </ListMessage>
-          ) : (
-            <Reveal key={tab} scope="home-list">
-              <ul className={css.list}>
-                {tab === "reviewed"
-                  ? (visible as ReviewedPr[]).map((entry) => {
-                      const live = openByNumber.get(entry.number);
-                      return live ? (
-                        <PrRow
-                          key={entry.number}
-                          pr={live}
-                          reviewed={entry}
-                          stack={stacks.get(live.number)}
-                          opening={opening === live.url}
-                          onOpen={() => void open(live.url, live)}
-                        />
-                      ) : (
-                        <HistoryRow
-                          key={entry.number}
-                          reviewed={entry}
-                          url={entry.url ?? urlFor(entry.number)}
-                          listed={listing.data != null}
-                          opening={
-                            opening != null && opening === (entry.url ?? urlFor(entry.number))
-                          }
-                          onOpen={(url) =>
-                            void open(url, {
-                              number: entry.number,
-                              title: entry.title ?? `Pull request #${entry.number}`,
-                            })
-                          }
-                        />
-                      );
-                    })
-                  : groupStacks(visible as PrSummary[], stacks).map(({ pr, depth }) => (
-                      <PrRow
-                        key={pr.number}
-                        pr={pr}
-                        reviewed={reviewed.byNumber.get(pr.number)}
-                        stack={stacks.get(pr.number)}
-                        depth={depth}
-                        opening={opening === pr.url}
-                        onOpen={() => void open(pr.url, pr)}
-                      />
-                    ))}
-              </ul>
-            </Reveal>
-          )}
-        </div>
+            {listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed" ? (
+              <ErrorNotice
+                error={toAppError(listing.error, "Could not list pull requests")}
+                className={css.listError}
+              >
+                Pasting a PR link above still works.
+              </ErrorNotice>
+            ) : tab !== "reviewed" && !listing.data ? (
+              // Only with nothing cached: no earlier visit or launch has listed this tab.
+              <ListMessage>
+                <Spinner /> Loading pull requests…
+              </ListMessage>
+            ) : rows.length === 0 ? (
+              <ListMessage>
+                {query
+                  ? "Nothing matches that filter."
+                  : tab === "reviewed"
+                    ? "Nothing reviewed in this repository yet. Reviews you run show up here."
+                    : tab === "reviewRequested"
+                      ? "No open pull requests are waiting on your review."
+                      : tab === "mine"
+                        ? "You have no open pull requests here."
+                        : "No open pull requests."}
+              </ListMessage>
+            ) : (
+              <PrTable
+                rows={rows}
+                root={root}
+                opening={opening}
+                listed={listing.data != null}
+                carries={carries}
+                visibility={columns}
+                onOpen={openRow}
+              />
+            )}
+          </div>
+        </Reveal>
       </Tabs.Root>
     </div>
   );
 }
 
 function Welcome() {
-  const loading = useReviewStore((state) => state.loadingRepo);
-  const openRepo = useReviewStore((state) => state.openRepo);
+  const loading = useAppStore((state) => state.loadingRepo);
+  const openRepo = useAppStore((state) => state.openRepo);
 
   async function pick() {
     const path = await chooseFolder();
@@ -554,20 +423,13 @@ function Welcome() {
 
 /** The first screen: the open repository's pull requests, or a way to open one. */
 export function Home() {
-  const repo = useReviewStore((state) => state.repo);
-  const error = useReviewStore((state) => state.error);
-  const dismissError = useReviewStore((state) => state.dismissError);
+  const repo = useAppStore((state) => state.repo);
+  const error = useAppStore((state) => state.error);
+  const dismissError = useAppStore((state) => state.dismissError);
 
   return (
     <main className={css.home}>
-      {error ? (
-        <div className={css.error} role="alert">
-          <p>{error}</p>
-          <Button variant="ghost" size="sm" onClick={dismissError}>
-            <Icon name="close" /> Dismiss
-          </Button>
-        </div>
-      ) : null}
+      {error ? <ErrorNotice error={error} onDismiss={dismissError} className={css.error} /> : null}
       {repo ? <PrBrowser key={repo.root} root={repo.root} name={repo.name} /> : <Welcome />}
     </main>
   );

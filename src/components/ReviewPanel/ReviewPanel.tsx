@@ -17,6 +17,8 @@ import {
 import {
   Button,
   Checkbox,
+  Code,
+  CodeBlock,
   Icon,
   Popover,
   Radio,
@@ -32,36 +34,37 @@ import {
   type ReviewComment,
   type ReviewEngine,
   type ReviewFinding,
-  type ReviewResult,
   type ReviewVerdict,
 } from "../../ipc/git";
 import { dropReferenceDefinitions, inlineHtmlEntities } from "../../lib/comarkFixes";
+import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
 import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
 import { postBodyForFinding, postLocationForFinding } from "../../lib/prComment";
 import { absoluteTime, shortTime } from "../../lib/time";
+import { knownVerdict } from "../../lib/verdict";
+import { useAppStore } from "../../store/appStore";
 import {
   CONCLUSION_POST_KEY,
   findingThreadKey,
   REVIEW_THREAD_KEY,
   type ResolvedFinding,
   resolutionThreadKey,
+  reviewsNewestFirst,
   type StoredReview,
-  useReviewStore,
-} from "../../store/reviewStore";
+  sourcedKey,
+  useTab,
+} from "../../store/tabStore";
 import { Combobox } from "../Combobox/Combobox";
 import { CopyButton } from "../CopyButton/CopyButton";
+import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
+import { RunProgress } from "../RunProgress/RunProgress";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import { Spinner } from "../Spinner/Spinner";
 import { Textarea } from "../Textarea/Textarea";
 import css from "./ReviewPanel.module.css";
-
-const ENGINE_LABELS: Record<ReviewEngine, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-};
 
 const ENGINE_OPTIONS = (Object.keys(ENGINE_LABELS) as ReviewEngine[]).map((engine) => ({
   value: engine,
@@ -180,15 +183,6 @@ const VERDICTS: { value: ReviewVerdict; label: string; noun: string; done: strin
     done: "Requested changes",
   },
 ];
-
-/** The agent's verdict when it is one GitHub knows; `null` for anything else. */
-function knownVerdict(verdict: string | undefined): ReviewVerdict | null {
-  const key = verdict
-    ?.trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  return VERDICTS.find((option) => option.value === key)?.value ?? null;
-}
 
 /** Stable fallback: a fresh `[]` from a selector re-renders forever. */
 const EMPTY_THREAD: ReviewComment[] = [];
@@ -354,6 +348,31 @@ function GitHubPicture({ children, ...props }: React.HTMLAttributes<HTMLElement>
   );
 }
 
+/** The text inside rendered Markdown, however deeply it is wrapped. */
+function textOf(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+  return "";
+}
+
+/**
+ * A fenced block (or a raw `<pre>`), as the design system's code block: its
+ * copy button, and highlighting for the languages it knows. Any other language
+ * reads as plain text, as it did before.
+ */
+function MarkdownCodeBlock({ language, children }: { language?: string; children?: ReactNode }) {
+  return <CodeBlock code={textOf(children)} language={language} className={css.codeBlock} />;
+}
+
+const GITHUB_MARKDOWN_COMPONENTS = {
+  img: GitHubImage,
+  picture: GitHubPicture,
+  source: GitHubSource,
+  code: Code,
+  pre: MarkdownCodeBlock,
+};
+
 function safePrMarkdown(markdown: string): string {
   // Comark's `::component` extension is not part of GitHub Markdown. Escape
   // it so third-party content cannot request arbitrary React/HTML elements.
@@ -368,7 +387,7 @@ function GitHubMarkdown({ markdown, className }: { markdown: string; className?:
       value={safePrMarkdown(markdown)}
       options={GITHUB_MARKDOWN_OPTIONS}
       plugins={GITHUB_MARKDOWN_PLUGINS}
-      components={{ img: GitHubImage, picture: GitHubPicture, source: GitHubSource }}
+      components={GITHUB_MARKDOWN_COMPONENTS}
     />
   );
 }
@@ -382,12 +401,12 @@ function persistedTab(): PanelTab {
 }
 
 function PrRefreshButton() {
-  const refreshPr = useReviewStore((state) => state.refreshPr);
-  const refreshingPr = useReviewStore((state) => state.refreshingPr);
+  const refreshPr = useTab((state) => state.refreshPr);
+  const refreshingPr = useTab((state) => state.refreshingPr);
   // The header's Refresh does the same work when a PR is open; don't offer a
   // second run while either one is still going.
-  const loadingDiff = useReviewStore((state) => state.loadingDiff);
-  const openingPr = useReviewStore((state) => state.openingPr);
+  const loadingDiff = useTab((state) => state.loadingDiff);
+  const openingPr = useTab((state) => state.openingPr);
   return (
     <Button
       variant="ghost"
@@ -410,8 +429,8 @@ function PrRefreshButton() {
 }
 
 function PrSection({ pr }: { pr: PrContext }) {
-  const selectFile = useReviewStore((state) => state.selectFile);
-  const prHeadMoved = useReviewStore((state) => state.prHeadMoved);
+  const selectFile = useTab((state) => state.selectFile);
+  const prHeadMoved = useTab((state) => state.prHeadMoved);
   const topLevel = pr.comments.filter((comment) => !comment.path);
   const inlineByPath = useMemo(() => {
     const groups = new Map<string, PrContext["comments"]>();
@@ -513,6 +532,26 @@ function Provenance({
 }
 
 /**
+ * Which review an item came from: the panel shows every engine's review at
+ * once, so each finding, verdict and conclusion carries its engine and model.
+ * The effort and time, which the review's own heading gives in full, are in
+ * the tooltip.
+ */
+function SourceTag({ source }: { source: StoredReview }) {
+  const label = [ENGINE_LABELS[source.engine] ?? source.engine, source.model].filter(Boolean);
+  const detail = [
+    ...label,
+    source.effort ? `${source.effort} effort` : null,
+    absoluteTime(source.createdAt),
+  ].filter(Boolean);
+  return (
+    <span className={css.sourceTag} title={detail.join(" · ")}>
+      {label.join(" · ")}
+    </span>
+  );
+}
+
+/**
  * A titled block of the AI review column. Collapsible, because the column
  * stacks several long things and the one you want is often the last: folding
  * the explanation away is how you reach the findings under it. Folded content
@@ -521,11 +560,14 @@ function Provenance({
 function Section({
   title,
   count,
+  tag,
   reveal = false,
   children,
 }: {
   title: string;
   count?: number;
+  /** Set after the title, like the count. */
+  tag?: ReactNode;
   /** Part of a review's result, so it takes part in `useRevealInOrder`. */
   reveal?: boolean;
   children: ReactNode;
@@ -543,6 +585,7 @@ function Section({
         <Icon name={open ? "chevron-down" : "chevron-right"} />
         {title}
         {count != null ? <span className={css.sectionCount}>{count}</span> : null}
+        {tag}
       </button>
       <div className={css.sectionBody} hidden={!open} data-reveal={reveal || undefined}>
         {children}
@@ -564,10 +607,11 @@ const NOT_IN_DIFF = Number.MAX_SAFE_INTEGER;
  * it and scrolls the diff surface there, exactly as a finding's path does.
  */
 function ExplanationList() {
-  const explainMode = useReviewStore((state) => state.explainMode);
-  const stored = useReviewStore((state) => state.explanation);
-  const explaining = useReviewStore((state) => state.explaining);
-  const summary = useReviewStore((state) => state.summary);
+  const explainMode = useAppStore((state) => state.explainMode);
+  const stored = useTab((state) => state.explanation);
+  const explaining = useTab((state) => state.explaining);
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const summary = useTab((state) => state.summary);
 
   // Diff order, so the explanations read in the order the files are scrolled
   // through. A path the model invented, or one that has since left the diff,
@@ -605,9 +649,12 @@ function ExplanationList() {
         </div>
       ) : null}
       {explaining ? (
-        <p className={css.status}>
-          <Spinner /> {stored ? "Explaining again…" : "Explaining the change in plain language…"}
-        </p>
+        <>
+          <p className={css.status}>
+            <Spinner /> {stored ? "Explaining again…" : "Explaining the change in plain language…"}
+          </p>
+          <RunProgress kind="explain" agent={ENGINE_LABELS[reviewEngine]} />
+        </>
       ) : null}
       {stored ? (
         <>
@@ -653,10 +700,10 @@ function Thread({
 }) {
   const [draft, setDraft] = useState("");
   const [asking, setAsking] = useState(false);
-  const replyingTo = useReviewStore((state) => state.replyingTo);
-  const addComment = useReviewStore((state) => state.addComment);
+  const replyingTo = useTab((state) => state.replyingTo);
+  const addComment = useTab((state) => state.addComment);
 
-  const pending = replyingTo === threadKey;
+  const pending = replyingTo === sourcedKey(engine, threadKey);
   const busy = replyingTo !== null;
   const canSend = !busy && draft.trim() !== "";
   const open = asking || comments.length > 0 || pending;
@@ -665,7 +712,7 @@ function Thread({
   function send() {
     if (!canSend) return;
     setDraft("");
-    void addComment(threadKey, draft.trim());
+    void addComment(engine, threadKey, draft.trim());
   }
 
   return (
@@ -691,9 +738,12 @@ function Thread({
             </div>
           ))}
           {pending ? (
-            <p className={css.commentPending}>
-              <Spinner /> Waiting for {agent}…
-            </p>
+            <>
+              <p className={css.commentPending}>
+                <Spinner /> Waiting for {agent}…
+              </p>
+              <RunProgress kind="reply" agent={agent} />
+            </>
           ) : null}
           <form
             className={css.commentForm}
@@ -743,12 +793,15 @@ function Thread({
 
 /** A deliberate, editable hand-off from an AI finding to a GitHub comment. */
 function PrCommentComposer({
+  engine,
   finding,
   patch,
   pr,
   reviewBody,
   postedUrl,
 }: {
+  /** Whose review the finding or summary belongs to. */
+  engine: ReviewEngine;
   finding: ReviewFinding | null;
   patch: string | null;
   pr: PrContext;
@@ -760,9 +813,9 @@ function PrCommentComposer({
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [body, setBody] = useState(() => reviewBody ?? postBodyForFinding(finding, location));
-  const postingTo = useReviewStore((state) => state.postingTo);
-  const postPrComment = useReviewStore((state) => state.postPrComment);
-  const targetKey = finding ? findingThreadKey(finding) : REVIEW_THREAD_KEY;
+  const postingTo = useTab((state) => state.postingTo);
+  const postPrComment = useTab((state) => state.postPrComment);
+  const targetKey = sourcedKey(engine, finding ? findingThreadKey(finding) : REVIEW_THREAD_KEY);
   const busy = postingTo !== null;
   const pending = postingTo === targetKey;
   const requiresConfirmation = pr.state !== "open" && !pr.isDraft;
@@ -777,7 +830,7 @@ function PrCommentComposer({
       setConfirming(true);
       return;
     }
-    void postPrComment(finding, body, location).then((posted) => {
+    void postPrComment(engine, finding, body, location).then((posted) => {
       // Failures stay visible in the review panel and leave the editable draft
       // intact; a successful response leaves behind the GitHub permalink.
       if (posted) close();
@@ -845,8 +898,8 @@ function PrCommentComposer({
  * just to the file — a whole-file finding has no lines and lands on the header.
  */
 function FindingLocation({ path, lines }: { path: string; lines: LineSpan | null }) {
-  const selectFile = useReviewStore((state) => state.selectFile);
-  const inDiff = useReviewStore(
+  const selectFile = useTab((state) => state.selectFile);
+  const inDiff = useTab(
     (state) => state.summary?.files.some((file) => file.path === path) ?? false,
   );
   const at = lines ? `:${formatLines(lines)}` : "";
@@ -902,11 +955,11 @@ function findingMarkdown(finding: ReviewFinding, label: string, text: string): s
  * Its comment thread carries over from the finding it judges, under a key of
  * its own so a look-alike new finding cannot inherit it.
  */
-function Resolution({ resolution, engine }: { resolution: ResolvedFinding; engine: ReviewEngine }) {
+function Resolution({ resolution, source }: { resolution: ResolvedFinding; source: StoredReview }) {
   const { finding, status, note } = resolution;
   const threadKey = resolutionThreadKey(finding);
-  const comments = useReviewStore(
-    (state) => state.reviews[state.reviewEngine]?.threads[threadKey] ?? EMPTY_THREAD,
+  const comments = useTab(
+    (state) => state.reviews[source.engine]?.threads[threadKey] ?? EMPTY_THREAD,
   );
 
   return (
@@ -917,12 +970,15 @@ function Resolution({ resolution, engine }: { resolution: ResolvedFinding; engin
         </p>
         <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
       </div>
-      <FindingLocation path={finding.path} lines={findingLines(finding)} />
+      <div className={css.findingMeta}>
+        <FindingLocation path={finding.path} lines={findingLines(finding)} />
+        <SourceTag source={source} />
+      </div>
       {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
       <Thread
         threadKey={threadKey}
         comments={comments}
-        engine={engine}
+        engine={source.engine}
         placeholder="Ask about this verdict…"
         askLabel="Ask about this"
       />
@@ -932,18 +988,19 @@ function Resolution({ resolution, engine }: { resolution: ResolvedFinding; engin
 
 function Finding({
   finding,
-  engine,
+  source,
   patch,
   pr,
 }: {
   finding: ReviewFinding;
-  engine: ReviewEngine;
+  /** The review that raised it. */
+  source: StoredReview;
   patch: string | null;
   pr: PrContext | null;
 }) {
   const threadKey = findingThreadKey(finding);
-  const comments = useReviewStore(
-    (state) => state.reviews[state.reviewEngine]?.threads[threadKey] ?? EMPTY_THREAD,
+  const comments = useTab(
+    (state) => state.reviews[source.engine]?.threads[threadKey] ?? EMPTY_THREAD,
   );
 
   return (
@@ -957,17 +1014,21 @@ function Finding({
           label="Copy finding"
         />
       </div>
-      <FindingLocation path={finding.path} lines={findingLines(finding)} />
+      <div className={css.findingMeta}>
+        <FindingLocation path={finding.path} lines={findingLines(finding)} />
+        <SourceTag source={source} />
+      </div>
       <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
       <Thread
         threadKey={threadKey}
         comments={comments}
-        engine={engine}
+        engine={source.engine}
         placeholder="Ask about this finding…"
         askLabel="Ask about this"
         actions={
           pr ? (
             <PrCommentComposer
+              engine={source.engine}
               finding={finding}
               patch={patch}
               pr={pr}
@@ -980,23 +1041,92 @@ function Finding({
   );
 }
 
+/** One engine's review as a whole: who wrote it and when, what it said, and its discussion. */
+function ReviewSummary({
+  source,
+  patch,
+  pr,
+}: {
+  source: StoredReview;
+  patch: string | null;
+  pr: PrContext | null;
+}) {
+  return (
+    <li className={css.summary} data-reveal>
+      <div className={css.itemHead}>
+        <Provenance
+          engine={source.engine}
+          model={source.model}
+          effort={source.effort}
+          createdAt={source.createdAt}
+        />
+        <CopyButton text={source.review.summary} label="Copy summary" />
+      </div>
+      {source.review.cutShort ? (
+        <p className={css.cutShort}>
+          <Icon name="warning" />
+          <span>
+            {ENGINE_LABELS[source.engine]} hit its turn limit partway through, so it answered from
+            what it had read by then. Some changes may not have been checked.
+          </span>
+        </p>
+      ) : null}
+      <GitHubMarkdown markdown={source.review.summary} className={css.agentMarkdown} />
+      <Thread
+        threadKey={REVIEW_THREAD_KEY}
+        comments={source.threads[REVIEW_THREAD_KEY] ?? []}
+        engine={source.engine}
+        placeholder="Discuss the review as a whole…"
+        askLabel="Discuss"
+        actions={
+          pr ? (
+            <PrCommentComposer
+              engine={source.engine}
+              finding={null}
+              patch={patch}
+              pr={pr}
+              reviewBody={source.review.summary}
+              postedUrl={source.review.postedUrl}
+            />
+          ) : null
+        }
+      />
+    </li>
+  );
+}
+
+/**
+ * Diff order, so the panel reads top-to-bottom alongside the surface. Every
+ * engine's items interleave; the sort is stable, so where two land on the same
+ * line the newer review's comes first.
+ */
+function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] {
+  return [...items].sort((a, b) => {
+    const x = findingOf(a);
+    const y = findingOf(b);
+    return x.path.localeCompare(y.path) || (x.line ?? 0) - (y.line ?? 0);
+  });
+}
+
 /**
  * How the review ends: the verdict the agent recommends, already selected, over
  * its draft of the review body. Both are the reader's to change before
  * submitting, and the agent's pick keeps a "suggested" mark so an override
  * stays visible. Without a PR there is nowhere to submit, but the verdict still
- * says where the change stands.
+ * says where the change stands. With several engines' reviews on record, the
+ * most recent one's conclusion is the one offered.
  */
-function Conclusion({ review, pr }: { review: ReviewResult; pr: PrContext | null }) {
+function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null }) {
+  const { review } = source;
   const suggested = knownVerdict(review.verdict);
   const [verdict, setVerdict] = useState<ReviewVerdict>(suggested ?? "comment");
   const [body, setBody] = useState(review.conclusion ?? "");
   const [confirming, setConfirming] = useState(false);
-  const postingTo = useReviewStore((state) => state.postingTo);
-  const submitPrReview = useReviewStore((state) => state.submitPrReview);
+  const postingTo = useTab((state) => state.postingTo);
+  const submitPrReview = useTab((state) => state.submitPrReview);
 
   const busy = postingTo !== null;
-  const pending = postingTo === CONCLUSION_POST_KEY;
+  const pending = postingTo === sourcedKey(source.engine, CONCLUSION_POST_KEY);
   // GitHub takes a bare approval, but nothing else without a body.
   const canSubmit = pr != null && !busy && (verdict === "approve" || body.trim() !== "");
   const requiresConfirmation = pr != null && pr.state !== "open" && !pr.isDraft;
@@ -1009,13 +1139,13 @@ function Conclusion({ review, pr }: { review: ReviewResult; pr: PrContext | null
       setConfirming(true);
       return;
     }
-    void submitPrReview(verdict, body).then((posted) => {
+    void submitPrReview(source.engine, verdict, body).then((posted) => {
       if (posted) setConfirming(false);
     });
   }
 
   return (
-    <Section title="Conclusion" reveal>
+    <Section title="Conclusion" tag={<SourceTag source={source} />} reveal>
       <RadioGroup
         className={css.verdicts}
         aria-label="Review verdict"
@@ -1109,14 +1239,14 @@ const REPLACE_FADE_MS = 240;
  * ends, its shapes leave (`handingOver`) before the result is let through, so
  * the new review never lands under a loader still on its way out.
  *
- * Meanwhile the review on screen (`shown`) fades out — the previous one, on a
- * re-review — and the new one takes its place unseen, while the shapes are
- * still leaving: its Markdown renders asynchronously, and this way it has
- * settled before anything comes in, rather than landing in the middle of it.
- * `revealed` counts results let through, which is what sets off
- * `useRevealInOrder`.
+ * Meanwhile the reviews on screen (`shown`) fade out — the run's previous one,
+ * on a re-review, and every other engine's — and the new set takes their place
+ * unseen, while the shapes are still leaving: Markdown renders asynchronously,
+ * and this way it has settled before anything comes in, rather than landing in
+ * the middle of it. `revealed` counts results let through, which is what sets
+ * off `useRevealInOrder`.
  */
-function useRunHandover(running: boolean, rerunning: boolean, stored: StoredReview | null) {
+function useRunHandover<T>(running: boolean, rerunning: boolean, stored: T) {
   const [wasRunning, setWasRunning] = useState(running);
   const [handingOver, setHandingOver] = useState(false);
   const [held, setHeld] = useState(false);
@@ -1209,33 +1339,34 @@ function useRevealInOrder(ref: RefObject<HTMLElement | null>, revealed: number) 
 }
 
 export function ReviewPanel() {
-  const pr = useReviewStore((state) => state.pr);
+  const pr = useTab((state) => state.pr);
   // A PR opening from the list gets its tab straight away, loading, so the
   // panel doesn't switch tabs under the reader when the PR arrives.
-  const hasPr = useReviewStore((state) => state.pr != null || state.pendingPr != null);
-  const stored = useReviewStore((state) => state.reviews[state.reviewEngine] ?? null);
-  const reviewing = useReviewStore((state) => state.reviewing);
-  const reReviewing = useReviewStore((state) => state.reReviewing);
-  const reviewError = useReviewStore((state) => state.reviewError);
-  const explainMode = useReviewStore((state) => state.explainMode);
-  const explaining = useReviewStore((state) => state.explaining);
-  const explainError = useReviewStore((state) => state.explainError);
-  const reviewEngine = useReviewStore((state) => state.reviewEngine);
-  const reviewModel = useReviewStore((state) => state.reviewModel);
-  const reviewEffort = useReviewStore((state) => state.reviewEffort);
-  const patch = useReviewStore((state) => state.patch);
-  const hasDiff = useReviewStore(
-    (state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff,
-  );
-  const fileCount = useReviewStore((state) => state.summary?.files.length ?? 0);
-  const runReview = useReviewStore((state) => state.runReview);
-  const runReReview = useReviewStore((state) => state.runReReview);
-  const setReviewEngine = useReviewStore((state) => state.setReviewEngine);
-  const setReviewModel = useReviewStore((state) => state.setReviewModel);
-  const setReviewEffort = useReviewStore((state) => state.setReviewEffort);
-  const setExplainMode = useReviewStore((state) => state.setExplainMode);
-  const dismissReviewError = useReviewStore((state) => state.dismissReviewError);
-  const dismissExplainError = useReviewStore((state) => state.dismissExplainError);
+  const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const reviews = useTab((state) => state.reviews);
+  // The selected engine's review is only what the next run follows up on;
+  // every engine's is shown.
+  const stored = reviews[reviewEngine] ?? null;
+  const reviewing = useTab((state) => state.reviewing);
+  const reReviewing = useTab((state) => state.reReviewing);
+  const reviewError = useTab((state) => state.reviewError);
+  const explainMode = useAppStore((state) => state.explainMode);
+  const explaining = useTab((state) => state.explaining);
+  const explainError = useTab((state) => state.explainError);
+  const reviewModel = useAppStore((state) => state.reviewModel);
+  const reviewEffort = useAppStore((state) => state.reviewEffort);
+  const patch = useTab((state) => state.patch);
+  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
+  const fileCount = useTab((state) => state.summary?.files.length ?? 0);
+  const runReview = useTab((state) => state.runReview);
+  const runReReview = useTab((state) => state.runReReview);
+  const setReviewEngine = useAppStore((state) => state.setReviewEngine);
+  const setReviewModel = useAppStore((state) => state.setReviewModel);
+  const setReviewEffort = useAppStore((state) => state.setReviewEffort);
+  const setExplainMode = useAppStore((state) => state.setExplainMode);
+  const dismissReviewError = useTab((state) => state.dismissReviewError);
+  const dismissExplainError = useTab((state) => state.dismissExplainError);
   const agentModels = useAgentModels(reviewEngine);
 
   const busy = reviewing || reReviewing || explaining;
@@ -1243,7 +1374,7 @@ export function ReviewPanel() {
   const { handingOver, rerun, runId, shown, revealed, shapesLeft } = useRunHandover(
     running,
     reReviewing,
-    stored,
+    reviews,
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
@@ -1259,13 +1390,28 @@ export function ReviewPanel() {
     }
   }
 
-  // Diff order, so the panel reads top-to-bottom alongside the surface.
-  const ordered = useMemo(() => {
-    if (!shown) return [];
-    return [...shown.review.findings].sort(
-      (a, b) => a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0),
-    );
-  }, [shown]);
+  const sources = useMemo(() => reviewsNewestFirst(shown), [shown]);
+  const findings = useMemo(
+    () =>
+      inDiffOrder(
+        sources.flatMap((source) => source.review.findings.map((finding) => ({ finding, source }))),
+        (item) => item.finding,
+      ),
+    [sources],
+  );
+  const resolutions = useMemo(
+    () =>
+      inDiffOrder(
+        sources.flatMap((source) =>
+          (source.resolutions ?? []).map((resolution) => ({ resolution, source })),
+        ),
+        (item) => item.resolution.finding,
+      ),
+    [sources],
+  );
+  const latest = sources[0];
+  // "New" only reads right when every review listed is a follow-up.
+  const followUps = sources.length > 0 && sources.every((source) => source.resolutions?.length);
 
   return (
     <Tabs.Root
@@ -1299,7 +1445,7 @@ export function ReviewPanel() {
               title={
                 hasDiff
                   ? stored
-                    ? `Ask ${ENGINE_LABELS[reviewEngine]} to check that the previous findings were addressed, then review the changed code for new issues`
+                    ? `Ask ${ENGINE_LABELS[reviewEngine]} to check that its previous findings were addressed, then review the changed code for new issues`
                     : `Ask ${ENGINE_LABELS[reviewEngine]} to review this comparison`
                   : "Nothing to review until a comparison has changes"
               }
@@ -1419,23 +1565,17 @@ export function ReviewPanel() {
         {/* While a finished run hands over, the review it replaces fades out. */}
         <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
           {reviewError ? (
-            <div className={css.error} role="alert">
-              <p className={css.errorText}>{reviewError}</p>
-              <Button variant="ghost" size="sm" onClick={dismissReviewError}>
-                <Icon name="close" /> Dismiss
-              </Button>
-            </div>
+            <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
           ) : null}
 
           {/* Its own box: the two agents run independently, so one can fail
               while the other returns something worth reading. */}
           {explainError ? (
-            <div className={css.error} role="alert">
-              <p className={css.errorText}>Could not explain the change. {explainError}</p>
-              <Button variant="ghost" size="sm" onClick={dismissExplainError}>
-                <Icon name="close" /> Dismiss
-              </Button>
-            </div>
+            <ErrorNotice
+              error={explainError}
+              onDismiss={dismissExplainError}
+              className={css.error}
+            />
           ) : null}
 
           {/* Above the review: it is orientation, and orientation comes before
@@ -1445,7 +1585,8 @@ export function ReviewPanel() {
 
           {/* One shape per changed file, within reason: enough to keep the scene
               busy on a one-file change, few enough not to crowd it on a big one.
-              The agents report no progress mid-run, so it runs open-ended. */}
+              The agents can't say how far along they are, so it runs open-ended;
+              the line under it says whether the run is still writing anything. */}
           {running || handingOver ? (
             <Fold open appear className={css.notice}>
               <ReviewLoader
@@ -1454,78 +1595,72 @@ export function ReviewPanel() {
                 leaving={!running}
                 onLeft={shapesLeft}
               />
-              <p className={handingOver ? `${css.status} ${css.statusLeaving}` : css.status}>
+              <p
+                className={
+                  handingOver
+                    ? `${css.status} ${css.loaderStatus} ${css.statusLeaving}`
+                    : `${css.status} ${css.loaderStatus}`
+                }
+              >
                 {rerun
-                  ? `${ENGINE_LABELS[reviewEngine]} is checking whether the previous findings were addressed, then reviewing the changed code for new issues.`
+                  ? `${ENGINE_LABELS[reviewEngine]} is checking whether its previous findings were addressed, then reviewing the changed code for new issues.`
                   : `${ENGINE_LABELS[reviewEngine]} is reading the diff and the surrounding code.`}{" "}
                 This can take a few minutes on a large change.
               </p>
+              {/* Cancel stops the explanation too: one press started both. */}
+              <RunProgress
+                kind="review"
+                cancels={["review", "explain"]}
+                agent={ENGINE_LABELS[reviewEngine]}
+                className={css.loaderProgress}
+              />
             </Fold>
           ) : null}
 
-          {shown && !reviewing ? (
+          {latest ? (
             <>
-              <Section title="Review" reveal>
-                <div className={css.itemHead}>
-                  <Provenance
-                    engine={shown.engine}
-                    model={shown.model}
-                    effort={shown.effort}
-                    createdAt={shown.createdAt}
-                  />
-                  <CopyButton text={shown.review.summary} label="Copy summary" />
-                </div>
-                <GitHubMarkdown markdown={shown.review.summary} className={css.agentMarkdown} />
-                <Thread
-                  threadKey={REVIEW_THREAD_KEY}
-                  comments={shown.threads[REVIEW_THREAD_KEY] ?? []}
-                  engine={shown.engine}
-                  placeholder="Discuss the review as a whole…"
-                  askLabel="Discuss"
-                  actions={
-                    pr ? (
-                      <PrCommentComposer
-                        finding={null}
-                        patch={patch}
-                        pr={pr}
-                        reviewBody={shown.review.summary}
-                        postedUrl={shown.review.postedUrl}
-                      />
-                    ) : null
-                  }
-                />
+              <Section
+                title={sources.length > 1 ? "Reviews" : "Review"}
+                count={sources.length > 1 ? sources.length : undefined}
+                reveal
+              >
+                <ul className={css.findings}>
+                  {sources.map((source) => (
+                    <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
+                  ))}
+                </ul>
               </Section>
-              {shown.resolutions && shown.resolutions.length > 0 ? (
-                <Section title="Previous findings" count={shown.resolutions.length} reveal>
+              {resolutions.length > 0 ? (
+                <Section title="Previous findings" count={resolutions.length} reveal>
                   <ul className={css.findings}>
-                    {shown.resolutions.map((resolution) => (
+                    {resolutions.map(({ resolution, source }) => (
                       <Resolution
-                        key={resolutionThreadKey(resolution.finding)}
+                        key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
                         resolution={resolution}
-                        engine={shown.engine}
+                        source={source}
                       />
                     ))}
                   </ul>
                 </Section>
               ) : null}
               <Section
-                title={shown.resolutions?.length ? "New findings" : "Findings"}
-                count={ordered.length}
+                title={followUps ? "New findings" : "Findings"}
+                count={findings.length}
                 reveal
               >
-                {ordered.length === 0 ? (
+                {findings.length === 0 ? (
                   <p className={css.status}>
-                    {shown.resolutions?.length
+                    {followUps
                       ? "No new findings beyond the previous review."
                       : "No findings — the diff came back clean."}
                   </p>
                 ) : (
                   <ul className={css.findings}>
-                    {ordered.map((finding) => (
+                    {findings.map(({ finding, source }) => (
                       <Finding
-                        key={findingThreadKey(finding)}
+                        key={sourcedKey(source.engine, findingThreadKey(finding))}
                         finding={finding}
-                        engine={shown.engine}
+                        source={source}
                         patch={patch}
                         pr={pr}
                       />
@@ -1535,13 +1670,16 @@ export function ReviewPanel() {
               </Section>
               {/* Keyed on the review, so a fresh one resets the draft and the
                   preselected verdict to what it recommends. */}
-              <Conclusion key={shown.createdAt} review={shown.review} pr={pr} />
+              <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
             </>
           ) : null}
-          <Fold open={!shown && !running && !handingOver && !reviewError} className={css.notice}>
+          <Fold
+            open={sources.length === 0 && !running && !handingOver && !reviewError}
+            className={css.notice}
+          >
             <p className={css.status}>
-              Nothing runs until you press Review. Findings land here, kept per comparison and
-              engine for when you come back.
+              Nothing runs until you press Review. Every engine's findings land here, kept per
+              comparison for when you come back.
             </p>
           </Fold>
         </div>

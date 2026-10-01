@@ -1,0 +1,58 @@
+/* Only the room the title leaves, up to what the branches need: from a zero
+   basis the frame grows into leftover space and never takes any from the
+   title. With less than the branches need, they hide (PrBranches.tsx). */
+.frame {
+  flex: 1 1 0;
+  display: flex;
+  min-width: 0;
+  max-width: max-content;
+}
+
+.branches {
+  flex: none;
+  display: flex;
+  align-items: center;
+  transition-property: opacity, visibility;
+  transition-duration: var(--tk-duration-2);
+  transition-timing-function: var(--tk-ease-out);
+
+  &[data-hidden] {
+    visibility: hidden;
+    opacity: 0;
+  }
+}
+
+.branch {
+  gap: var(--tk-space-1);
+  padding-inline: var(--tk-space-2);
+  font-family: var(--tk-font-mono);
+  font-weight: normal;
+
+  /* The copy mark keeps its space while hidden, so hovering never reflows. */
+  & :global(.tk-icon) {
+    opacity: 0;
+    color: var(--tk-fg-subtle);
+    transition: opacity var(--tk-duration-1) var(--tk-ease-out);
+  }
+
+  &:hover :global(.tk-icon),
+  &:focus-visible :global(.tk-icon) {
+    opacity: 1;
+  }
+
+  &[data-copied] :global(.tk-icon) {
+    opacity: 1;
+    color: var(--tk-success);
+  }
+}
+
+/* The same cap as a branch in the list's rows. */
+.name {
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arrow {
+  color: var(--tk-fg-subtle);
+}

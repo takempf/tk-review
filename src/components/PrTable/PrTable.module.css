@@ -1,0 +1,304 @@
+/* The list's own scroll area scrolls the table; the header stays put over it. */
+.table {
+  --row-stripe: color-mix(in oklab, var(--tk-bg), var(--tk-fg) 3.5%);
+  --row-pad-x: var(--tk-space-3);
+
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
+  width: 100%;
+  font-size: var(--tk-text-sm);
+  border-spacing: 0;
+  border-collapse: separate;
+
+  & th,
+  & td {
+    padding: var(--tk-space-3) var(--row-pad-x);
+    text-align: left;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  /* Everything but the title and labels is as wide as its content; the title
+     takes whatever is left. */
+  & th:not([data-column="title"], [data-column="labels"]),
+  & td:not([data-column="title"], [data-column="labels"]) {
+    width: 1%;
+  }
+
+  & [data-column="title"] {
+    min-width: 22rem;
+    white-space: normal;
+  }
+
+  & td[data-column="labels"] {
+    min-width: 8rem;
+    max-width: 22rem;
+    white-space: normal;
+  }
+
+  & [data-column="size"] {
+    text-align: right;
+  }
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: var(--tk-space-2);
+  padding-bottom: var(--tk-space-2);
+  background: var(--tk-bg);
+  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+
+.sort {
+  display: inline-flex;
+  gap: var(--tk-space-1);
+  align-items: center;
+  margin: 0 calc(var(--tk-space-1) * -1);
+  padding: var(--tk-space-1);
+  color: var(--tk-fg-muted);
+  font-family: var(--tk-label-font);
+  font-size: var(--tk-text-xs);
+  font-weight: var(--tk-label-weight);
+  font-stretch: var(--tk-label-stretch);
+  letter-spacing: var(--tk-label-tracking);
+  text-transform: var(--tk-label-transform);
+  background: none;
+  border: 0;
+  border-radius: var(--tk-radius-sm);
+  transition: color var(--tk-duration-1) var(--tk-ease-fade);
+
+  &:hover,
+  &[data-sorted] {
+    color: var(--tk-fg);
+  }
+
+  [data-column="size"] & {
+    flex-direction: row-reverse;
+  }
+}
+
+/* Unsorted columns show where to click only when asked. */
+.sortIcon {
+  flex: none;
+  opacity: 0;
+  transition: opacity var(--tk-duration-1) var(--tk-ease-fade);
+
+  .sort:hover &,
+  .sort:focus-visible &,
+  .sort[data-sorted] & {
+    opacity: 1;
+  }
+
+  .sort:not([data-sorted]) & {
+    color: var(--tk-fg-subtle);
+  }
+}
+
+/* Rows ------------------------------------------------------------------- */
+
+.row {
+  cursor: pointer;
+
+  & > td {
+    transition: background-color var(--tk-duration-1) var(--tk-ease-fade);
+  }
+
+  & > td:first-child {
+    border-radius: var(--tk-radius) 0 0 var(--tk-radius);
+  }
+
+  & > td:last-child {
+    border-radius: 0 var(--tk-radius) var(--tk-radius) 0;
+  }
+
+  &:nth-child(even) > td {
+    background: var(--row-stripe);
+  }
+
+  &:hover > td,
+  &:focus-within > td {
+    background: var(--bg-hover);
+  }
+
+  &[data-busy] > td {
+    background: var(--tk-accent-soft);
+  }
+
+  &[data-disabled] {
+    cursor: default;
+
+    & > td {
+      opacity: 0.6;
+    }
+  }
+}
+
+.number {
+  display: inline-block;
+  font-family: var(--tk-font-mono);
+  color: var(--tk-fg-subtle);
+}
+
+.labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-1);
+}
+
+/* A badge in GitHub's colour for the label, set the way the design system's
+   own tones are. The text leans toward the foreground so a label too dark or
+   too pale for the theme still reads. */
+.label {
+  color: color-mix(in oklab, var(--label) 70%, var(--tk-fg-bright));
+  background: color-mix(in oklab, var(--label) 14%, transparent);
+  border-color: color-mix(in oklab, var(--label) 50%, transparent);
+}
+
+/* Titles are what the list is read by: set well above the table's text. */
+.titleCell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-1) var(--tk-space-3);
+  align-items: center;
+
+  /* A PR stacked on the one above it: indented one step per level, with a
+     corner tying it to its stack. */
+  &[data-stacked] {
+    position: relative;
+    padding-left: calc(min(var(--stack-depth), 4) * var(--tk-space-6));
+
+    &::before {
+      position: absolute;
+      top: 0;
+      left: calc(min(var(--stack-depth), 4) * var(--tk-space-6) - var(--tk-space-4));
+      width: var(--tk-space-2);
+      height: 0.95em;
+      content: "";
+      border-bottom: var(--tk-border-width) solid var(--tk-border);
+      border-left: var(--tk-border-width) solid var(--tk-border);
+      border-bottom-left-radius: var(--tk-radius-sm);
+    }
+  }
+}
+
+.titleButton {
+  padding: 0;
+  font-size: var(--tk-text-lg);
+  font-weight: var(--tk-weight-medium);
+  line-height: var(--tk-leading-tight);
+  color: var(--tk-fg-bright);
+  text-align: left;
+  text-wrap: pretty;
+  background: none;
+  border: 0;
+  border-radius: var(--tk-radius-sm);
+
+  &:disabled {
+    cursor: default;
+  }
+
+  & > span {
+    display: inline;
+  }
+}
+
+.titleMeta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-2);
+  align-items: center;
+}
+
+.opening {
+  display: inline-flex;
+  gap: var(--tk-space-1);
+  align-items: center;
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-muted);
+}
+
+.author {
+  color: var(--tk-fg);
+}
+
+.twoLine {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+
+  &[data-align="end"] {
+    align-items: flex-end;
+  }
+}
+
+.secondary {
+  display: inline-flex;
+  gap: var(--tk-space-2);
+  align-items: center;
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-muted);
+}
+
+.when {
+  color: var(--tk-fg);
+
+  /* Updated since the review read it: there are commits it hasn't seen. */
+  &[data-stale] {
+    color: var(--tk-warning);
+  }
+}
+
+/* A line of its own under the title. It takes the column's width rather than
+   setting it (no inline size of its own), so a long branch name ellipsizes
+   instead of widening the table. */
+.branches {
+  display: flex;
+  flex-basis: 100%;
+  gap: var(--tk-space-1);
+  align-items: center;
+  min-width: 0;
+  contain: inline-size;
+  font-size: var(--tk-text-xs);
+  color: var(--tk-fg-muted);
+}
+
+.branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.into {
+  flex: none;
+  color: var(--tk-fg-subtle);
+}
+
+.stats {
+  display: inline-flex;
+  gap: var(--tk-space-2);
+  font-family: var(--tk-font-mono);
+}
+
+.added {
+  color: var(--added);
+}
+
+.deleted {
+  color: var(--deleted);
+}
+
+.muted {
+  color: var(--tk-fg-muted);
+}
+
+.empty {
+  color: var(--tk-fg-subtle);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}

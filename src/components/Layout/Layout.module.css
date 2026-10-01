@@ -17,7 +17,7 @@
   align-items: center;
   min-width: 0;
   gap: var(--space-4);
-  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-2);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -59,17 +59,4 @@
 
 .banner {
   grid-area: banner;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  color: var(--danger);
-  background: var(--danger-bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.bannerText {
-  flex: 1;
-  margin: 0;
-  white-space: pre-wrap;
 }

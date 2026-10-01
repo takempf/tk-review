@@ -6,6 +6,7 @@
  * later without going through React.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type ChangeStatus =
   | "added"
@@ -41,6 +42,26 @@ export interface DiffSummary {
   files: FileChange[];
   totalAdditions: number;
   totalDeletions: number;
+}
+
+/** One commit of a comparison, as the commit list shows it. */
+export interface Commit {
+  sha: string;
+  /** The first line of the message. */
+  subject: string;
+  author: string;
+  /**
+   * Committer date, ISO 8601: when the commit took its current form, which a
+   * rebase or an amend moves along with the commit itself.
+   */
+  committedAt: string;
+}
+
+/** The commits a comparison is made of, newest first. */
+export interface CommitLog {
+  commits: Commit[];
+  /** There were more than the backend lists, and only the newest are here. */
+  truncated: boolean;
 }
 
 export interface RepoInfo {
@@ -115,6 +136,11 @@ export interface ReviewResult {
   postedAt?: string;
   /** Set once the conclusion was submitted as a GitHub review. */
   submitted?: SubmittedReview;
+  /**
+   * The agent ran out of turns and answered from what it had read by then, so
+   * the review may have gaps.
+   */
+  cutShort?: boolean;
 }
 
 /** The re-review's verdict on one finding from the previous review. */
@@ -136,6 +162,7 @@ export interface ReReviewResult {
   /** As on `ReviewResult`, weighing the prior findings still open too. */
   verdict?: string;
   conclusion?: string;
+  cutShort?: boolean;
 }
 
 /** Plain-language account of one file's part in the change. */
@@ -173,27 +200,39 @@ export interface PrContext {
   isDraft: boolean;
   baseRef: string;
   baseRemote: string;
+  /** The PR's branch as GitHub names it; the diff reads `compareRef` instead. */
+  headRef: string;
   headSha: string;
   compareRef: string;
   comments: PrComment[];
 }
 
 /** One row of the pull-request list: enough to recognise, search and choose between. */
+/** A GitHub label: `color` is six hex digits, without the `#`. */
+export interface PrLabel {
+  name: string;
+  color: string;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
   author: string;
   isDraft: boolean;
   url: string;
+  labels: PrLabel[];
   headRef: string;
   baseRef: string;
   /** The head branch lives in a fork, so it cannot be another PR's base. */
   isCrossRepository: boolean;
   headSha: string;
   /** ISO 8601. */
+  createdAt: string;
+  /** ISO 8601. */
   updatedAt: string;
   additions: number;
   deletions: number;
+  changedFiles: number;
   /** `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `null` when no review is required. */
   reviewDecision: string | null;
 }
@@ -251,11 +290,24 @@ export type GitErrorKind =
   | "ghNotFound"
   | "notARepo"
   | "badRevision"
-  | "command";
+  | "command"
+  /** The page cancelled the agent run; nothing went wrong. */
+  | "cancelled";
 
 export interface GitError {
   kind: GitErrorKind;
   message: string;
+  /** The raw output behind `message`, for debugging; null when the message is all there is. */
+  detail?: string | null;
+}
+
+/** A failure ready to show: what went wrong in words, and the raw record behind it. */
+export interface AppError {
+  /** What failed, as a heading: "The review failed". Null when the message says it all. */
+  title: string | null;
+  message: string;
+  /** Output, log or trace for debugging, kept out of sight until asked for. */
+  detail: string | null;
 }
 
 export function isGitError(value: unknown): value is GitError {
@@ -266,6 +318,11 @@ export function isGitError(value: unknown): value is GitError {
     "message" in value &&
     typeof (value as GitError).message === "string"
   );
+}
+
+/** An agent run that ended because it was cancelled, which is no failure to show. */
+export function isCancelled(value: unknown): boolean {
+  return isGitError(value) && value.kind === "cancelled";
 }
 
 /** Turns whatever `invoke` rejected with into something worth showing a person. */
@@ -290,6 +347,29 @@ export function errorMessage(value: unknown): string {
   return String(value);
 }
 
+/** Lines of a message shown before the rest moves into the detail. */
+const MESSAGE_LINES = 4;
+
+/** `errorMessage`, keeping whatever raw detail came with the failure. */
+export function toAppError(value: unknown, title: string | null = null): AppError {
+  const message = errorMessage(value).trim();
+  const detail = isGitError(value)
+    ? (value.detail ?? null)
+    : value instanceof Error
+      ? (value.stack ?? null)
+      : null;
+  if (detail?.trim()) return { title, message, detail: detail.trim() };
+
+  // A long message with no detail is raw output, git's stderr say, where the
+  // line that matters is often last, under the hints. Lead with its fatal and
+  // error lines, and keep the whole of it as the detail.
+  const lines = message.split("\n");
+  if (lines.length <= MESSAGE_LINES) return { title, message, detail: null };
+  const errors = lines.filter((line) => /^(fatal|error): /i.test(line));
+  const lead = errors.length > 0 ? errors : [...lines.slice(0, MESSAGE_LINES), "…"];
+  return { title, message: lead.join("\n"), detail: message };
+}
+
 export const gitApi = {
   selectRepo: (path: string) => invoke<RepoInfo>("select_repo", { path }),
 
@@ -310,11 +390,16 @@ export const gitApi = {
   listPrs: (root: string, filter: PrListFilter = "all") =>
     invoke<PrSummary[]>("list_prs", { root, filter }),
 
-  /** Opens a GitHub PR and fetches its head to a stable local review ref. */
-  openPr: (root: string, url: string) => invoke<PrContext>("open_pr", { root, url }),
+  /**
+   * Opens a GitHub PR and fetches its head to a stable local review ref. `keep`
+   * is the other PRs open in tabs: every other PR's ref is pruned.
+   */
+  openPr: (root: string, url: string, keep: number[]) =>
+    invoke<PrContext>("open_pr", { root, url, keep }),
 
   /** Re-reads PR metadata and conversation, updating the fetched head ref. */
-  refreshPr: (root: string, pr: PrContext) => invoke<RefreshPrResult>("refresh_pr", { root, pr }),
+  refreshPr: (root: string, pr: PrContext, keep: number[]) =>
+    invoke<RefreshPrResult>("refresh_pr", { root, pr, keep }),
 
   /** Posts through the user's authenticated `gh` CLI; no token enters the app. */
   postPrComment: (args: {
@@ -343,12 +428,20 @@ export const gitApi = {
   getPatch: (root: string, mergeBase: string, compare: string | null) =>
     invoke<string>("get_patch", { root, mergeBase, compare }),
 
+  /** The commits since the merge base; a `null` compare lists the ones under the working tree. */
+  listCommits: (root: string, mergeBase: string, compare: string | null) =>
+    invoke<CommitLog>("list_commits", { root, mergeBase, compare }),
+
   /**
    * Reviews the whole comparison with an agent CLI. Slow — it runs an agentic
    * session that reads real files — so callers should show progress. A `null`
    * model uses whatever the CLI itself is configured to default to.
+   *
+   * Every agent run takes a `runId` the caller makes up, which is what
+   * `cancelAgentRun` and `onAgentRunOutput` know it by.
    */
   reviewDiff: (
+    runId: string,
     root: string,
     mergeBase: string,
     compare: string | null,
@@ -358,6 +451,7 @@ export const gitApi = {
     prContext: PrContext | null,
   ) =>
     invoke<ReviewResult>("review_diff", {
+      runId,
       root,
       mergeBase,
       compare,
@@ -373,6 +467,7 @@ export const gitApi = {
    * agent run, as slow as `reviewDiff`.
    */
   reReviewDiff: (args: {
+    runId: string;
     root: string;
     mergeBase: string;
     compare: string | null;
@@ -390,6 +485,7 @@ export const gitApi = {
    * run the two concurrently rather than in sequence.
    */
   explainDiff: (
+    runId: string,
     root: string,
     mergeBase: string,
     compare: string | null,
@@ -399,6 +495,7 @@ export const gitApi = {
     prContext: PrContext | null,
   ) =>
     invoke<ExplainResult>("explain_diff", {
+      runId,
       root,
       mergeBase,
       compare,
@@ -414,6 +511,7 @@ export const gitApi = {
    * it works after restarts. Returns the reply text.
    */
   reviewReply: (args: {
+    runId: string;
     root: string;
     mergeBase: string;
     compare: string | null;
@@ -426,6 +524,25 @@ export const gitApi = {
     comment: string;
     prContext: PrContext | null;
   }) => invoke<string>("review_reply", { ...args }),
+
+  /**
+   * Stops an agent run: its CLI and everything it started. The run's own call
+   * then rejects with a `cancelled` error (`isCancelled`).
+   */
+  cancelAgentRun: (runId: string) => invoke<void>("cancel_agent_run", { runId }),
+
+  /**
+   * Stops every agent run the backend has in flight. For page load: a reloaded
+   * page has lost whatever the last one was waiting on.
+   */
+  abandonAgentRuns: () => invoke<void>("abandon_agent_runs"),
+
+  /**
+   * Calls `handler` with a run's id whenever its CLI writes something, at most
+   * once a second per run. Resolves to the function that stops listening.
+   */
+  onAgentRunOutput: (handler: (runId: string) => void) =>
+    listen<string>("agent-run-output", (event) => handler(event.payload)),
 
   /**
    * Full contents of both sides. Only needed when the reader expands context

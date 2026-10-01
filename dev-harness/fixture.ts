@@ -2,9 +2,11 @@
 // backend is not present. The git layer itself is covered by cargo tests.
 import type {
   Branch,
+  CommitLog,
   DiffSummary,
   ExplainResult,
   FileVersions,
+  GitError,
   PrContext,
   PrSummary,
   RepoInfo,
@@ -34,6 +36,41 @@ export const BRANCHES: Branch[] = [
 ];
 
 /**
+ * The compare side's commits, newest first: the first is `SUMMARY.compareHead`,
+ * so a review run in the harness lands on it. Dated in the past, so a stored
+ * review without a head places by time among them.
+ */
+export const COMMITS: CommitLog = {
+  truncated: false,
+  commits: [
+    {
+      sha: "4d81e7c0a3f95b2d61c8e47f0b9a2d3e5c6f7a81",
+      subject: "Keep viewed files collapsed across a refresh",
+      author: "Timothy Kempf",
+      committedAt: "2026-09-29T17:12:00-07:00",
+    },
+    {
+      sha: "b7f2a9e14c6d08f3a5b9e2c7d1f4a6b8c0e3d5f7",
+      subject: "Address review: backfill merge_base before NOT NULL",
+      author: "Timothy Kempf",
+      committedAt: "2026-09-28T11:05:00-07:00",
+    },
+    {
+      sha: "e91c3d5a7b2f4e6c8a0d1b3f5e7c9a2b4d6f8e0a",
+      subject: "Add the reviews table migration",
+      author: "Timothy Kempf",
+      committedAt: "2026-09-27T15:48:00-07:00",
+    },
+    {
+      sha: "3a6f8c1e5d7b9a2c4e6f8a0b2d4c6e8f0a2b4c6d",
+      subject: "Flag linguist-generated files in the sidebar",
+      author: "Timothy Kempf",
+      committedAt: "2026-09-26T09:30:00-07:00",
+    },
+  ],
+};
+
+/**
  * Mirrors what the Rust backend reports for this fixture: the counts, statuses
  * and ordering below are git's own output for the generated patch (see
  * `generatePatch.ts`, which prints them). Keep them in step when the file
@@ -41,7 +78,7 @@ export const BRANCHES: Branch[] = [
  */
 export const SUMMARY: DiffSummary = {
   mergeBase: "9f2c1ab",
-  compareHead: "4d81e7c",
+  compareHead: "4d81e7c0a3f95b2d61c8e47f0b9a2d3e5c6f7a81",
   totalAdditions: 52,
   totalDeletions: 19,
   files: [
@@ -413,13 +450,19 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "octocat",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/47",
+    labels: [
+      { name: "review-ui", color: "1d76db" },
+      { name: "needs-tests", color: "fbca04" },
+    ],
     headRef: "feature/diff-viewer",
     baseRef: "main",
     isCrossRepository: false,
     headSha: "2f6a1e4f5de7c0d0d6e0f1a4b9c8d7e6f5a4b3c2",
+    createdAt: new Date(Date.now() - 30 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 2 * HOUR).toISOString(),
     additions: 52,
     deletions: 19,
+    changedFiles: 6,
     reviewDecision: "REVIEW_REQUIRED",
     requested: true,
   },
@@ -429,13 +472,19 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "hubot",
     isDraft: true,
     url: "https://github.com/example/tk-review/pull/52",
+    labels: [
+      { name: "feature", color: "a2eeef" },
+      { name: "wip", color: "ededed" },
+    ],
     headRef: "explain-mode",
     baseRef: "main",
     isCrossRepository: false,
     headSha: "52aa",
+    createdAt: new Date(Date.now() - 80 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 26 * HOUR).toISOString(),
     additions: 410,
     deletions: 38,
+    changedFiles: 14,
     reviewDecision: null,
     mine: true,
   },
@@ -445,13 +494,16 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "octocat",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/118",
+    labels: [{ name: "bug", color: "d73a4a" }],
     headRef: "fix/force-push",
     baseRef: "main",
     isCrossRepository: false,
     headSha: "118b",
+    createdAt: new Date(Date.now() - 20 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 5 * HOUR).toISOString(),
     additions: 12,
     deletions: 40,
+    changedFiles: 3,
     reviewDecision: "APPROVED",
     requested: true,
   },
@@ -461,13 +513,19 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "mona",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/121",
+    labels: [
+      { name: "accessibility", color: "7057ff" },
+      { name: "feature", color: "a2eeef" },
+    ],
     headRef: "findings-keys",
     baseRef: "main",
     isCrossRepository: false,
     headSha: "121c",
+    createdAt: new Date(Date.now() - 120 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 50 * HOUR).toISOString(),
     additions: 88,
     deletions: 7,
+    changedFiles: 5,
     reviewDecision: "CHANGES_REQUESTED",
     requested: true,
   },
@@ -477,13 +535,19 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "tkempf",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/124",
+    labels: [
+      { name: "storage", color: "0e8a16" },
+      { name: "breaking", color: "b60205" },
+    ],
     headRef: "reviews-on-disk",
     baseRef: "main",
     isCrossRepository: false,
     headSha: "124d",
+    createdAt: new Date(Date.now() - 72 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 0.3 * HOUR).toISOString(),
     additions: 230,
     deletions: 115,
+    changedFiles: 11,
     reviewDecision: "REVIEW_REQUIRED",
     mine: true,
   },
@@ -493,13 +557,16 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "tkempf",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/127",
+    labels: [{ name: "storage", color: "0e8a16" }],
     headRef: "reviews-migration",
     baseRef: "reviews-on-disk",
     isCrossRepository: false,
     headSha: "127e",
+    createdAt: new Date(Date.now() - 60 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 1 * HOUR).toISOString(),
     additions: 64,
     deletions: 3,
+    changedFiles: 4,
     reviewDecision: "REVIEW_REQUIRED",
     mine: true,
   },
@@ -509,13 +576,16 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     author: "tkempf",
     isDraft: true,
     url: "https://github.com/example/tk-review/pull/131",
+    labels: [],
     headRef: "reviews-location",
     baseRef: "reviews-migration",
     isCrossRepository: false,
     headSha: "131f",
+    createdAt: new Date(Date.now() - 40 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 30 * HOUR).toISOString(),
     additions: 21,
     deletions: 2,
+    changedFiles: 2,
     reviewDecision: null,
     requested: true,
   },
@@ -531,6 +601,13 @@ export const PR: PrContext = {
 - Adds the review panel to the diff flow
 - Keeps existing comments visible
 
+\`\`\`ts
+// Findings render beside the diff they point at.
+export function findingsFor(path: string, review: Review): Finding[] {
+  return review.findings.filter((finding) => finding.path === path);
+}
+\`\`\`
+
 <details><summary>Testing</summary>
 
 Run \`pnpm harness\` and open the pull request fixture.
@@ -541,6 +618,7 @@ Run \`pnpm harness\` and open the pull request fixture.
   isDraft: false,
   baseRef: "main",
   baseRemote: "origin",
+  headRef: "feature/diff-viewer",
   headSha: "2f6a1e4f5de7c0d0d6e0f1a4b9c8d7e6f5a4b3c2",
   compareRef: "tk-review/pr/47",
   comments: [
@@ -593,4 +671,72 @@ Run \`pnpm harness\` and open the pull request fixture.
       outdated: true,
     },
   ],
+};
+
+/**
+ * What the backend rejects with when a claude run hits its turn limit and the
+ * wrap-up that should rescue it fails too. Trimmed from a real run.
+ */
+export const OUT_OF_TURNS_ERROR: GitError = {
+  kind: "command",
+  message:
+    "Claude used all its turns before it finished, and then could not answer from what it had read. 8 of its tool calls were refused permission (Bash ×7, Write).",
+  detail: `The run that ran out of turns:
+${JSON.stringify(
+  {
+    type: "result",
+    subtype: "error_max_turns",
+    is_error: true,
+    duration_ms: 215490,
+    num_turns: 31,
+    stop_reason: "tool_use",
+    session_id: "d87f50d5-6f14-4858-9539-0244f050e9e4",
+    total_cost_usd: 1.6814207999999997,
+    permission_denials: [
+      {
+        tool_name: "Bash",
+        tool_use_id: "toolu_01F4GKp2h9tUps5z6pjTpyNa",
+        tool_input: {
+          command:
+            'git show tk-review/pr/7927:package.json | grep -n \'"packageManager"\\|"engines"\' -A2; git show tk-review/pr/7927:.nvmrc; pnpm --version; which pnpm',
+          description: "Check pnpm and Node versions",
+        },
+      },
+      {
+        tool_name: "Bash",
+        tool_use_id: "toolu_017nGy4yncomWQP5HG8B6Lmw",
+        tool_input: {
+          command: "gh pr checks 7927 2>&1 | grep -i 'audit\\|overrides'",
+          description: "Check PR CI status for audit jobs",
+        },
+      },
+      {
+        tool_name: "Write",
+        tool_use_id: "toolu_01AgDEwyVrpkJFoBFESeQupp",
+        tool_input: { file_path: "/tmp/pnpm-nested-test.sh", content: "#!/bin/bash\nset -e\n…" },
+      },
+    ],
+    terminal_reason: "max_turns",
+    errors: ["Reached maximum number of turns (30)"],
+  },
+  null,
+  2,
+)}
+
+Asked to answer from what it had read, it failed with: Claude reported an error: API Error: 529 overloaded`,
+};
+
+/** A `gh` failure as the backend reports it: GitHub's reason, and the raw exchange. */
+export const GH_POST_ERROR: GitError = {
+  kind: "command",
+  message:
+    "gh: Validation Failed (HTTP 422)\npull_request_review_thread.line must be part of the diff",
+  detail: `gh api --method POST repos/example/tk-review/pulls/118/comments --input -
+exit status: 1
+
+stderr:
+gh: Validation Failed (HTTP 422)
+
+stdout:
+{"message":"Validation Failed","errors":[{"resource":"PullRequestReviewComment","code":"custom","field":"pull_request_review_thread.line","message":"pull_request_review_thread.line must be part of the diff"}],"documentation_url":"https://docs.github.com/rest/pulls/comments#create-a-review-comment-for-a-pull-request","status":"422"}`,
 };

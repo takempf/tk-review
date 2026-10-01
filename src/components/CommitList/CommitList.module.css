@@ -1,0 +1,145 @@
+/* Under the file list, ruled off from it, and arriving with it. */
+.wrap {
+  animation: fade-in var(--screen-fade-in) var(--ease-out-expo) both;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* The file list's heading, so the two sections read as one sidebar. */
+.heading {
+  composes: heading from "../FileList/FileList.module.css";
+}
+
+.progress {
+  composes: progress from "../FileList/FileList.module.css";
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.list {
+  padding: var(--space-1) 0;
+  margin: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0 var(--space-2) 0 var(--space-1);
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+/* The hash copies itself, so it is a button set as print. Seven characters of
+   mono, which every row shares, so the subjects line up. */
+.sha {
+  flex: none;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-radius: 3px;
+}
+
+.sha:hover,
+.sha:focus-visible {
+  color: var(--text);
+  background: var(--bg-sunken);
+}
+
+.sha[data-copied] {
+  color: var(--tk-success);
+}
+
+/* Stands where a hash would, as wide as one. */
+.worktree {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: calc(7ch + 2 * var(--space-1));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subjectMuted {
+  composes: subject;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.marks {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+}
+
+/* Coloured as the tab's status mark is for the same verdict. */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  aspect-ratio: 1;
+  color: var(--tk-fg-muted);
+
+  &[data-verdict="approve"] {
+    color: var(--tk-success);
+  }
+
+  &[data-verdict="request_changes"] {
+    color: var(--tk-danger);
+  }
+
+  /* A review a later one replaced: still a record, but not the word on it. */
+  &[data-earlier] {
+    opacity: 0.5;
+  }
+}
+
+.more {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.footnote {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: var(--tk-text-xs);
+  color: var(--text-faint);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}

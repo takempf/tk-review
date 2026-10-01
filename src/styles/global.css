@@ -142,8 +142,10 @@ body {
   --spring-snappy-duration: 350ms;
 }
 
-::view-transition-group(screen-pr-number),
-::view-transition-group(screen-pr-title) {
+/* Every part in a screen change is named per tab, so they are styled by the
+   change's type (`transitionScreen`) rather than by name. */
+:root:active-view-transition-type(screen)::view-transition-group(.tk-morph),
+:root:active-view-transition-type(screen)::view-transition-group(.tk-morph-text) {
   animation-duration: var(--spring-snappy-duration);
   animation-timing-function: var(--spring-snappy);
 }
@@ -151,10 +153,8 @@ body {
 /* Both ends are the same text at the same size, so the crossfade only shows
    where they differ (a title ellipsized in one place and not the other).
    Adding the two, rather than layering them, keeps it from dimming midway. */
-::view-transition-old(screen-pr-number),
-::view-transition-new(screen-pr-number),
-::view-transition-old(screen-pr-title),
-::view-transition-new(screen-pr-title) {
+:root:active-view-transition-type(screen)::view-transition-old(.tk-morph-text),
+:root:active-view-transition-type(screen)::view-transition-new(.tk-morph-text) {
   animation-duration: 160ms;
   animation-timing-function: var(--ease-out-expo);
   mix-blend-mode: plus-lighter;

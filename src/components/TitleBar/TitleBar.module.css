@@ -1,22 +1,52 @@
-.bar {
-  /* The scenery fills the bar from behind its contents. */
-  position: relative;
-  isolation: isolate;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--tk-space-3);
+/* The title row, and the tab row under it when there is one. */
+.chrome {
   /* The traffic lights are native, so page zoom neither moves nor scales them.
      Sizes they depend on are screen pixels, `--zoom` undoing the zoom (see
      `lib/zoom.ts`): never shorter than the 40px `trafficLightPosition` in
      `tauri.conf.json` centres them in, though zoomed-in content may grow it. */
-  min-height: max(2.5rem, calc(40px / var(--zoom, 1)));
+  --title-row: max(2.5rem, calc(40px / var(--zoom, 1)));
+  /* The tab row under it, when there is one (TabBar.module.css). */
+  --tab-row: 2.75rem;
+
+  /* The scenery fills it from behind its contents. */
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 0 var(--tk-space-3);
-  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+  overflow: hidden;
   background: var(--bg);
   user-select: none;
   -webkit-user-select: none;
+
+  /* The rule under the bar, drawn inside it rather than as a border, so the
+     tab on screen can stand over it and run on into the panel below. */
+  &::after {
+    position: absolute;
+    inset: auto 0 0;
+    height: var(--tk-border-width);
+    content: "";
+    background: var(--tk-border-subtle);
+    pointer-events: none;
+  }
+}
+
+/* Framed for both rows whether or not the tab row is showing, so the scene
+   holds still as the row comes and goes rather than being refitted to the new
+   height. */
+.scenery {
+  bottom: auto;
+  height: calc(var(--title-row) + var(--tab-row));
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tk-space-3);
+  min-height: var(--title-row);
+  min-width: 0;
+  padding: 0 var(--tk-space-3);
 
   /* Clear of the traffic lights, which end 70px in. Both sides, so the
      contents stay centred on the window. */
@@ -65,6 +95,41 @@
 .popup {
   min-width: max(var(--anchor-width, 0px), 16rem);
   max-width: min(32rem, var(--available-width));
+}
+
+/*
+ * The menu opens over the trigger, its first row a copy of the trigger's label
+ * that the label travels into. The design system sets that row, and wraps the
+ * label, for a button; here both are drawn as the select trigger instead: the
+ * name at the start and the chevron at the end, at the trigger's height,
+ * padding and icon size, so nothing shifts as the menu opens.
+ */
+.trigger > :global(.tk-menu-label),
+.popup :global(.tk-menu-head) > :global(.tk-menu-label) {
+  flex: 1;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+/* The menu is wider than the trigger; as wide as the trigger's own label, the
+   copy keeps its chevron over the trigger's. */
+.popup :global(.tk-menu-head) > :global(.tk-menu-label) {
+  /* The trigger's borders and padding, which its label sits inside. */
+  --inset: calc(2 * var(--tk-border-width) + var(--tk-space-3) + var(--tk-space-2));
+  flex: none;
+  width: calc(var(--anchor-width) - var(--inset));
+}
+
+.popup :global(.tk-menu-head) {
+  gap: var(--tk-space-3);
+  /* Less the popup's border, so the rule under it lands on the trigger's edge. */
+  min-height: calc(1.75rem - var(--tk-border-width));
+  padding: 0 var(--tk-space-2) 0 var(--tk-space-3);
+  font-weight: inherit;
+
+  & :global(.tk-icon) {
+    font-size: inherit;
+  }
 }
 
 .repoName {

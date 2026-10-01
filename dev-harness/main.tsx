@@ -3,14 +3,19 @@
  * and the @pierre/diffs rendering path can be driven without the native shell.
  * Not part of the app bundle.
  */
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import type { GitError, PrContext } from "../src/ipc/git";
 import { Root } from "../src/Root";
 import "../src/styles/global.css";
 import {
   BRANCHES,
+  COMMITS,
   EXPLANATION,
+  GH_POST_ERROR,
+  OUT_OF_TURNS_ERROR,
   PR,
   PR_LIST,
   RE_REVIEW,
@@ -23,9 +28,90 @@ import { PATCH } from "./patch";
 
 mockWindows("main");
 
+/**
+ * Failures to act out, from `?fail=` (comma-separated), so error states can be
+ * seen without breaking a real CLI:
+ * - `review`: reviews and re-reviews run out of turns and can't be rescued.
+ * - `turns`: they run out of turns but answer from what they had read.
+ * - `explain`: the explanation fails with a plain message and no detail.
+ * - `post`: sending to the PR fails the way `gh api` does.
+ * - `list`: listing pull requests fails with git-style multi-line stderr.
+ * - `refresh`: refreshing the PR fails, which shows in the banner under the header.
+ */
+const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(",") ?? []);
+
+/**
+ * How agent runs behave, from `?run=`, so their progress line can be seen:
+ * - `slow`: they take ten minutes, writing every couple of seconds.
+ * - `silent`: they take ten minutes and write nothing, so the line warns.
+ */
+const runMode = new URLSearchParams(location.search).get("run");
+
+/** Cancels for the agent runs in flight, by run id. */
+const cancels = new Map<string, () => void>();
+
+/**
+ * An agent run: settles after `ms` like `later`, reporting output as it goes
+ * unless `?run=silent`, and rejects as cancelled if `cancel_agent_run` names it.
+ */
+function agentRun<T>(payload: unknown, ms: number, value: T, error?: GitError): Promise<T> {
+  const runId = (payload as { runId: string }).runId;
+  const duration = runMode === "slow" || runMode === "silent" ? 10 * 60_000 : ms;
+  return new Promise<T>((resolve, reject) => {
+    const output =
+      runMode === "silent"
+        ? undefined
+        : setInterval(() => void emit("agent-run-output", runId), runMode ? 2000 : 400);
+    const end = () => {
+      clearTimeout(timer);
+      clearInterval(output);
+      cancels.delete(runId);
+    };
+    const timer = setTimeout(() => {
+      end();
+      if (error) reject(error);
+      else resolve(value);
+    }, duration);
+    cancels.set(runId, () => {
+      end();
+      reject({ kind: "cancelled", message: "the run was cancelled", detail: null });
+    });
+  });
+}
+
+/** Settles after `ms` like a real round-trip: rejecting with `error`, if given. */
+function later<T>(ms: number, value: T, error?: GitError): Promise<T> {
+  return new Promise((resolve, reject) =>
+    setTimeout(() => (error ? reject(error) : resolve(value)), ms),
+  );
+}
+
 let nextPostedComment = 900;
 
-mockIPC((command, payload) => {
+/**
+ * The fixture PR, retitled as whichever listed PR `url` names, so each row on
+ * the list opens a tab of its own. They all share its diff and conversation.
+ */
+function prFor(url: string): PrContext {
+  const number = Number(/(\d+)\/?$/.exec(url)?.[1] ?? /#(\d+)$/.exec(url)?.[1]);
+  const listed = PR_LIST.find((pr) => pr.number === number);
+  if (!listed || listed.number === PR.number) return PR;
+  return {
+    ...PR,
+    url: listed.url,
+    number: listed.number,
+    title: listed.title,
+    author: listed.author,
+    isDraft: listed.isDraft,
+    headRef: listed.headRef,
+    baseRef: listed.baseRef,
+    headSha: listed.headSha ?? PR.headSha,
+    compareRef: `tk-review/pr/${listed.number}`,
+  };
+}
+
+/** The backend: every command the app sends, answered from the fixtures. */
+function answer(command: string, payload: unknown): unknown {
   switch (command) {
     case "select_repo":
       return REPO;
@@ -42,15 +128,49 @@ mockIPC((command, payload) => {
       const listed = PR_LIST.filter((pr) =>
         filter === "reviewRequested" ? pr.requested : filter === "mine" ? pr.mine : true,
       );
-      return new Promise((resolve) => setTimeout(() => resolve(listed), 700));
+      return later(
+        700,
+        listed,
+        failing.has("list")
+          ? {
+              kind: "command",
+              message: [
+                "hint: The GitHub CLI could not reach api.github.com.",
+                "hint: Check your network connection, or set GH_HOST.",
+                "hint: Run `gh auth status` to see which hosts you are logged in to.",
+                "hint: Proxy settings are read from HTTPS_PROXY.",
+                "error: connecting to api.github.com: dial tcp: lookup api.github.com: no such host",
+              ].join("\n"),
+            }
+          : undefined,
+      );
     }
+    // Delayed like a real `gh` round-trip and fetch, so a tab can be seen opening.
     case "open_pr":
-      return PR;
+      return later(900, prFor((payload as { url: string }).url));
     // Delayed like a real `gh` round-trip, so both Refresh buttons can be seen
     // holding their busy state before the diff reloads behind them.
     case "refresh_pr":
-      return new Promise((resolve) => setTimeout(() => resolve({ pr: PR, headMoved: false }), 900));
+      return later(
+        900,
+        { pr: prFor((payload as { pr: PrContext }).pr.url), headMoved: false },
+        failing.has("refresh")
+          ? {
+              kind: "command",
+              message: "gh: Could not resolve to a PullRequest with the number of 118. (HTTP 404)",
+              detail: `gh pr view https://github.com/example/tk-review/pull/118 --json url,number,title,body,author,state,isDraft,baseRefName,headRefOid
+exit status: 1
+
+stderr:
+gh: Could not resolve to a PullRequest with the number of 118. (HTTP 404)
+
+stdout:
+`,
+            }
+          : undefined,
+      );
     case "post_pr_comment": {
+      if (failing.has("post")) return later(600, null, GH_POST_ERROR);
       nextPostedComment += 1;
       return { url: `${PR.url}#issuecomment-${nextPostedComment}` };
     }
@@ -62,40 +182,64 @@ mockIPC((command, payload) => {
           700,
         ),
       );
+    // The working tree is not a commit, so it has no head to report.
     case "diff_branches":
-      return SUMMARY;
+      return (payload as { compare: string | null }).compare == null
+        ? { ...SUMMARY, compareHead: null }
+        : SUMMARY;
     case "get_patch":
       return PATCH;
+    case "list_commits":
+      return COMMITS;
     case "get_file_versions": {
       const path = (payload as { path: string }).path;
       return VERSIONS[path] ?? { old: null, new: null };
     }
     // Delayed so the "Reviewing…" state is visible in the harness.
     case "review_diff":
-      return new Promise((resolve) => setTimeout(() => resolve(REVIEW), 1500));
+      return agentRun(
+        payload,
+        1500,
+        { ...REVIEW, cutShort: failing.has("turns") },
+        failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
+      );
     // Delayed so the "Re-reviewing…" state is visible in the harness.
     case "re_review_diff":
-      return new Promise((resolve) => setTimeout(() => resolve(RE_REVIEW), 1500));
+      return agentRun(
+        payload,
+        1500,
+        { ...RE_REVIEW, cutShort: failing.has("turns") },
+        failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
+      );
     // Slower than the review on purpose: the two run independently, and the
     // panel has to stay usable while only one of them is still going.
     case "explain_diff":
-      return new Promise((resolve) => setTimeout(() => resolve(EXPLANATION), 2600));
-    case "review_reply":
-      return new Promise((resolve) =>
-        setTimeout(
-          () =>
-            resolve(
-              "Fair question — the backfill matters because rows created before this migration " +
-                "have no merge_base value, so the NOT NULL constraint fails the moment the ALTER runs. " +
-                "Backfill from the diff header, or add a DEFAULT and tighten later.",
-            ),
-          1200,
-        ),
+      return agentRun(
+        payload,
+        2600,
+        EXPLANATION,
+        failing.has("explain")
+          ? { kind: "command", message: "There is nothing to explain: the diff is empty." }
+          : undefined,
       );
+    case "review_reply":
+      return agentRun(
+        payload,
+        1200,
+        "Fair question — the backfill matters because rows created before this migration " +
+          "have no merge_base value, so the NOT NULL constraint fails the moment the ALTER runs. " +
+          "Backfill from the diff header, or add a DEFAULT and tighten later.",
+      );
+    case "cancel_agent_run":
+      cancels.get((payload as { runId: string }).runId)?.();
+      return null;
     default:
       return null;
   }
-});
+}
+
+// Events too, so the harness's agent runs can report output.
+mockIPC(answer, { shouldMockEvents: true });
 
 // Skips the folder picker: the store opens whatever repo it remembers.
 localStorage.setItem("tk-review:last-repo", REPO.root);

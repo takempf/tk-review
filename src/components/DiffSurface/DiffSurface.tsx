@@ -11,7 +11,8 @@ import { Checkbox, Icon, Toggle, ToggleGroup } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
 import { useScreenSettled } from "../../lib/screenTransition";
 import { HIGHLIGHTER } from "../../lib/warmHighlighter";
-import { type DiffLayout, reviewsWorkingTree, useReviewStore } from "../../store/reviewStore";
+import { type DiffLayout, useAppStore } from "../../store/appStore";
+import { reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffSurface.module.css";
 import { DIFF_THEME, DIFFS_THEME_CSS } from "./diffsTheme";
@@ -132,22 +133,22 @@ function useThemesReady(start: boolean): boolean {
 }
 
 function DiffSurfaceInner() {
-  const repo = useReviewStore((state) => state.repo);
-  const summary = useReviewStore((state) => state.summary);
-  const patch = useReviewStore((state) => state.patch);
-  const diffLoadId = useReviewStore((state) => state.diffLoadId);
-  const compare = useReviewStore((state) => state.compare);
-  const worktree = useReviewStore(reviewsWorkingTree);
-  const selectedPath = useReviewStore((state) => state.selectedPath);
-  const selectedLines = useReviewStore((state) => state.selectedLines);
-  const selectionTick = useReviewStore((state) => state.selectionTick);
-  const layout = useReviewStore((state) => state.layout);
-  const setLayout = useReviewStore((state) => state.setLayout);
+  const repo = useTab((state) => state.repo);
+  const summary = useTab((state) => state.summary);
+  const patch = useTab((state) => state.patch);
+  const diffLoadId = useTab((state) => state.diffLoadId);
+  const compare = useTab((state) => state.compare);
+  const worktree = useTab(reviewsWorkingTree);
+  const selectedPath = useTab((state) => state.selectedPath);
+  const selectedLines = useTab((state) => state.selectedLines);
+  const selectionTick = useTab((state) => state.selectionTick);
+  const layout = useAppStore((state) => state.layout);
+  const setLayout = useAppStore((state) => state.setLayout);
 
-  const viewed = useReviewStore((state) => state.viewed);
-  const expanded = useReviewStore((state) => state.expanded);
-  const toggleViewed = useReviewStore((state) => state.toggleViewed);
-  const expandFile = useReviewStore((state) => state.expandFile);
+  const viewed = useTab((state) => state.viewed);
+  const expanded = useTab((state) => state.expanded);
+  const toggleViewed = useTab((state) => state.toggleViewed);
+  const expandFile = useTab((state) => state.expandFile);
 
   const viewRef = useRef<CodeViewHandle<undefined>>(null);
   // Parsing, highlighting and laying out the diff is the heaviest work in the
@@ -356,9 +357,9 @@ function DiffSurfaceInner() {
 }
 
 export function DiffSurface() {
-  const mergeBase = useReviewStore((state) => state.summary?.mergeBase ?? null);
-  const compare = useReviewStore((state) => state.compare);
-  const worktree = useReviewStore(reviewsWorkingTree);
+  const mergeBase = useTab((state) => state.summary?.mergeBase ?? null);
+  const compare = useTab((state) => state.compare);
+  const worktree = useTab(reviewsWorkingTree);
 
   // Keyed on the comparison so a new one starts with fresh state — nothing left
   // scrolled or open from the review just navigated away from. Toggling

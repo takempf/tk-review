@@ -1,5 +1,6 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { Button, Icon } from "tk-design-system";
+import type { AppError } from "../../ipc/git";
+import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { ResizeHandle, useStoredSize } from "../ResizeHandle/ResizeHandle";
 import css from "./Layout.module.css";
 
@@ -30,7 +31,7 @@ interface LayoutProps {
   main: ReactNode;
   /** Third column to the right of the diff surface; omitted, the grid stays two columns. */
   aside?: ReactNode;
-  error: string | null;
+  error: AppError | null;
   onDismissError: () => void;
 }
 
@@ -56,12 +57,12 @@ export function Layout({ header, sidebar, main, aside, error, onDismissError }: 
     <div className={css.app}>
       <header className={css.header}>{header}</header>
       {error ? (
-        <div className={css.banner} role="alert">
-          <p className={css.bannerText}>{error}</p>
-          <Button variant="ghost" size="sm" onClick={onDismissError}>
-            <Icon name="close" /> Dismiss
-          </Button>
-        </div>
+        <ErrorNotice
+          error={error}
+          onDismiss={onDismissError}
+          variant="banner"
+          className={css.banner}
+        />
       ) : null}
       <div ref={body.ref} className={css.body} style={{ gridTemplateColumns: columns }}>
         <aside className={css.sidebar}>

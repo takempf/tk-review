@@ -69,7 +69,9 @@ fn parse_claude_catalog(doc: &Value) -> Option<EngineModels> {
     let mut models = Vec::new();
     let mut efforts = Vec::new();
     for model in doc["catalog"]["config"]["models"].as_array()? {
-        let Some(id) = model["id"].as_str() else { continue };
+        let Some(id) = model["id"].as_str() else {
+            continue;
+        };
         let label = model["name"].as_str().unwrap_or(id);
         models.push(ModelOption {
             id: id.to_owned(),
@@ -105,7 +107,9 @@ fn parse_codex_catalog(doc: &Value) -> Option<EngineModels> {
     let mut models = Vec::new();
     let mut efforts = Vec::new();
     for model in listed {
-        let Some(slug) = model["slug"].as_str() else { continue };
+        let Some(slug) = model["slug"].as_str() else {
+            continue;
+        };
         let label = model["display_name"].as_str().unwrap_or(slug);
         models.push(ModelOption {
             id: slug.to_owned(),
@@ -141,7 +145,11 @@ mod tests {
         });
         let parsed = parse_claude_catalog(&doc).unwrap();
         assert_eq!(
-            parsed.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            parsed
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             ["claude-fable-5-1", "claude-haiku-4-5"]
         );
         assert_eq!(parsed.models[0].label, "Fable 5.1");
@@ -159,7 +167,11 @@ mod tests {
         ] });
         let parsed = parse_codex_catalog(&doc).unwrap();
         assert_eq!(
-            parsed.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            parsed
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             ["a", "b"]
         );
         assert_eq!(parsed.efforts, ["low", "medium"]);

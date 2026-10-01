@@ -1,22 +1,22 @@
 import { Checkbox, Icon } from "tk-design-system";
-import { useReviewStore } from "../../store/reviewStore";
+import { useTab } from "../../store/tabStore";
 import { Spinner } from "../Spinner/Spinner";
 import { BranchCombobox } from "./BranchCombobox";
 import css from "./BranchSelector.module.css";
 
 /** Base and compare, stacked, with fetch and the working-tree toggle beneath. */
 export function BranchSelector() {
-  const branches = useReviewStore((state) => state.branches);
-  const base = useReviewStore((state) => state.base);
-  const compare = useReviewStore((state) => state.compare);
-  const currentBranch = useReviewStore((state) => state.repo?.currentBranch ?? null);
-  const setBase = useReviewStore((state) => state.setBase);
-  const setCompare = useReviewStore((state) => state.setCompare);
-  const swapRefs = useReviewStore((state) => state.swapRefs);
-  const includeUncommitted = useReviewStore((state) => state.includeUncommitted);
-  const setIncludeUncommitted = useReviewStore((state) => state.setIncludeUncommitted);
-  const fetching = useReviewStore((state) => state.fetching);
-  const fetchRemotes = useReviewStore((state) => state.fetchRemotes);
+  const branches = useTab((state) => state.branches);
+  const base = useTab((state) => state.base);
+  const compare = useTab((state) => state.compare);
+  const currentBranch = useTab((state) => state.repo?.currentBranch ?? null);
+  const setBase = useTab((state) => state.setBase);
+  const setCompare = useTab((state) => state.setCompare);
+  const swapRefs = useTab((state) => state.swapRefs);
+  const includeUncommitted = useTab((state) => state.includeUncommitted);
+  const setIncludeUncommitted = useTab((state) => state.setIncludeUncommitted);
+  const fetching = useTab((state) => state.fetching);
+  const fetchRemotes = useTab((state) => state.fetchRemotes);
 
   // The working tree extends the checked-out branch and no other revision, so
   // the toggle only applies while that branch is the compare side.

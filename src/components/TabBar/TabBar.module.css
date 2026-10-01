@@ -1,0 +1,190 @@
+/* Opens and closes on the spring the tabs glide on, in step with the screen
+   change that brings it; the morphs follow where things land as it moves. The
+   height, `--tab-row`, is TitleBar.module.css's, which frames the scenery for
+   it. */
+.row {
+  flex: none;
+  height: 0;
+  overflow: hidden;
+  transition: height var(--spring-snappy-duration) var(--spring-snappy);
+
+  &[data-open] {
+    height: var(--tab-row);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+/* One row of tabs on the title bar's scenery, scrolling sideways once they
+   have shrunk as far as they go. Its full height even while the row around it
+   is shorter, so nothing in it squeezes as the row opens. The tabs stand on its
+   bottom edge, which is the top of the panel below. */
+.bar {
+  display: flex;
+  flex: none;
+  gap: var(--tk-space-2);
+  align-items: center;
+  min-width: 0;
+  height: var(--tab-row);
+  padding: var(--tk-space-2) var(--tk-space-2) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* The title bar's brand shadow, for the same reason: it sits on the scenery. */
+  text-shadow: 1px 1px 0 oklch(0% 0 0 / 0.6);
+}
+
+.back {
+  flex: none;
+}
+
+/* The label arrives from the list's heading; the arrow has nowhere to come
+   from, so it fades in beside it. */
+.backArrow {
+  animation: fade-in var(--tk-duration-3) var(--tk-ease-fade) both;
+}
+
+.backLabel {
+  display: inline-block;
+}
+
+.divider {
+  flex: none;
+  width: var(--tk-border-width);
+  height: 1rem;
+  background: var(--tk-border);
+}
+
+.list {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 2px;
+  align-items: stretch;
+  align-self: stretch;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* As wide as its title, until the tabs run out of room and share it. */
+.tab {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 9rem;
+  border-radius: var(--tk-radius) var(--tk-radius) 0 0;
+  transition: background-color var(--tk-duration-1) var(--tk-ease-fade);
+
+  /* A pane of the chrome over the scenery, rather than a tint of it. */
+  &:hover {
+    background: color-mix(in oklab, var(--bg) 75%, transparent);
+  }
+
+  /* The one on screen is the review's own panel, reaching up into the bar:
+     the header's colour, standing over the bar's bottom rule. Off the
+     scenery, its text needs no shadow to read. */
+  &[data-active],
+  &[data-active]:hover {
+    position: relative;
+    z-index: 1;
+    background: var(--bg);
+    text-shadow: none;
+  }
+}
+
+.show {
+  display: flex;
+  flex: 1;
+  gap: var(--tk-space-3);
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0 var(--tk-space-2) 0 var(--tk-space-4);
+  color: var(--text-dim);
+  text-align: left;
+  background: none;
+  border: 0;
+
+  .tab:hover &,
+  .tab[data-active] & {
+    color: var(--text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--tk-accent);
+    outline-offset: -2px;
+  }
+}
+
+/* Number and title glide here from the PR's row on the list, and back to it
+   when the tab closes on the way there. */
+.label {
+  display: flex;
+  gap: var(--tk-space-3);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.number {
+  flex: none;
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-sm);
+  color: var(--tk-fg-subtle);
+}
+
+.branch {
+  flex: none;
+  align-self: center;
+  color: var(--tk-fg-subtle);
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--tk-text-md);
+  font-weight: var(--tk-weight-medium);
+  line-height: var(--tk-leading-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Out of the way until the tab is pointed at, keeping its room so the title
+   doesn't reflow under the pointer. The tab on screen always shows it: it is
+   the one way to close the review in front of you. */
+.close {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: var(--tk-space-2);
+  padding: 0;
+  color: var(--tk-fg-subtle);
+  background: none;
+  border: 0;
+  border-radius: var(--tk-radius);
+  opacity: 0;
+  transition:
+    opacity var(--tk-duration-1) var(--tk-ease-fade),
+    background-color var(--tk-duration-1) var(--tk-ease-fade);
+
+  .tab:hover &,
+  .tab[data-active] &,
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  &:hover {
+    color: var(--tk-fg);
+    background: var(--bg-hover);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
