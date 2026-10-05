@@ -1,0 +1,36 @@
+/* Sized in ems, so it fits whatever text it sits in. The mark and the name
+   share the maker's colour. */
+.model {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  color: var(--brand);
+  vertical-align: middle;
+}
+
+.mark {
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  fill: currentColor;
+}
+
+/* A long model id gives way before the mark does. */
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Claude's coral, as Anthropic draws the mark. */
+.claude {
+  --brand: hsl(14.8 63.1% 59.6%);
+}
+
+/* OpenAI's mark is monochrome, black on light and white on dark, so it takes
+   the text colour of whichever theme is showing. */
+.codex {
+  --brand: var(--text);
+}

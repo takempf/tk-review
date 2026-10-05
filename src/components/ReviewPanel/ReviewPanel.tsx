@@ -7,9 +7,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button, Icon, Popover, Radio, RadioGroup, Select, Tabs } from "tk-design-system";
 import {
-  type EngineModels,
+  Button,
+  Icon,
+  type IconName,
+  Popover,
+  Radio,
+  RadioGroup,
+  Select,
+  Tabs,
+} from "tk-design-system";
+import {
   gitApi,
   type PrContext,
   type ReviewComment,
@@ -20,6 +28,7 @@ import {
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
 import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
+import { useModelCatalogs, useModelLabel } from "../../lib/models";
 import {
   findingAfter,
   postBodyForFinding,
@@ -50,6 +59,7 @@ import { CopyButton } from "../CopyButton/CopyButton";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
 import { GitHubMarkdown } from "../Markdown/Markdown";
+import { Model } from "../Model/Model";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
@@ -92,43 +102,13 @@ const EFFORT_LEVELS: Record<ReviewEngine, string[]> = {
   codex: ["minimal", "low", "medium", "high", "xhigh"],
 };
 
-type Catalogs = Partial<Record<ReviewEngine, EngineModels>>;
-
-/** Read once per app load; the panel can remount without re-reading the files. */
-let catalogsPromise: Promise<Catalogs> | null = null;
-
-function loadCatalogs(): Promise<Catalogs> {
-  catalogsPromise ??= Promise.all(
-    (Object.keys(ENGINE_LABELS) as ReviewEngine[]).map(async (engine) => {
-      // A failed read is the same as no cache: the built-in list stands in.
-      const catalog = await gitApi.listAgentModels(engine).catch(() => null);
-      return [engine, catalog] as const;
-    }),
-  ).then((entries) => {
-    const catalogs: Catalogs = {};
-    for (const [engine, catalog] of entries) if (catalog) catalogs[engine] = catalog;
-    return catalogs;
-  });
-  return catalogsPromise;
-}
-
 /**
- * Model and effort choices for the engine: what its CLI last fetched from the
- * service, so the picker keeps pace with the installed CLI rather than with
- * this app's release. Until the read lands, or when there is no cache, the
+ * Model and effort choices for the engine: its CLI's cached catalog (see
+ * `useModelCatalogs`). Until the read lands, or when there is no cache, the
  * built-in fallback lists apply.
  */
 function useAgentModels(engine: ReviewEngine) {
-  const [catalogs, setCatalogs] = useState<Catalogs>({});
-  useEffect(() => {
-    let cancelled = false;
-    void loadCatalogs().then((loaded) => {
-      if (!cancelled) setCatalogs(loaded);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const catalogs = useModelCatalogs();
   const catalog = catalogs[engine];
   return {
     fromCatalog: catalog !== undefined,
@@ -137,30 +117,60 @@ function useAgentModels(engine: ReviewEngine) {
   };
 }
 
-/** Severities the model is asked to use; anything else falls back to neutral. */
-const SEVERITY_CLASS: Record<string, string | undefined> = {
-  critical: "critical",
+/**
+ * Severities the model is asked to use, each with the icon its finding is
+ * marked with; anything else is neutral. Marked as the verdicts are: a cross
+ * for what has to change.
+ */
+const SEVERITY_ICONS: Record<string, IconName | undefined> = {
+  critical: "close",
   warning: "warning",
-  suggestion: "suggestion",
-  nit: "nit",
+  suggestion: "info",
+  nit: "dot",
+  neutral: "circle",
 };
+
+const severityKey = (severity: string) =>
+  SEVERITY_ICONS[severity.toLowerCase()] ? severity.toLowerCase() : "neutral";
 
 function severityClass(severity: string): string {
-  const key = SEVERITY_CLASS[severity.toLowerCase()] ?? "neutral";
-  return css[`severity_${key}`] ?? "";
+  return css[`severity_${severityKey(severity)}`] ?? "";
 }
 
-/** Statuses the re-review is asked to use; anything else falls back to neutral. */
-const RESOLUTION_CLASS: Record<string, string | undefined> = {
-  addressed: "addressed",
-  unaddressed: "unaddressed",
-  partial: "partial",
-  obsolete: "obsolete",
+const severityIcon = (severity: string): IconName =>
+  SEVERITY_ICONS[severityKey(severity)] ?? "circle";
+
+/**
+ * Statuses the re-review is asked to use, each with its finding's icon;
+ * anything else is neutral. A check where the finding was dealt with, a cross
+ * where it wasn't, a dash for part of the way.
+ */
+const RESOLUTION_ICONS: Record<string, IconName | undefined> = {
+  addressed: "check",
+  unaddressed: "close",
+  partial: "minus",
+  obsolete: "dot",
+  neutral: "circle",
 };
 
+const resolutionKey = (status: string) =>
+  RESOLUTION_ICONS[status.toLowerCase()] ? status.toLowerCase() : "neutral";
+
 function resolutionClass(status: string): string {
-  const key = RESOLUTION_CLASS[status.toLowerCase()] ?? "neutral";
-  return css[`status_${key}`] ?? "";
+  return css[`status_${resolutionKey(status)}`] ?? "";
+}
+
+const resolutionIcon = (status: string): IconName =>
+  RESOLUTION_ICONS[resolutionKey(status)] ?? "circle";
+
+/** A finding's severity or verdict as an icon in its tone, the word itself on hover. */
+function FindingMark({ icon, label }: { icon: IconName; label: string }) {
+  const name = label.charAt(0).toUpperCase() + label.slice(1);
+  return (
+    <span className={css.mark} title={name}>
+      <Icon name={icon} label={name} />
+    </span>
+  );
 }
 
 /** GitHub's order and wording for finishing a review. */
@@ -313,7 +323,7 @@ function Provenance({
 }) {
   const parts = [
     ENGINE_LABELS[engine] ?? engine,
-    model,
+    useModelLabel(engine, model),
     effort ? `${effort} effort` : null,
     shortTime(createdAt),
     note,
@@ -332,16 +342,19 @@ function Provenance({
  * the tooltip.
  */
 function SourceTag({ source }: { source: StoredReview }) {
-  const label = [ENGINE_LABELS[source.engine] ?? source.engine, source.model].filter(Boolean);
   const detail = [
-    ...label,
+    ENGINE_LABELS[source.engine] ?? source.engine,
+    useModelLabel(source.engine, source.model),
     source.effort ? `${source.effort} effort` : null,
     absoluteTime(source.createdAt),
   ].filter(Boolean);
   return (
-    <span className={css.sourceTag} title={detail.join(" · ")}>
-      {label.join(" · ")}
-    </span>
+    <Model
+      engine={source.engine}
+      model={source.model}
+      title={detail.join(" · ")}
+      className={css.sourceTag}
+    />
   );
 }
 
@@ -827,7 +840,7 @@ const SETTLED = new Set(["addressed", "obsolete"]);
 
 /**
  * One prior finding with the re-review's verdict on it. The card mirrors a
- * finding's, but the chip is the verdict rather than the severity — what the
+ * finding's, but the band is the verdict rather than the severity — what the
  * reader needs here is "is this done?", not how bad it was the first time.
  * Its comment thread carries over from the finding it judges, under a key of
  * its own so a look-alike new finding cannot inherit it. One still open can
@@ -855,37 +868,38 @@ function Resolution({
   const placement = usePriorPlacement(finding, readAt, postable ? pr : null);
 
   return (
-    <li className={css.finding} data-reveal>
-      <div className={css.findingMeta}>
-        <FindingLocation path={finding.path} lines={findingLines(finding)} />
-        <SourceTag source={source} />
+    <li className={`${css.finding} ${resolutionClass(status)}`} data-reveal>
+      <FindingMark icon={resolutionIcon(status)} label={status} />
+      <div className={css.findingBody}>
+        <div className={css.findingTop}>
+          <FindingLocation path={finding.path} lines={findingLines(finding)} />
+          <SourceTag source={source} />
+        </div>
+        <div className={`${css.itemHead} ${css.titleHead}`}>
+          <p className={css.findingTitle}>{finding.title}</p>
+          <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
+        </div>
+        {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
+        <Thread
+          threadKey={threadKey}
+          comments={comments}
+          engine={source.engine}
+          placeholder="Ask about this verdict…"
+          askLabel="Ask about this"
+          actions={
+            pr && postable ? (
+              <PrCommentComposer
+                engine={source.engine}
+                finding={finding}
+                patch={patch}
+                pr={pr}
+                postedUrl={finding.postedUrl}
+                prior={placement ?? "pending"}
+              />
+            ) : null
+          }
+        />
       </div>
-      <div className={`${css.itemHead} ${css.titleHead}`}>
-        <p className={`${css.findingTitle} ${resolutionClass(status)}`}>
-          <span className={css.severity}>{status}</span> {finding.title}
-        </p>
-        <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
-      </div>
-      {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
-      <Thread
-        threadKey={threadKey}
-        comments={comments}
-        engine={source.engine}
-        placeholder="Ask about this verdict…"
-        askLabel="Ask about this"
-        actions={
-          pr && postable ? (
-            <PrCommentComposer
-              engine={source.engine}
-              finding={finding}
-              patch={patch}
-              pr={pr}
-              postedUrl={finding.postedUrl}
-              prior={placement ?? "pending"}
-            />
-          ) : null
-        }
-      />
     </li>
   );
 }
@@ -908,39 +922,40 @@ function Finding({
   );
 
   return (
-    <li className={css.finding} data-reveal>
-      <div className={css.findingMeta}>
-        <FindingLocation path={finding.path} lines={findingLines(finding)} />
-        <SourceTag source={source} />
-      </div>
-      <div className={`${css.itemHead} ${css.titleHead}`}>
-        <p className={`${css.findingTitle} ${severityClass(finding.severity)}`}>
-          <span className={css.severity}>{finding.severity}</span> {finding.title}
-        </p>
-        <CopyButton
-          text={findingMarkdown(finding, finding.severity, finding.body)}
-          label="Copy finding"
+    <li className={`${css.finding} ${severityClass(finding.severity)}`} data-reveal>
+      <FindingMark icon={severityIcon(finding.severity)} label={finding.severity} />
+      <div className={css.findingBody}>
+        <div className={css.findingTop}>
+          <FindingLocation path={finding.path} lines={findingLines(finding)} />
+          <SourceTag source={source} />
+        </div>
+        <div className={`${css.itemHead} ${css.titleHead}`}>
+          <p className={css.findingTitle}>{finding.title}</p>
+          <CopyButton
+            text={findingMarkdown(finding, finding.severity, finding.body)}
+            label="Copy finding"
+          />
+        </div>
+        <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
+        <Thread
+          threadKey={threadKey}
+          comments={comments}
+          engine={source.engine}
+          placeholder="Ask about this finding…"
+          askLabel="Ask about this"
+          actions={
+            pr ? (
+              <PrCommentComposer
+                engine={source.engine}
+                finding={finding}
+                patch={patch}
+                pr={pr}
+                postedUrl={finding.postedUrl}
+              />
+            ) : null
+          }
         />
       </div>
-      <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
-      <Thread
-        threadKey={threadKey}
-        comments={comments}
-        engine={source.engine}
-        placeholder="Ask about this finding…"
-        askLabel="Ask about this"
-        actions={
-          pr ? (
-            <PrCommentComposer
-              engine={source.engine}
-              finding={finding}
-              patch={patch}
-              pr={pr}
-              postedUrl={finding.postedUrl}
-            />
-          ) : null
-        }
-      />
     </li>
   );
 }
@@ -1315,6 +1330,7 @@ function AgentSettings() {
   const setReviewModel = useAppStore((state) => state.setReviewModel);
   const setReviewEffort = useAppStore((state) => state.setReviewEffort);
   const agentModels = useAgentModels(reviewEngine);
+  const modelName = useModelLabel(reviewEngine, reviewModel);
 
   return (
     <div className={css.controls}>
@@ -1327,7 +1343,7 @@ function AgentSettings() {
           <span className={css.settingsSummary}>
             {[
               ENGINE_LABELS[reviewEngine],
-              reviewModel.trim() || "default model",
+              modelName ?? "default model",
               agentModels.efforts.includes(reviewEffort) ? `${reviewEffort} effort` : null,
             ]
               .filter(Boolean)

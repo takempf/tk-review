@@ -623,8 +623,18 @@
   list-style: none;
 }
 
+/* Its mark, and the finding beside it. The mark hangs in the section's
+   inset, the way a list's markers do. */
 .finding {
   display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-left: calc(var(--space-2) - var(--panel-inset));
+}
+
+.findingBody {
+  display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
@@ -639,54 +649,57 @@
   min-width: 0;
 }
 
-.finding + .finding,
 .summary + .summary {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
 
-/* The chip is the title's first word: the title is what identifies a finding,
-   so it is what the severity labels, and a long title wraps back under the chip
-   rather than hanging in a column beside it. Its own short line, centred on the
-   title's x-height, keeps it inside the line box instead of stretching it. */
-.severity {
-  display: inline-block;
-  margin-right: var(--space-1);
-  padding: 0 var(--space-1);
-  font-size: 11px;
-  font-weight: 400;
-  line-height: 16px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  vertical-align: middle;
-  color: var(--tone);
-  background: var(--tone-bg);
-  border-radius: var(--radius);
+/* Each finding's mark says where it starts, so findings need only the space. */
+.finding + .finding {
+  margin-top: var(--space-5);
 }
 
-/* Each severity is a tone, set on the title: the whole title is written in
-   it, and the chip inside wears it as a tint. */
+/* The severity, as an icon in its colour level with the finding's first
+   line (the word is its tooltip): how much the finding matters, before a word
+   is read. */
+.mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 14px;
+  color: var(--tone);
+}
+
+/* The finding's file, and the review it came from at the far end. */
+.findingTop {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+/* Each severity is a tone, set on the finding: its mark and its title are
+   drawn in it. */
 .severity_critical {
   --tone: var(--tk-danger);
-  --tone-bg: var(--tk-danger-soft);
 }
 
 .severity_warning {
   --tone: var(--tk-warning);
-  --tone-bg: var(--tk-warning-soft);
 }
 
 .severity_suggestion {
   --tone: var(--tk-info);
-  --tone-bg: var(--tk-info-soft);
 }
 
 .severity_nit,
 .severity_neutral {
   --tone: var(--text-dim);
-  --tone-bg: var(--bg-sunken);
 }
 
 /* Re-review verdicts on prior findings, toned the same way as a severity.
@@ -694,23 +707,19 @@
    celebrates. An unrecognised status falls back to the neutral tone. */
 .status_addressed {
   --tone: var(--tk-success);
-  --tone-bg: var(--tk-success-soft);
 }
 
 .status_unaddressed {
   --tone: var(--tk-danger);
-  --tone-bg: var(--tk-danger-soft);
 }
 
 .status_partial {
   --tone: var(--tk-warning);
-  --tone-bg: var(--tk-warning-soft);
 }
 
 .status_obsolete,
 .status_neutral {
   --tone: var(--text-dim);
-  --tone-bg: var(--bg-sunken);
 }
 
 /* A file's note: its path, as a finding shows one, over the text. */
@@ -729,38 +738,30 @@
   min-width: 0;
 }
 
-/* The location, with the review it came from at the far end. The path is what
-   gives way in a narrow panel; the tag keeps up to half the row. */
-.findingMeta {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-/* Which engine and model an item came from. Quieter than a severity chip: it
-   says whose the item is, not how much it matters. Set in its own case, so a
-   section heading's capitals don't reach it. */
+/* Which engine and model an item came from, boxed as a tag where it sits
+   among other text. Set in its own case, so a section heading's capitals don't
+   reach it. */
 .sourceTag {
   flex: none;
   max-width: 50%;
-  overflow: hidden;
   padding: 0 var(--space-1);
   font-size: 11px;
   font-weight: 400;
   line-height: 16px;
-  color: var(--text-faint);
-  text-overflow: ellipsis;
   text-transform: none;
   letter-spacing: 0;
-  white-space: nowrap;
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
 
 .sectionHeading .sourceTag {
   margin-left: var(--space-1);
+}
+
+/* Beside the path, the source goes unboxed: the row's far end sets it apart. */
+.findingTop .sourceTag {
+  padding: 0;
+  border: 0;
 }
 
 /* Clipped at the start, not the end. A path is identified by its tail — the
