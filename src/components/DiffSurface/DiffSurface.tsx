@@ -545,8 +545,8 @@ function DiffSurfaceInner() {
           className={css.surface}
           items={items}
           options={options}
-          // Renders nothing visible: its presence is what the stylesheet's
-          // `:has()` looks for to draw the border on this file's container.
+          // Renders nothing itself: the stylesheet draws the slot it lands in
+          // as a bar on the selected file's header.
           renderHeaderPrefix={(item) =>
             item.id === selectedPath ? <span aria-hidden="true" /> : null
           }

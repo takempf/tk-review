@@ -57,6 +57,13 @@ export const DIFFS_THEME_CSS = `
   background-color: var(--bg);
 }
 
+/* The selected file's bar is drawn absolutely within its header (see
+   DiffSurface.module.css), which a sticky header already holds; one that
+   isn't sticky has to hold it too. */
+[data-diffs-header]:not([data-sticky]) {
+  position: relative;
+}
+
 /* Custom-header mode contributes no layout of its own — the slotted content
    brings its own — but the bar still needs to sit above the code it precedes. */
 [data-diffs-header="custom"] {

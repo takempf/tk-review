@@ -69,27 +69,19 @@
 }
 
 /*
- * Marks the file chosen in the sidebar with a border down its whole left edge.
+ * Marks the file chosen in the sidebar with a bar down the left of its header.
  *
  * Item containers come from a recycled element pool and carry no identifying
  * attribute, so they can't be selected by path. Instead `renderHeaderPrefix`
- * renders a marker only for the selected file, the library wraps it in a
- * `<div slot="header-prefix">` in the light DOM, and `:has()` styles the
- * container holding it.
+ * renders a marker only for the selected file, and the library slots the
+ * `<div slot="header-prefix">` it wraps that in into the header. The header is
+ * sticky, so it is the nearest positioned box: set absolute, the wrapper
+ * becomes a bar on the header's edge, in view all the way down the file.
  *
- * Every item reserves the border as transparent so colouring it shifts nothing
- * sideways as the selection moves. A border rather than an inset shadow because
- * the border sits outside the padding box, where the diff's own row backgrounds
- * can't paint over it.
+ * Only the header, not the file's whole length: down there the lines carry
+ * the diff's own added and deleted bars, and the accent beside them read as
+ * one more — on a new file, a second green stroke beside every line.
  */
-.surface diffs-container {
-  border-left: 3px solid transparent;
-}
-
-.surface diffs-container:has(> div[slot="header-prefix"]) {
-  border-left-color: var(--accent);
-}
-
 /* Sits in the file header, so it must stay clickable and compact. */
 .viewedToggle {
   display: flex;
@@ -112,11 +104,13 @@
   cursor: pointer;
 }
 
-/* The marker node itself never needs to paint — the container's border is the
-   whole effect — so keep the wrapper out of the header's layout. `:has()` still
-   matches it while it isn't rendered. */
 .surface div[slot="header-prefix"] {
-  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--accent);
 }
 
 /* Placeholder files, drawn like the renderer's: a card per file, a header,
