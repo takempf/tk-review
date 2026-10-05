@@ -341,6 +341,8 @@ export interface TabState {
    * being sent to GitHub, as a `sourcedKey`.
    */
   postingTo: string | null;
+  /** The review thread being resolved or reopened on GitHub, by its id. */
+  settingThread: string | null;
   /**
    * A PR opened from the list, from the click until it is fetched and checked
    * out. The review shows it straight away — number and title from the list,
@@ -411,6 +413,8 @@ export interface TabState {
   ) => Promise<boolean>;
   /** Submits `engine`'s conclusion as a GitHub review with the chosen verdict. */
   submitPrReview: (engine: ReviewEngine, verdict: ReviewVerdict, body: string) => Promise<boolean>;
+  /** Resolves a review thread on the open PR, or reopens one. */
+  setThreadResolved: (threadId: string, resolved: boolean) => Promise<boolean>;
   /** Records that an agent run's CLI just wrote something. */
   noteRunOutput: (runId: string) => void;
   /** Stops the agent runs of these kinds; each ends as if it never ran. */
@@ -729,6 +733,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       replyingTo: null,
       agentRuns: {},
       postingTo: null,
+      settingThread: null,
       pendingPr: init.pendingPr ?? null,
       pr: init.pr ?? null,
       prHeadMoved: false,
@@ -1297,6 +1302,40 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
               ? { postingTo: null, reviewError: toAppError(error, "Could not submit the review") }
               : { postingTo: null },
           );
+          return false;
+        }
+      },
+
+      async setThreadResolved(threadId, resolved) {
+        const { pr, settingThread } = get();
+        if (!pr || settingThread) return false;
+
+        set({ settingThread: threadId, reviewError: null });
+        try {
+          const thread = await gitApi.setPrThreadResolved({ pr, threadId, resolved });
+          // The PR may have been re-read meanwhile; only this thread changes in
+          // whatever is on record for it now.
+          const current = get().pr;
+          set(
+            current?.url === pr.url
+              ? {
+                  settingThread: null,
+                  pr: {
+                    ...current,
+                    threads: current.threads.map((old) => (old.id === thread.id ? thread : old)),
+                  },
+                }
+              : { settingThread: null },
+          );
+          return true;
+        } catch (error) {
+          set({
+            settingThread: null,
+            reviewError: toAppError(
+              error,
+              resolved ? "Could not resolve the thread" : "Could not reopen the thread",
+            ),
+          });
           return false;
         }
       },

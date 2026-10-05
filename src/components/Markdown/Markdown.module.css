@@ -48,11 +48,14 @@
 }
 
 /* Inline, as on GitHub, where the design system's reset makes images blocks:
-   bots put avatars and status badges on the line beside their text. */
+   bots put avatars and status badges on the line beside their text. Centred on
+   that line, not sat on its baseline: a baseline leaves room under the image
+   for descenders it has none of, which shows as a gap under a lone button. */
 .markdown img {
   display: inline;
   max-width: 100%;
   height: auto;
+  vertical-align: middle;
 }
 
 /* A bullet's width in rather than the browser's 40px, with a little more for

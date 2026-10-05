@@ -652,6 +652,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       createdAt: "2026-08-06T18:20:00Z",
       path: null,
       line: null,
+      startLine: null,
       outdated: false,
     },
     // Vercel's deployment table, as its bot posts it: inline avatars and status
@@ -673,6 +674,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       createdAt: "2026-08-06T18:30:00Z",
       path: null,
       line: null,
+      startLine: null,
       outdated: false,
     },
     // Linear's linkback, as its bot posts it: the whole issue folded into a
@@ -701,6 +703,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       createdAt: "2026-08-06T18:32:00Z",
       path: null,
       line: null,
+      startLine: null,
       outdated: false,
     },
     {
@@ -710,6 +713,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       createdAt: "2026-08-06T18:24:00Z",
       path: "migrations/0007_add_reviews_table.sql",
       line: 6,
+      startLine: null,
       outdated: false,
     },
     {
@@ -719,8 +723,58 @@ Run \`pnpm harness\` and open the pull request fixture.
       createdAt: "2026-08-06T18:25:00Z",
       path: "src/components/DiffViewer/DiffViewer.tsx",
       line: 11,
+      startLine: null,
       outdated: true,
     },
+    // A span, answered, then a second conversation started on the same span.
+    {
+      id: 106,
+      author: "reviewer",
+      body: "This whole block re-subscribes on every render. Could the subscription move into the effect that owns it?",
+      createdAt: "2026-08-06T18:40:00Z",
+      path: "src/components/DiffViewer/DiffViewer.tsx",
+      line: 9,
+      startLine: 4,
+      outdated: false,
+    },
+    {
+      id: 107,
+      author: "octocat",
+      body: "Fixed — it subscribes once, in the effect, and unsubscribes in its cleanup.",
+      createdAt: "2026-08-06T19:05:00Z",
+      path: "src/components/DiffViewer/DiffViewer.tsx",
+      line: 9,
+      startLine: 4,
+      outdated: false,
+    },
+    {
+      id: 108,
+      author: "mona",
+      body: "Separately: `cancelled` reads as a flag on the request, but it's on the component.",
+      createdAt: "2026-08-06T19:20:00Z",
+      path: "src/components/DiffViewer/DiffViewer.tsx",
+      line: 9,
+      startLine: 4,
+      outdated: false,
+    },
+    // On the file as a whole, and resolved.
+    {
+      id: 109,
+      author: "mona",
+      body: "Worth a note at the top on why this wraps the shared error kinds.",
+      createdAt: "2026-08-06T18:50:00Z",
+      path: "src/ipc/git.ts",
+      line: null,
+      startLine: null,
+      outdated: false,
+    },
+  ],
+  threads: [
+    { id: "T102", resolved: false, resolvedBy: null, outdated: false, commentIds: [102] },
+    { id: "T103", resolved: false, resolvedBy: null, outdated: true, commentIds: [103] },
+    { id: "T106", resolved: false, resolvedBy: null, outdated: false, commentIds: [106, 107] },
+    { id: "T108", resolved: false, resolvedBy: null, outdated: false, commentIds: [108] },
+    { id: "T109", resolved: true, resolvedBy: "octocat", outdated: false, commentIds: [109] },
   ],
 };
 

@@ -128,6 +128,7 @@ pub fn run() {
             commands::refresh_pr,
             commands::post_pr_comment,
             commands::submit_pr_review,
+            commands::set_pr_thread_resolved,
             commands::get_github_image,
             commands::diff_branches,
             commands::get_patch,

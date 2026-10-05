@@ -19,7 +19,9 @@ import {
 } from "tk-design-system";
 import {
   gitApi,
+  type PrComment,
   type PrContext,
+  type PrThread,
   type ReviewComment,
   type ReviewEngine,
   type ReviewFinding,
@@ -35,6 +37,13 @@ import {
   postLocationForFinding,
   postLocationForPriorFinding,
 } from "../../lib/prComment";
+import {
+  type CommentAnchor,
+  type FileDiscussion,
+  inlineDiscussion,
+  repliesAfter,
+  threadFor,
+} from "../../lib/prThreads";
 import { absoluteTime, shortTime } from "../../lib/time";
 import { knownVerdict } from "../../lib/verdict";
 import { isSignedInAs } from "../../store/account";
@@ -54,6 +63,7 @@ import {
   type TabState,
   useTab,
 } from "../../store/tabStore";
+import { Author, githubHost } from "../Author/Author";
 import { Combobox } from "../Combobox/Combobox";
 import { CopyButton } from "../CopyButton/CopyButton";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
@@ -187,17 +197,7 @@ const VERDICTS: { value: ReviewVerdict; label: string; noun: string; done: strin
 
 /** Stable fallback: a fresh `[]` from a selector re-renders forever. */
 const EMPTY_THREAD: ReviewComment[] = [];
-const TAB_KEY = "tk-review:review-panel:tab";
 type PanelTab = "pr" | "ai" | "explain";
-const PANEL_TABS: PanelTab[] = ["pr", "ai", "explain"];
-function persistedTab(): PanelTab {
-  try {
-    const stored = localStorage.getItem(TAB_KEY);
-    return PANEL_TABS.find((tab) => tab === stored) ?? "ai";
-  } catch {
-    return "ai";
-  }
-}
 
 /** The engine doing the tab's run of `kind`, if one is in flight. */
 function runningEngine(state: TabState, kind: AgentRunKind): ReviewEngine | undefined {
@@ -232,18 +232,125 @@ function PrRefreshButton() {
   );
 }
 
-function PrSection({ pr }: { pr: PrContext }) {
+/**
+ * One comment from GitHub: who wrote it and when, then what they said. `meta`
+ * is small print for the byline, such as a thread's state.
+ */
+function GitHubPost({
+  comment,
+  host,
+  meta,
+}: {
+  comment: PrComment;
+  host: string;
+  meta?: ReactNode;
+}) {
+  return (
+    <div className={css.prComment}>
+      <div className={css.itemHead}>
+        <span className={css.prByline}>
+          <Author login={comment.author} host={host} className={css.prAuthor} />
+          <time dateTime={comment.createdAt} title={absoluteTime(comment.createdAt)}>
+            {shortTime(comment.createdAt)}
+          </time>
+          {meta}
+        </span>
+        <CopyButton text={comment.body} label="Copy comment" />
+      </div>
+      <GitHubMarkdown markdown={comment.body} className={css.prCommentMarkdown} />
+    </div>
+  );
+}
+
+/**
+ * Where on its file a set of comments was made, as a mark on the file's rail
+ * and the lines beside it. Current lines jump to the diff; outdated ones
+ * belong to an older commit, so they only say so.
+ */
+function AnchorLabel({ path, anchor }: { path: string; anchor: CommentAnchor }) {
   const selectFile = useTab((state) => state.selectFile);
+  const inDiff = useTab(
+    (state) => state.summary?.files.some((file) => file.path === path) ?? false,
+  );
+  const { lines, outdated } = anchor;
+  const text = !lines
+    ? "Whole file"
+    : lines.end > lines.start
+      ? `Lines ${formatLines(lines)}`
+      : `Line ${lines.start}`;
+  return (
+    <div className={css.anchorLabel}>
+      <span className={css.anchorMark} aria-hidden="true" />
+      {inDiff && !outdated ? (
+        <button
+          type="button"
+          className={css.anchorLines}
+          onClick={() => selectFile(path, lines)}
+          title={`Jump to ${path}${lines ? `:${formatLines(lines)}` : ""}`}
+        >
+          {text}
+        </button>
+      ) : (
+        <span className={css.anchorLines}>{text}</span>
+      )}
+      {outdated ? <span className={css.anchorNote}>outdated</span> : null}
+    </div>
+  );
+}
+
+/** A thread's state, for the byline of the comment that started it. */
+function threadMeta(thread: PrThread | null): ReactNode {
+  if (!thread?.resolved) return null;
+  return (
+    <span title={thread.resolvedBy ? `Resolved by ${thread.resolvedBy}` : undefined}>resolved</span>
+  );
+}
+
+/**
+ * A file's inline comments as GitHub's conversation reads them, laid down the
+ * file: a rail on the left with a mark at each line or span comments were
+ * made on, and inset beside it every conversation there, each comment in turn.
+ */
+function InlineFile({ file, host }: { file: FileDiscussion; host: string }) {
+  const selectFile = useTab((state) => state.selectFile);
+  return (
+    <section className={css.inlineFile}>
+      <button type="button" className={css.inlinePath} onClick={() => selectFile(file.path)}>
+        {file.path}
+      </button>
+      <ol className={css.anchors}>
+        {file.anchors.map((anchor) => (
+          <li
+            key={anchor.key}
+            className={css.anchor}
+            data-span={(anchor.lines && anchor.lines.end > anchor.lines.start) || undefined}
+            data-outdated={anchor.outdated || undefined}
+          >
+            <AnchorLabel path={file.path} anchor={anchor} />
+            {anchor.threads.map(({ thread, comments }) => (
+              <div key={thread?.id ?? comments[0]?.id} className={css.inlineThread}>
+                {comments.map((comment, index) => (
+                  <GitHubPost
+                    key={comment.id}
+                    comment={comment}
+                    host={host}
+                    meta={index === 0 ? threadMeta(thread) : null}
+                  />
+                ))}
+              </div>
+            ))}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function PrSection({ pr }: { pr: PrContext }) {
   const prHeadMoved = useTab((state) => state.prHeadMoved);
+  const host = githubHost(pr.url);
   const topLevel = pr.comments.filter((comment) => !comment.path);
-  const inlineByPath = useMemo(() => {
-    const groups = new Map<string, PrContext["comments"]>();
-    for (const comment of pr.comments) {
-      if (!comment.path) continue;
-      groups.set(comment.path, [...(groups.get(comment.path) ?? []), comment]);
-    }
-    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [pr.comments]);
+  const files = useMemo(() => inlineDiscussion(pr), [pr]);
 
   return (
     <div className={css.prBody}>
@@ -266,40 +373,18 @@ function PrSection({ pr }: { pr: PrContext }) {
       )}
       {topLevel.length > 0 ? (
         <div className={css.prDiscussion}>
-          <p className={css.subheading}>Conversation</p>
-          {topLevel.map((comment) => (
-            <div key={comment.id}>
-              <div className={css.itemHead}>
-                <span className={css.prAuthor}>@{comment.author}</span>
-                <CopyButton text={comment.body} label="Copy comment" />
-              </div>
-              <GitHubMarkdown markdown={comment.body} className={css.prCommentMarkdown} />
-            </div>
-          ))}
+          <div className={css.prPosts}>
+            {topLevel.map((comment) => (
+              <GitHubPost key={comment.id} comment={comment} host={host} />
+            ))}
+          </div>
         </div>
       ) : null}
-      {inlineByPath.length > 0 ? (
+      {files.length > 0 ? (
         <div className={css.prDiscussion}>
           <p className={css.subheading}>Inline comments</p>
-          {inlineByPath.map(([path, comments]) => (
-            <div className={css.inlineGroup} key={path}>
-              <button type="button" className={css.inlinePath} onClick={() => selectFile(path)}>
-                {path}
-              </button>
-              {comments.map((comment) => (
-                <div key={comment.id}>
-                  <div className={css.itemHead}>
-                    <span className={css.prAuthor}>
-                      @{comment.author}
-                      {comment.line != null ? ` · line ${comment.line}` : ""}
-                      {comment.outdated ? " · outdated" : ""}
-                    </span>
-                    <CopyButton text={comment.body} label="Copy comment" />
-                  </div>
-                  <GitHubMarkdown markdown={comment.body} className={css.prCommentMarkdown} />
-                </div>
-              ))}
-            </div>
+          {files.map((file) => (
+            <InlineFile key={file.path} file={file} host={host} />
           ))}
         </div>
       ) : null}
@@ -597,6 +682,82 @@ function Thread({
   );
 }
 
+/**
+ * What became of a posted finding on GitHub: whether its thread is resolved,
+ * a button to resolve or reopen it, and the replies since. As of when the PR
+ * was last read, so a thread just started shows once the PR is refreshed.
+ * `settled` says the re-review found the finding dealt with, which makes
+ * resolving it the obvious next step.
+ */
+function PostedThread({
+  pr,
+  thread,
+  postedUrl,
+  settled,
+}: {
+  pr: PrContext;
+  thread: PrThread;
+  postedUrl: string;
+  settled: boolean;
+}) {
+  const settingThread = useTab((state) => state.settingThread);
+  const setThreadResolved = useTab((state) => state.setThreadResolved);
+  const byMe = useTab(
+    (state) => thread.resolvedBy != null && isSignedInAs(state.repo, thread.resolvedBy),
+  );
+  const replies = useMemo(() => repliesAfter(pr, thread, postedUrl), [pr, thread, postedUrl]);
+  const host = githubHost(pr.url);
+  const pending = settingThread === thread.id;
+  const by = thread.resolvedBy ? ` by ${byMe ? "you" : thread.resolvedBy}` : "";
+
+  return (
+    <>
+      <span className={css.threadControls}>
+        <span className={css.threadState} data-resolved={thread.resolved || undefined}>
+          {thread.resolved ? (
+            <>
+              <Icon name="check" /> Resolved{by}
+            </>
+          ) : (
+            "Unresolved"
+          )}
+          {thread.outdated ? " · outdated" : null}
+        </span>
+        <Button
+          size="sm"
+          variant={settled && !thread.resolved ? undefined : "ghost"}
+          onClick={() => void setThreadResolved(thread.id, !thread.resolved)}
+          disabled={settingThread !== null}
+        >
+          {pending ? (
+            <>
+              <Spinner /> {thread.resolved ? "Reopening…" : "Resolving…"}
+            </>
+          ) : thread.resolved ? (
+            "Reopen"
+          ) : (
+            <>
+              <Icon name="check" /> Resolve
+            </>
+          )}
+        </Button>
+      </span>
+      {replies.length > 0 ? (
+        <div className={css.githubReplies}>
+          <p className={css.subheading}>
+            {replies.length === 1 ? "Reply" : `${replies.length} replies`} on GitHub
+          </p>
+          <div className={css.prPosts}>
+            {replies.map((reply) => (
+              <GitHubPost key={reply.id} comment={reply} host={host} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 /** A deliberate, editable hand-off from an AI finding to a GitHub comment. */
 function PrCommentComposer({
   engine,
@@ -606,6 +767,7 @@ function PrCommentComposer({
   reviewBody,
   postedUrl,
   prior,
+  settled = false,
 }: {
   /** Whose review the finding or summary belongs to. */
   engine: ReviewEngine;
@@ -617,6 +779,8 @@ function PrCommentComposer({
   postedUrl?: string;
   /** For a finding an earlier review raised: where it sits on the PR's head now. */
   prior?: PriorPlacement | "pending";
+  /** The re-review found it dealt with. */
+  settled?: boolean;
 }) {
   const placed = prior === "pending" ? undefined : prior;
   const location = useMemo(
@@ -645,6 +809,7 @@ function PrCommentComposer({
   const busy = postingTo !== null;
   const pending = postingTo === targetKey;
   const requiresConfirmation = pr.state !== "open" && !pr.isDraft;
+  const thread = threadFor(pr, postedUrl);
 
   function close() {
     setOpen(false);
@@ -674,6 +839,9 @@ function PrCommentComposer({
         <a className={css.postedLink} href={postedUrl} target="_blank" rel="noreferrer">
           Posted to PR <Icon name="external" />
         </a>
+      ) : null}
+      {postedUrl && thread ? (
+        <PostedThread pr={pr} thread={thread} postedUrl={postedUrl} settled={settled} />
       ) : null}
       {open ? (
         <div className={css.composerEditor}>
@@ -895,6 +1063,7 @@ function Resolution({
                 pr={pr}
                 postedUrl={finding.postedUrl}
                 prior={placement ?? "pending"}
+                settled={SETTLED.has(status.toLowerCase())}
               />
             ) : null
           }
@@ -1679,23 +1848,17 @@ export function ReviewPanel() {
   const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
   const reviewing = useTab((state) => state.reviewing || state.reReviewing);
   const explaining = useTab((state) => state.explaining);
-  const [tab, setTab] = useState(persistedTab);
-  // With no PR there is no PR tab, whatever was last remembered.
+  // Every open tab has a panel of its own, so a PR opens on its PR tab and
+  // keeps whichever tab the reader picks after that.
+  const [tab, setTab] = useState<PanelTab>("pr");
+  // With no PR there is no PR tab.
   const activeTab: PanelTab = tab === "pr" && !hasPr ? "ai" : tab;
-  function selectTab(next: PanelTab) {
-    setTab(next);
-    try {
-      localStorage.setItem(TAB_KEY, next);
-    } catch {
-      // The remembered tab is a convenience, never a dependency.
-    }
-  }
 
   return (
     <Tabs.Root
       className={css.panel}
       value={activeTab}
-      onValueChange={(value) => selectTab(value as PanelTab)}
+      onValueChange={(value) => setTab(value as PanelTab)}
     >
       <div className={css.tabBar}>
         <Tabs.List className={css.tabList} aria-label="Review panel">

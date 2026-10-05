@@ -7,7 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { GitError, PrContext } from "../src/ipc/git";
+import type { GitError, PrContext, PrThread } from "../src/ipc/git";
 import { Root } from "../src/Root";
 import { storageRoot } from "../src/store/account";
 import "../src/styles/global.css";
@@ -38,6 +38,8 @@ mockWindows("main");
  * - `post`: sending to the PR fails the way `gh api` does.
  * - `list`: listing pull requests fails with git-style multi-line stderr.
  * - `refresh`: refreshing the PR fails, which shows in the banner under the header.
+ * - `resolve`: resolving or reopening a review thread is refused, as GitHub
+ *   refuses someone without write access.
  */
 const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(",") ?? []);
 
@@ -139,15 +141,36 @@ function later<T>(ms: number, value: T, error?: GitError): Promise<T> {
 let nextPostedComment = 900;
 
 /**
+ * What the harness has posted as inline or file comments, each a thread of its
+ * own with the PR author's reply under it, and every thread's resolved state
+ * as changed here. The PR shows them once it is next read, as on GitHub.
+ */
+const posted: { comments: PrContext["comments"]; threads: PrThread[] } = {
+  comments: [],
+  threads: PR.threads.map((thread) => ({ ...thread })),
+};
+
+/** The fixture PR's conversation, with what the harness has posted and resolved since. */
+function withPosted(pr: PrContext): PrContext {
+  // Copies, as IPC would hand over: the app must not see a thread change
+  // before the command that changes it answers.
+  return structuredClone({
+    ...pr,
+    comments: [...pr.comments, ...posted.comments],
+    threads: posted.threads,
+  });
+}
+
+/**
  * The fixture PR, retitled as whichever listed PR `url` names, so each row on
  * the list opens a tab of its own. They all share its diff and conversation.
  */
 function prFor(url: string): PrContext {
   const number = Number(/(\d+)\/?$/.exec(url)?.[1] ?? /#(\d+)$/.exec(url)?.[1]);
   const listed = PR_LIST.find((pr) => pr.number === number);
-  if (!listed || listed.number === PR.number) return PR;
+  if (!listed || listed.number === PR.number) return withPosted(PR);
   return {
-    ...PR,
+    ...withPosted(PR),
     url: listed.url,
     number: listed.number,
     title: listed.title,
@@ -231,8 +254,59 @@ stdout:
       );
     case "post_pr_comment": {
       if (failing.has("post")) return later(600, null, GH_POST_ERROR);
+      const { body, path, line, endLine, destination } = payload as {
+        body: string;
+        path: string | null;
+        line: number | null;
+        endLine: number | null;
+        destination: string;
+      };
       nextPostedComment += 1;
-      return { url: `${PR.url}#issuecomment-${nextPostedComment}` };
+      if (destination === "topLevel") return { url: `${PR.url}#issuecomment-${nextPostedComment}` };
+      const id = nextPostedComment;
+      const reply = ++nextPostedComment;
+      const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+      const anchor = {
+        path,
+        line: endLine ?? line,
+        startLine: endLine != null ? line : null,
+        outdated: false,
+      };
+      posted.comments.push(
+        { id, author: repo.githubLogin ?? "you", body, createdAt: at(0), ...anchor },
+        {
+          id: reply,
+          author: PR.author,
+          body: "Fixed — moved it as suggested, and added a test that covers it.",
+          createdAt: at(30),
+          ...anchor,
+        },
+      );
+      posted.threads.push({
+        id: `T${id}`,
+        resolved: false,
+        resolvedBy: null,
+        outdated: false,
+        commentIds: [id, reply],
+      });
+      return { url: `${PR.url}#discussion_r${id}` };
+    }
+    // Delayed like a real `gh` round-trip, so "Resolving…" is visible.
+    case "set_pr_thread_resolved": {
+      const { threadId, resolved } = payload as { threadId: string; resolved: boolean };
+      if (failing.has("resolve")) {
+        return later(500, null, {
+          kind: "command",
+          message: "GraphQL: Resource not accessible by integration (resolveReviewThread)",
+          detail: null,
+        });
+      }
+      const thread = posted.threads.find((candidate) => candidate.id === threadId);
+      if (!thread)
+        return later(500, null, { kind: "command", message: "No such thread", detail: null });
+      thread.resolved = resolved;
+      thread.resolvedBy = resolved ? (repo.githubLogin ?? "you") : null;
+      return later(500, { ...thread });
     }
     // Delayed like a real `gh` round-trip, so "Submitting…" is visible.
     case "submit_pr_review":

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::GitError;
 use crate::git;
-use crate::github::PrContext;
+use crate::github::{review_comment_id, PrComment, PrContext};
 use crate::runs::{AgentRun, Stop, QUIET_LIMIT, RUN_LIMIT};
 
 /// Fewest agentic turns a claude run gets: enough to read around a small diff.
@@ -136,6 +136,10 @@ pub struct ReviewFinding {
     pub severity: String,
     pub title: String,
     pub body: String,
+    /// GitHub's permalink once the finding was sent to the PR. The app keeps
+    /// it; the model never writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted_url: Option<String>,
 }
 
 impl ReviewFinding {
@@ -344,12 +348,13 @@ fn build_re_review_prompt(
     let mut findings_list = String::new();
     for (index, finding) in prior_findings.iter().enumerate() {
         findings_list.push_str(&format!(
-            "{index}. [{}] {} ({}) — {}\n   {}\n",
+            "{index}. [{}] {} ({}) — {}\n   {}\n{}",
             finding.severity,
             finding.path,
             finding.location_label(),
             finding.title,
-            finding.body
+            finding.body,
+            github_thread_note(finding, pr_context)
         ));
     }
 
@@ -367,7 +372,7 @@ Its findings, numbered:
 {findings_list}
 You have two jobs, in order:
 
-1. For EVERY numbered finding, judge whether it has been addressed in the current code. Use `status` values: "addressed" (fixed), "unaddressed" (still present as reported), "partial" (improved but not fully fixed), "obsolete" (the code it pointed at is gone or changed enough that the finding no longer applies). In `note`, say what the verdict is grounded in — where the fix is, or what still remains. If a finding was wrong to begin with, mark it "obsolete" and say so.
+1. For EVERY numbered finding, judge whether it has been addressed in the current code. Use `status` values: "addressed" (fixed), "unaddressed" (still present as reported), "partial" (improved but not fully fixed), "obsolete" (the code it pointed at is gone or changed enough that the finding no longer applies). In `note`, say what the verdict is grounded in — where the fix is, or what still remains. If a finding was wrong to begin with, mark it "obsolete" and say so. Where a finding was sent to the pull request, what happened to it there follows it: whether its GitHub thread is resolved, and any replies. Take a reply saying it was fixed, or a resolved thread, as a claim to check against the code rather than as the verdict, and say in `note` when one bears on it.
 
 2. Review the current diff for NEW problems, exactly as you would a fresh pull request: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Do not re-report the numbered findings — their resolutions cover them. Pay particular attention to code that changed since the earlier review: fixes introduce their own bugs.
 
@@ -591,11 +596,7 @@ fn append_pr_intent(prompt: &mut String, pr: &PrContext) {
         "Discussion on the pull request, which may explain why parts of the code look the way they do:\n",
     );
     for comment in &pr.comments {
-        let anchor = match (&comment.path, comment.line) {
-            (Some(path), Some(line)) => format!(" ({path}:{line})"),
-            (Some(path), None) => format!(" ({path})"),
-            (None, _) => String::new(),
-        };
+        let anchor = comment_anchor(comment);
         prompt.push_str(&format!(
             "@{}{anchor}: {}\n\n",
             comment.author, comment.body
@@ -680,12 +681,13 @@ fn build_reply_prompt(
     match finding {
         Some(finding) => {
             prompt.push_str(&format!(
-                "This conversation is about one finding from your review:\n- file: {} ({})\n- severity: {}\n- {}\n- {}\n\nThe diff for that file:\n\n{patch}\n\n",
+                "This conversation is about one finding from your review:\n- file: {} ({})\n- severity: {}\n- {}\n- {}\n{}\nThe diff for that file:\n\n{patch}\n\n",
                 finding.path,
                 finding.location_label(),
                 finding.severity,
                 finding.title,
-                finding.body
+                finding.body,
+                github_thread_note(finding, pr_context)
             ));
         }
         None => {
@@ -768,6 +770,68 @@ The diff:
     prompt
 }
 
+/// What became of a finding on the pull request, for the prompts that follow
+/// up on it: whether its GitHub thread is resolved, and what was said there
+/// after it, as lines to follow the finding. Empty for one never sent, sent as
+/// a top-level comment (GitHub keeps no thread for those), or sent since the
+/// PR was last read.
+fn github_thread_note(finding: &ReviewFinding, pr: Option<&PrContext>) -> String {
+    let (Some(pr), Some(url)) = (pr, finding.posted_url.as_deref()) else {
+        return String::new();
+    };
+    let Some(thread) = pr.thread_for(url) else {
+        return String::new();
+    };
+    let state = match (thread.resolved, &thread.resolved_by) {
+        (true, Some(by)) => format!("resolved by @{by}"),
+        (true, None) => "resolved".to_owned(),
+        (false, _) => "unresolved".to_owned(),
+    };
+    let outdated = if thread.outdated {
+        ", and outdated: the lines it was on have changed since"
+    } else {
+        ""
+    };
+    let posted = review_comment_id(url);
+    let replies: Vec<&PrComment> = thread
+        .comment_ids
+        .iter()
+        .skip_while(|id| Some(**id) != posted)
+        .skip(1)
+        .filter_map(|id| pr.comments.iter().find(|comment| comment.id == *id))
+        .collect();
+    let mut note =
+        format!("   It was sent to the pull request, where its thread is {state}{outdated}.");
+    if replies.is_empty() {
+        note.push_str(" Nobody has replied there.\n");
+        return note;
+    }
+    note.push_str(" Replies there:\n");
+    for reply in replies {
+        note.push_str(&format!(
+            "   - @{}: {}\n",
+            reply.author,
+            reply.body.trim().replace('\n', "\n     ")
+        ));
+    }
+    note
+}
+
+/// Where an inline comment sits, as the prompts show it: ` (src/a.rs:12-18)`,
+/// marked when those lines have changed since. Empty for a top-level comment.
+fn comment_anchor(comment: &PrComment) -> String {
+    let Some(path) = &comment.path else {
+        return String::new();
+    };
+    let lines = match (comment.start_line, comment.line) {
+        (Some(start), Some(end)) if start < end => format!(":{start}-{end}"),
+        (_, Some(line)) => format!(":{line}"),
+        _ => String::new(),
+    };
+    let outdated = if comment.outdated { ", outdated" } else { "" };
+    format!(" ({path}{lines}{outdated})")
+}
+
 fn append_pr_context(prompt: &mut String, pr: &PrContext) {
     prompt.push_str(&format!(
         "This diff is pull request #{}: \"{}\" by @{}.\nDescription:\n{}\n\nExisting discussion (do not repeat points already raised; you may agree, disagree, or extend them):\n",
@@ -778,11 +842,7 @@ fn append_pr_context(prompt: &mut String, pr: &PrContext) {
         return;
     }
     for comment in &pr.comments {
-        let anchor = match (&comment.path, comment.line) {
-            (Some(path), Some(line)) => format!(" ({path}:{line})"),
-            (Some(path), None) => format!(" ({path})"),
-            (None, _) => String::new(),
-        };
+        let anchor = comment_anchor(comment);
         prompt.push_str(&format!(
             "@{}{anchor}: {}\n\n",
             comment.author, comment.body
@@ -1572,6 +1632,7 @@ mod tests {
             severity: "nit".into(),
             title: "t".into(),
             body: "b".into(),
+            posted_url: None,
         };
         let tidied = |mut finding: ReviewFinding| {
             finding.tidy_span();
@@ -1635,6 +1696,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            posted_url: None,
         };
         for prompt in [
             build_prompt(Some("feature"), patch, None),
@@ -1782,6 +1844,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            posted_url: None,
         };
         let thread = vec![
             ThreadComment {
@@ -1823,6 +1886,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            posted_url: None,
         };
         let json_prompts = [
             build_prompt(Some("feature"), patch, None),
@@ -1870,8 +1934,10 @@ mod tests {
                 created_at: "2026-08-06T00:00:00Z".into(),
                 path: Some("src/api.rs".into()),
                 line: Some(12),
+                start_line: None,
                 outdated: false,
             }],
+            threads: Vec::new(),
         }
     }
 
@@ -1977,6 +2043,7 @@ mod tests {
                 severity: "warning".into(),
                 title: "Off-by-one in loop bound.".into(),
                 body: "The loop misses the last element.".into(),
+                posted_url: None,
             },
             ReviewFinding {
                 path: "src/b.ts".into(),
@@ -1985,6 +2052,7 @@ mod tests {
                 severity: "nit".into(),
                 title: "Stale comment.".into(),
                 body: "The comment describes removed behavior.".into(),
+                posted_url: None,
             },
         ];
         let prompt = build_re_review_prompt(
@@ -2018,6 +2086,98 @@ mod tests {
             "{prompt}"
         );
         assert!(prompt.contains("diff --git a/src/a.ts"), "{prompt}");
+    }
+
+    /// A posted finding's thread follows it in the re-review, so the author's
+    /// "fixed" gets checked rather than taken on trust.
+    #[test]
+    fn the_re_review_prompt_carries_what_happened_to_a_posted_finding() {
+        let mut pr = sample_pr();
+        let posted = "https://github.com/acme/widgets/pull/7#discussion_r40";
+        pr.comments = vec![
+            crate::github::PrComment {
+                id: 40,
+                author: "me".into(),
+                body: "Off-by-one in loop bound.".into(),
+                created_at: "2026-08-06T00:00:00Z".into(),
+                path: Some("src/a.ts".into()),
+                line: Some(14),
+                start_line: Some(12),
+                outdated: true,
+            },
+            crate::github::PrComment {
+                id: 41,
+                author: "octo".into(),
+                body: "Fixed: the bound is now inclusive.\nAdded a test.".into(),
+                created_at: "2026-08-07T00:00:00Z".into(),
+                path: Some("src/a.ts".into()),
+                line: Some(14),
+                start_line: Some(12),
+                outdated: true,
+            },
+        ];
+        pr.threads = vec![crate::github::PrThread {
+            id: "T1".into(),
+            resolved: false,
+            resolved_by: None,
+            outdated: true,
+            comment_ids: vec![40, 41],
+        }];
+        let finding = |posted_url: Option<&str>| ReviewFinding {
+            path: "src/a.ts".into(),
+            line: Some(12),
+            end_line: Some(14),
+            severity: "warning".into(),
+            title: "Off-by-one in loop bound.".into(),
+            body: "The loop misses the last element.".into(),
+            posted_url: posted_url.map(str::to_owned),
+        };
+        let prompt = build_re_review_prompt(
+            Some("feature"),
+            "Small, focused change.",
+            &[finding(Some(posted)), finding(None)],
+            "diff --git a/src/a.ts b/src/a.ts",
+            Some(&pr),
+        );
+
+        assert!(
+            prompt.contains(
+                "   It was sent to the pull request, where its thread is unresolved, and outdated: the lines it was on have changed since. Replies there:\n   - @octo: Fixed: the bound is now inclusive.\n     Added a test.\n1. [warning]"
+            ),
+            "{prompt}"
+        );
+        // Only the posted one has a thread to report.
+        assert_eq!(
+            prompt.matches("It was sent to the pull request").count(),
+            1,
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("as a claim to check against the code"),
+            "{prompt}"
+        );
+        // The discussion shows where each comment sits, spans and all.
+        assert!(
+            prompt.contains("@octo (src/a.ts:12-14, outdated): Fixed"),
+            "{prompt}"
+        );
+
+        // The same thread follows the finding into a conversation about it.
+        let reply = build_reply_prompt(
+            Some("feature"),
+            "Small, focused change.",
+            Some(&finding(Some(posted))),
+            &[],
+            "Is this really fixed?",
+            "diff --git a/src/a.ts b/src/a.ts",
+            Some(&pr),
+        );
+        assert!(
+            reply.contains(
+                "- The loop misses the last element.\n   It was sent to the pull request"
+            ),
+            "{reply}"
+        );
     }
 
     const EXPLAIN_JSON: &str = r#"{

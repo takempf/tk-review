@@ -190,8 +190,31 @@ export interface PrComment {
   body: string;
   createdAt: string;
   path: string | null;
+  /**
+   * The new-file line an inline comment anchors to, the last for a span, or
+   * `null` for one on a file as a whole. An outdated comment's lines are
+   * where it was made, on a commit since replaced.
+   */
   line: number | null;
+  /** Where a span starts; `null` for a single line. */
+  startLine: number | null;
+  /** Its lines have changed since, so GitHub no longer shows it in the diff. */
   outdated: boolean;
+}
+
+/**
+ * A conversation GitHub keeps on a line or file of the diff: an inline
+ * comment and the replies to it, which are in `PrContext.comments` by id.
+ */
+export interface PrThread {
+  /** GraphQL's node id, which resolving the thread takes. */
+  id: string;
+  resolved: boolean;
+  /** Who resolved it, while it is. */
+  resolvedBy: string | null;
+  outdated: boolean;
+  /** Its comments' ids, oldest first: the first one started it. */
+  commentIds: number[];
 }
 
 /** GitHub metadata bound to the comparison configured by an open PR. */
@@ -210,6 +233,8 @@ export interface PrContext {
   headSha: string;
   compareRef: string;
   comments: PrComment[];
+  /** The review threads the inline comments form, with GitHub's state of each. */
+  threads: PrThread[];
 }
 
 /** One row of the pull-request list: enough to recognise, search and choose between. */
@@ -433,6 +458,10 @@ export const gitApi = {
   /** Submits a GitHub review — approve, comment, or request changes — through `gh`. */
   submitPrReview: (args: { pr: PrContext; verdict: ReviewVerdict; body: string }) =>
     invoke<PostedPrComment>("submit_pr_review", { ...args }),
+
+  /** Resolves a review thread on GitHub, or reopens one, answering with its new state. */
+  setPrThreadResolved: (args: { pr: PrContext; threadId: string; resolved: boolean }) =>
+    invoke<PrThread>("set_pr_thread_resolved", { ...args }),
 
   /** Loads GitHub's auth-protected Markdown attachments for desktop rendering. */
   getGitHubImage: (url: string) => invoke<GitHubImage>("get_github_image", { url }),

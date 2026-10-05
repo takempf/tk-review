@@ -30,8 +30,33 @@ pub struct PrComment {
     pub body: String,
     pub created_at: String,
     pub path: Option<String>,
+    /// The new-file line an inline comment anchors to, the last for a span, or
+    /// `None` for a comment on a file as a whole. An outdated comment's lines
+    /// are where it was made, on a commit since replaced.
     pub line: Option<u32>,
+    /// Where a span starts; `None` for a single line.
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    /// The lines it was made on have changed since, so GitHub no longer shows
+    /// it in the diff.
     pub outdated: bool,
+}
+
+/// A conversation GitHub keeps on a line or file of the diff: an inline
+/// comment and the replies to it. Its comments themselves are in
+/// `PrContext::comments`, by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrThread {
+    /// GraphQL's node id, which resolving the thread takes.
+    pub id: String,
+    pub resolved: bool,
+    /// Who resolved it, while it is.
+    pub resolved_by: Option<String>,
+    pub outdated: bool,
+    /// Its comments' ids, as `PrComment::id` has them, oldest first: the first
+    /// one started it.
+    pub comment_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +76,27 @@ pub struct PrContext {
     pub head_sha: String,
     pub compare_ref: String,
     pub comments: Vec<PrComment>,
+    /// The review threads the inline comments form, with GitHub's state of each.
+    #[serde(default)]
+    pub threads: Vec<PrThread>,
+}
+
+impl PrContext {
+    /// The review thread a comment posted at `url` started or joined. `None`
+    /// for a top-level comment, which GitHub keeps no thread for, or one that
+    /// was posted since the PR was last read.
+    pub fn thread_for(&self, url: &str) -> Option<&PrThread> {
+        let id = review_comment_id(url)?;
+        self.threads
+            .iter()
+            .find(|thread| thread.comment_ids.contains(&id))
+    }
+}
+
+/// The id a review comment's permalink ends in: `…/pull/7#discussion_r<id>`.
+/// A top-level comment's ends `#issuecomment-<id>` instead.
+pub fn review_comment_id(url: &str) -> Option<u64> {
+    url.rsplit_once("#discussion_r")?.1.parse().ok()
 }
 
 /// One row of the pull-request list: enough to recognise, search and choose
@@ -254,6 +300,9 @@ struct GhAuthor {
     login: String,
 }
 
+/// A comment as REST lists it. Inline ones carry two sets of lines: where they
+/// sit on the PR's head now, `null` once those lines have changed, and where
+/// they were made.
 #[derive(Debug, Deserialize)]
 struct GhComment {
     id: u64,
@@ -265,7 +314,94 @@ struct GhComment {
     #[serde(default)]
     line: Option<u32>,
     #[serde(default)]
-    outdated: bool,
+    start_line: Option<u32>,
+    #[serde(default)]
+    original_line: Option<u32>,
+    #[serde(default)]
+    original_start_line: Option<u32>,
+}
+
+/// A page of a PR's review threads, as GraphQL reads them.
+#[derive(Debug, Deserialize)]
+struct GhThreadsResponse {
+    data: Option<GhThreadsData>,
+    #[serde(default)]
+    errors: Vec<GhGraphError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhThreadsData {
+    repository: Option<GhThreadsRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhThreadsRepository {
+    pull_request: Option<GhThreadsPr>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhThreadsPr {
+    review_threads: GhNodes<GhThread>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhNodes<T> {
+    nodes: Vec<T>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhThread {
+    id: String,
+    is_resolved: bool,
+    is_outdated: bool,
+    /// `null` while it is open, and for an account since deleted.
+    resolved_by: Option<GhAuthor>,
+    comments: GhNodes<GhThreadComment>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhThreadComment {
+    /// The id REST knows the comment by; GraphQL can leave it `null`.
+    database_id: Option<u64>,
+}
+
+impl From<GhThread> for PrThread {
+    fn from(thread: GhThread) -> Self {
+        Self {
+            id: thread.id,
+            resolved: thread.is_resolved,
+            resolved_by: thread.resolved_by.map(|author| author.login),
+            outdated: thread.is_outdated,
+            comment_ids: thread
+                .comments
+                .nodes
+                .into_iter()
+                .filter_map(|comment| comment.database_id)
+                .collect(),
+        }
+    }
+}
+
+/// What resolving or reopening a thread answers with.
+#[derive(Debug, Deserialize)]
+struct GhThreadChangeResponse {
+    data: Option<GhThreadChangeData>,
+    #[serde(default)]
+    errors: Vec<GhGraphError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhThreadChangeData {
+    change: Option<GhThreadChange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhThreadChange {
+    thread: GhThread,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,7 +502,7 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
         &pr.base_ref_name,
         keep,
     )?;
-    let comments = read_comments(&reference)?;
+    let (comments, threads) = read_discussion(&reference)?;
     Ok(PrContext {
         url: pr.url,
         number: pr.number,
@@ -381,6 +517,7 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
         head_sha,
         compare_ref,
         comments,
+        threads,
     })
 }
 
@@ -781,35 +918,55 @@ fn explain_pending_review(error: GitError, reference: &PrRef) -> GitError {
     }
 }
 
-fn read_comments(reference: &PrRef) -> Result<Vec<PrComment>, GitError> {
-    let endpoint = format!(
-        "repos/{}/{}/pulls/{}/comments",
-        reference.owner, reference.repo, reference.number
-    );
-    let inline = parse_comments(&run_gh(&[
-        "api",
-        "--hostname",
-        &reference.host,
-        &endpoint,
-        "--paginate",
-        "--slurp",
-    ])?)?;
-    let endpoint = format!(
-        "repos/{}/{}/issues/{}/comments",
-        reference.owner, reference.repo, reference.number
-    );
-    let top_level = parse_comments(&run_gh(&[
-        "api",
-        "--hostname",
-        &reference.host,
-        &endpoint,
-        "--paginate",
-        "--slurp",
-    ])?)?;
-    let mut comments = inline;
-    comments.extend(top_level);
+/// Everything said on the PR: its comments, top-level and inline, oldest first,
+/// and the review threads the inline ones form. Three reads of GitHub, made at
+/// once rather than one after another.
+fn read_discussion(reference: &PrRef) -> Result<(Vec<PrComment>, Vec<PrThread>), GitError> {
+    let (inline, top_level, threads) = std::thread::scope(|scope| {
+        let inline = scope.spawn(|| read_comments(reference, "pulls"));
+        let top_level = scope.spawn(|| read_comments(reference, "issues"));
+        let threads = read_threads(reference);
+        let joined = |read: std::thread::ScopedJoinHandle<'_, _>| {
+            read.join().unwrap_or_else(|_| {
+                Err(GitError::Command(
+                    "Reading the pull request's comments stopped unexpectedly.".into(),
+                ))
+            })
+        };
+        (joined(inline), joined(top_level), threads)
+    });
+    let threads = threads?;
+    let mut comments = inline?;
+    for comment in &mut comments {
+        // GitHub's own word on which threads are outdated, over the guess from
+        // a comment's lines.
+        if let Some(thread) = threads
+            .iter()
+            .find(|thread| thread.comment_ids.contains(&comment.id))
+        {
+            comment.outdated = thread.outdated;
+        }
+    }
+    comments.extend(top_level?);
     comments.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
-    Ok(comments)
+    Ok((comments, threads))
+}
+
+/// One kind of comment, every page of it: `pulls` for inline comments,
+/// `issues` for top-level ones.
+fn read_comments(reference: &PrRef, kind: &str) -> Result<Vec<PrComment>, GitError> {
+    let endpoint = format!(
+        "repos/{}/{}/{kind}/{}/comments",
+        reference.owner, reference.repo, reference.number
+    );
+    parse_comments(&run_gh(&[
+        "api",
+        "--hostname",
+        &reference.host,
+        &endpoint,
+        "--paginate",
+        "--slurp",
+    ])?)
 }
 
 fn parse_comments(raw: &[u8]) -> Result<Vec<PrComment>, GitError> {
@@ -835,17 +992,140 @@ fn parse_comments(raw: &[u8]) -> Result<Vec<PrComment>, GitError> {
         let page: Vec<GhComment> = serde_json::from_value(page).map_err(|error| {
             GitError::Command(format!("Could not parse a pull request comment: {error}"))
         })?;
-        all.extend(page.into_iter().map(|comment| PrComment {
-            id: comment.id,
-            author: comment.user.login,
-            body: comment.body,
-            created_at: comment.created_at,
-            path: comment.path,
-            line: comment.line,
-            outdated: comment.outdated,
+        all.extend(page.into_iter().map(|comment| {
+            // Once its lines change, a comment has no place on the head, and
+            // is shown where it was made.
+            let current = comment.line.is_some();
+            PrComment {
+                id: comment.id,
+                author: comment.user.login,
+                body: comment.body,
+                created_at: comment.created_at,
+                path: comment.path,
+                line: comment.line.or(comment.original_line),
+                start_line: if current {
+                    comment.start_line
+                } else {
+                    comment.original_start_line
+                },
+                outdated: !current && comment.original_line.is_some(),
+            }
         }));
         Ok(all)
     })
+}
+
+/// What a review thread is read as, by `read_threads` and by the mutations
+/// that resolve and reopen one. A thread past its hundredth comment loses the
+/// rest of their ids, never the first, which is the one a posted finding is.
+const THREAD_FIELDS: &str =
+    "id isResolved isOutdated resolvedBy { login } comments(first: 100) { nodes { databaseId } }";
+
+/// The PR's review threads, every page of them.
+fn read_threads(reference: &PrRef) -> Result<Vec<PrThread>, GitError> {
+    let query = format!(
+        "query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {{ \
+         repository(owner: $owner, name: $name) {{ pullRequest(number: $number) {{ \
+         reviewThreads(first: 100, after: $endCursor) {{ \
+         pageInfo {{ hasNextPage endCursor }} nodes {{ {THREAD_FIELDS} }} }} }} }} }}"
+    );
+    let owner = format!("owner={}", reference.owner);
+    let name = format!("name={}", reference.repo);
+    let number = format!("number={}", reference.number);
+    let query = format!("query={query}");
+    parse_threads(&run_gh(&[
+        "api",
+        "graphql",
+        "--hostname",
+        &reference.host,
+        "--paginate",
+        "--slurp",
+        "-f",
+        &owner,
+        "-f",
+        &name,
+        "-F",
+        &number,
+        "-f",
+        &query,
+    ])?)
+}
+
+fn parse_threads(raw: &[u8]) -> Result<Vec<PrThread>, GitError> {
+    let unreadable = |error: serde_json::Error| {
+        GitError::Command(format!(
+            "Could not read the review threads from gh: {error}"
+        ))
+    };
+    // `--slurp` makes an array of the pages; one page on its own is an object.
+    let pages: Vec<GhThreadsResponse> = match serde_json::from_slice(raw).map_err(unreadable)? {
+        serde_json::Value::Array(pages) => pages
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .map_err(unreadable)?,
+        page => vec![serde_json::from_value(page).map_err(unreadable)?],
+    };
+    let mut threads = Vec::new();
+    for page in pages {
+        if let Some(error) = page.errors.first() {
+            return Err(GitError::Command(format!("GitHub said: {}", error.message)));
+        }
+        let pr = page
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repository| repository.pull_request)
+            .ok_or_else(|| GitError::Command("gh returned no review threads.".into()))?;
+        threads.extend(pr.review_threads.nodes.into_iter().map(PrThread::from));
+    }
+    Ok(threads)
+}
+
+/// Resolves a review thread on GitHub, or with `resolved: false` reopens one,
+/// and answers with the thread as it then stands.
+pub fn set_thread_resolved(
+    pr: &PrContext,
+    thread_id: &str,
+    resolved: bool,
+) -> Result<PrThread, GitError> {
+    let reference = parse_pr_ref(&pr.url)?;
+    let mutation = if resolved {
+        "resolveReviewThread"
+    } else {
+        "unresolveReviewThread"
+    };
+    let query = format!(
+        "query=mutation($id: ID!) {{ change: {mutation}(input: {{ threadId: $id }}) {{ \
+         thread {{ {THREAD_FIELDS} }} }} }}"
+    );
+    let id = format!("id={thread_id}");
+    let raw = run_gh(&[
+        "api",
+        "graphql",
+        "--hostname",
+        &reference.host,
+        "-f",
+        &id,
+        "-f",
+        &query,
+    ])?;
+    parse_thread_change(&raw)
+}
+
+fn parse_thread_change(raw: &[u8]) -> Result<PrThread, GitError> {
+    let response: GhThreadChangeResponse = serde_json::from_slice(raw).map_err(|error| {
+        GitError::Command(format!(
+            "GitHub changed the thread but returned unreadable JSON: {error}"
+        ))
+    })?;
+    if let Some(error) = response.errors.first() {
+        return Err(GitError::Command(format!("GitHub said: {}", error.message)));
+    }
+    response
+        .data
+        .and_then(|data| data.change)
+        .map(|change| change.thread.into())
+        .ok_or_else(|| GitError::Command("GitHub returned no thread.".into()))
 }
 
 fn pr_target(reference: &PrRef) -> String {
@@ -1118,6 +1398,7 @@ mod tests {
             head_sha: "abc123".into(),
             compare_ref: "tk-review/pr/7".into(),
             comments: Vec::new(),
+            threads: Vec::new(),
         };
         for verdict in [PrReviewVerdict::Comment, PrReviewVerdict::RequestChanges] {
             let err = submit_pr_review(&pr, verdict, "  ").expect_err("needs a body");
@@ -1184,6 +1465,125 @@ mod tests {
         let raw = br#"{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"#;
         let err = parse_pr_page(raw).expect_err("an error");
         assert!(err.to_string().contains("Could not resolve"), "{err}");
+    }
+
+    #[test]
+    fn reads_review_threads_across_every_page() {
+        let raw = br#"[
+          {"data":{"repository":{"pullRequest":{"reviewThreads":{
+            "pageInfo":{"hasNextPage":true,"endCursor":"a"},
+            "nodes":[{"id":"T1","isResolved":true,"isOutdated":false,"resolvedBy":{"login":"mona"},
+                      "comments":{"nodes":[{"databaseId":11},{"databaseId":12}]}}]}}}}},
+          {"data":{"repository":{"pullRequest":{"reviewThreads":{
+            "pageInfo":{"hasNextPage":false,"endCursor":"b"},
+            "nodes":[{"id":"T2","isResolved":false,"isOutdated":true,"resolvedBy":null,
+                      "comments":{"nodes":[{"databaseId":21},{"databaseId":null}]}}]}}}}}
+        ]"#;
+        let threads = parse_threads(raw).expect("threads");
+        assert_eq!(
+            threads,
+            [
+                PrThread {
+                    id: "T1".into(),
+                    resolved: true,
+                    resolved_by: Some("mona".into()),
+                    outdated: false,
+                    comment_ids: vec![11, 12],
+                },
+                // A comment GraphQL gives no id has nothing to match, so it is left out.
+                PrThread {
+                    id: "T2".into(),
+                    resolved: false,
+                    resolved_by: None,
+                    outdated: true,
+                    comment_ids: vec![21],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_thread_read_reports_what_github_said() {
+        let raw = br#"[{"data":null,"errors":[{"message":"Could not resolve to a PullRequest"}]}]"#;
+        let err = parse_threads(raw).expect_err("an error");
+        assert!(err.to_string().contains("Could not resolve"), "{err}");
+    }
+
+    #[test]
+    fn reads_a_thread_back_from_resolving_it() {
+        let raw = br#"{"data":{"change":{"thread":{"id":"T1","isResolved":true,"isOutdated":false,
+            "resolvedBy":{"login":"me"},"comments":{"nodes":[{"databaseId":11}]}}}}}"#;
+        let thread = parse_thread_change(raw).expect("thread");
+        assert!(thread.resolved);
+        assert_eq!(thread.resolved_by.as_deref(), Some("me"));
+
+        let refused =
+            br#"{"data":{"change":null},"errors":[{"message":"Resource not accessible"}]}"#;
+        let err = parse_thread_change(refused).expect_err("refused");
+        assert!(err.to_string().contains("Resource not accessible"), "{err}");
+    }
+
+    /// REST drops a comment's current lines once they change; it is shown
+    /// where it was made instead.
+    #[test]
+    fn an_outdated_comment_keeps_the_lines_it_was_made_on() {
+        let raw = br#"[[
+          {"id":1,"body":"span","created_at":"t","user":{"login":"a"},"path":"a.ts",
+           "line":18,"start_line":12,"original_line":9,"original_start_line":3},
+          {"id":2,"body":"moved on","created_at":"t","user":{"login":"a"},"path":"a.ts",
+           "line":null,"start_line":null,"original_line":40,"original_start_line":38},
+          {"id":3,"body":"whole file","created_at":"t","user":{"login":"a"},"path":"a.ts",
+           "line":null,"start_line":null,"original_line":null,"original_start_line":null}
+        ]]"#;
+        let comments = parse_comments(raw).expect("comments");
+        let lines = |comment: &PrComment| (comment.start_line, comment.line, comment.outdated);
+        assert_eq!(lines(&comments[0]), (Some(12), Some(18), false));
+        assert_eq!(lines(&comments[1]), (Some(38), Some(40), true));
+        assert_eq!(lines(&comments[2]), (None, None, false));
+    }
+
+    #[test]
+    fn finds_the_thread_a_posted_comment_belongs_to() {
+        assert_eq!(
+            review_comment_id("https://github.com/acme/widgets/pull/7#discussion_r4168342556"),
+            Some(4168342556)
+        );
+        assert_eq!(
+            review_comment_id("https://github.com/acme/widgets/pull/7#issuecomment-99"),
+            None
+        );
+
+        let thread = PrThread {
+            id: "T1".into(),
+            resolved: false,
+            resolved_by: None,
+            outdated: false,
+            comment_ids: vec![5, 6],
+        };
+        let pr = PrContext {
+            url: "https://github.com/acme/widgets/pull/7".into(),
+            number: 7,
+            title: String::new(),
+            body: String::new(),
+            author: "octo".into(),
+            state: "open".into(),
+            is_draft: false,
+            base_ref: "main".into(),
+            base_remote: "origin".into(),
+            head_ref: "topic".into(),
+            head_sha: "abc".into(),
+            compare_ref: "tk-review/pr/7".into(),
+            comments: Vec::new(),
+            threads: vec![thread.clone()],
+        };
+        assert_eq!(
+            pr.thread_for("https://github.com/acme/widgets/pull/7#discussion_r5"),
+            Some(&thread)
+        );
+        assert_eq!(
+            pr.thread_for("https://github.com/acme/widgets/pull/7#discussion_r9"),
+            None
+        );
     }
 
     #[test]

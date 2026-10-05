@@ -12,7 +12,7 @@ use crate::error::GitError;
 use crate::git::{self, Branch, CommitLog, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
     self, PostedPrComment, PrCommentDestination, PrContext, PrListFilter, PrPage, PrReviewVerdict,
-    RefreshPrResult,
+    PrThread, RefreshPrResult,
 };
 use crate::models::{self, EngineModels};
 use crate::review::{
@@ -118,6 +118,16 @@ pub async fn submit_pr_review(
     body: String,
 ) -> Result<PostedPrComment, GitError> {
     blocking(move || github::submit_pr_review(&pr, verdict, &body)).await
+}
+
+/// Resolves a review thread on GitHub, or reopens one, through `gh`.
+#[tauri::command]
+pub async fn set_pr_thread_resolved(
+    pr: PrContext,
+    thread_id: String,
+    resolved: bool,
+) -> Result<PrThread, GitError> {
+    blocking(move || github::set_thread_resolved(&pr, &thread_id, resolved)).await
 }
 
 /// Loads a GitHub-hosted Markdown attachment through the user's authenticated
