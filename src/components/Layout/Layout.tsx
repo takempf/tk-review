@@ -51,16 +51,16 @@ function useStoredShown(storageKey: string) {
     }
   });
 
-  const toggle = () => {
-    setShown(!shown);
+  const show = (next: boolean) => {
+    setShown(next);
     try {
-      localStorage.setItem(storageKey, String(!shown));
+      localStorage.setItem(storageKey, String(next));
     } catch {
       // An unavailable localStorage shouldn't stop the panel from toggling.
     }
   };
 
-  return { shown, toggle };
+  return { shown, toggle: () => show(!shown), show };
 }
 
 /**
@@ -186,11 +186,24 @@ interface LayoutProps {
   main: ReactNode;
   /** Third column to the right of the diff surface; omitted, the grid stays two columns. */
   aside?: ReactNode;
+  /**
+   * Changes whenever something asks for the aside, which brings it back if it
+   * was hidden: what it was asked for is there to read.
+   */
+  revealAside?: number;
   error: AppError | null;
   onDismissError: () => void;
 }
 
-export function Layout({ header, sidebar, main, aside, error, onDismissError }: LayoutProps) {
+export function Layout({
+  header,
+  sidebar,
+  main,
+  aside,
+  revealAside,
+  error,
+  onDismissError,
+}: LayoutProps) {
   const sidebarWidth = useStoredSize(SIDEBAR);
   const asideWidth = useStoredSize(ASIDE);
   const sidebarShown = useStoredShown("tk-review:sidebar-shown");
@@ -203,6 +216,14 @@ export function Layout({ header, sidebar, main, aside, error, onDismissError }: 
   const asideRef = useRef<HTMLElement>(null);
   const sidebarId = useId();
   const asideId = useId();
+
+  const revealed = useRef(revealAside);
+  const showAside = asideShown.show;
+  useEffect(() => {
+    if (revealAside === revealed.current) return;
+    revealed.current = revealAside;
+    showAside(true);
+  }, [revealAside, showAside]);
 
   // Each panel is its stored width unless the window can't hold both plus a
   // usable diff. The review panel yields first — the diff is the point — and

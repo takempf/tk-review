@@ -4,15 +4,19 @@ import {
   type CodeViewHandle,
   type CodeViewItem,
   type CodeViewReactOptions,
+  type DiffLineAnnotation,
   type FileDiffContentsLoader,
 } from "@pierre/diffs/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox, Icon, Toggle, ToggleGroup } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
+import { describeLines } from "../../lib/lineSpan";
+import { type CommentAnchor, inlineDiscussion } from "../../lib/prThreads";
 import { useScreenSettled } from "../../lib/screenTransition";
 import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, useAppStore } from "../../store/appStore";
 import { reviewsWorkingTree, useTab } from "../../store/tabStore";
+import { Author, githubHost } from "../Author/Author";
 import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffSurface.module.css";
@@ -170,6 +174,94 @@ function useFileNotes() {
 
 const NO_NOTES = new Map<string, string>();
 
+/**
+ * What an annotation in the diff stands for: a file's note, or the PR's
+ * comments at one place in it, by the key `inlineDiscussion` gives the place.
+ * Only the key, so the comments themselves are always the latest read.
+ */
+type DiffAnnotation = { kind: "note" } | { kind: "comments"; key: string };
+
+/**
+ * Where the PR's comments go on each file, by path: every place GitHub still
+ * shows them. Outdated ones were made on lines the diff no longer has, so
+ * they are only in the PR tab.
+ */
+function useCommentAnchors() {
+  const pr = useTab((state) => state.pr);
+  return useMemo(() => {
+    const byPath = new Map<string, CommentAnchor[]>();
+    for (const file of pr ? inlineDiscussion(pr) : []) {
+      const placed = file.anchors.filter((anchor) => !anchor.outdated);
+      if (placed.length > 0) byPath.set(file.path, placed);
+    }
+    return { anchors: byPath, host: githubHost(pr?.url) };
+  }, [pr]);
+}
+
+const NAMES = new Intl.ListFormat("en", { type: "conjunction" });
+
+/**
+ * The PR's comments at a place in a file, under the line they end on, or at
+ * the top for the file as a whole: a byline of how much was said and who by,
+ * each person as the PR tab shows them. It names two at most, to stay on one
+ * line in a split diff; the tooltip has everyone. Pressing it opens the
+ * conversation in the review panel's PR tab.
+ */
+function CommentMarker({
+  path,
+  anchor,
+  host,
+}: {
+  path: string;
+  anchor: CommentAnchor;
+  host: string;
+}) {
+  const showComments = useTab((state) => state.showComments);
+  const comments = anchor.threads.flatMap((conversation) => conversation.comments);
+  const people = [...new Set(comments.map((comment) => comment.author))];
+  const resolved = anchor.threads.every((conversation) => conversation.thread?.resolved);
+  const count = `${comments.length} ${comments.length === 1 ? "comment" : "comments"}`;
+  const where = anchor.lines ? describeLines(anchor.lines) : "this file";
+  const label = `${count} on ${where} by ${NAMES.format(people)}${resolved ? ", resolved" : ""}. Show in the PR tab.`;
+  const [first, second] = people;
+  return (
+    <button
+      type="button"
+      className={css.commentMarker}
+      data-resolved={resolved || undefined}
+      onClick={() => showComments(path, anchor.key)}
+      aria-label={label}
+      title={label}
+    >
+      <span>{count} by</span>
+      {first ? <Author login={first} host={host} className={css.commentAuthor} /> : null}
+      {people.length > 2 ? <span>and {people.length - 1} others</span> : null}
+      {people.length === 2 && second ? (
+        <>
+          <span>and</span>
+          <Author login={second} host={host} className={css.commentAuthor} />
+        </>
+      ) : null}
+      {resolved ? <span className={css.commentResolved}>resolved</span> : null}
+    </button>
+  );
+}
+
+/**
+ * A number for CodeView's `version` from everything that shapes an item. It
+ * re-renders an item only when the version differs from the one it last had,
+ * so any number that changes along with the item will do; a hash of its shape
+ * is one, with no count of changes to keep. FNV-1a, 32-bit.
+ */
+function versionOf(shape: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < shape.length; index++) {
+    hash ^= shape.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
 /** Preloads the themes once so the first paint is not an empty surface. */
 function useThemesReady(start: boolean): boolean {
   const [ready, setReady] = useState(false);
@@ -211,8 +303,9 @@ function DiffSurfaceInner() {
   const toggleViewed = useTab((state) => state.toggleViewed);
   const expandFile = useTab((state) => state.expandFile);
   const { notes, hasNotes, stale } = useFileNotes();
+  const { anchors, host } = useCommentAnchors();
 
-  const viewRef = useRef<CodeViewHandle<undefined>>(null);
+  const viewRef = useRef<CodeViewHandle<DiffAnnotation>>(null);
   // Parsing, highlighting and laying out the diff is the heaviest work in the
   // app, all on the main thread. Arriving with the review screen, it waits for
   // the screen's transition to land rather than freezing it halfway.
@@ -239,7 +332,7 @@ function DiffSurfaceInner() {
   //
   // Binary files are left out: there is no text to diff, and including them makes
   // the renderer ask the loader below for contents it cannot supply.
-  const items = useMemo<CodeViewItem<undefined>[]>(() => {
+  const items = useMemo<CodeViewItem<DiffAnnotation>[]>(() => {
     if (!settled || !patch || !mergeBase || !compare) return [];
     const files = summary?.files ?? [];
     const binaryPaths = new Set(files.filter((file) => file.isBinary).map((file) => file.path));
@@ -255,27 +348,59 @@ function DiffSurfaceInner() {
         // already. Either way an explicit open wins.
         const startsClosed = generatedPaths.has(fileDiff.name) || viewed.has(fileDiff.name);
         const collapsed = startsClosed && !expanded.has(fileDiff.name);
-        const noted = notes.has(fileDiff.name);
+        // A file-level annotation (line 0) sits above the first hunk, on the
+        // side it describes: the note goes there, and comments on the file as
+        // a whole. Comments on lines go under the last of them, on their side.
+        // What each says comes from `renderAnnotation`, so a new explanation,
+        // or a reply on GitHub, only has to re-render it.
+        const top = fileDiff.type === "deleted" ? "deletions" : "additions";
+        const annotations: DiffLineAnnotation<DiffAnnotation>[] = [];
+        if (notes.has(fileDiff.name)) {
+          annotations.push({ side: top, lineNumber: 0, metadata: { kind: "note" } });
+        }
+        for (const { key, lines } of anchors.get(fileDiff.name) ?? []) {
+          annotations.push({
+            side: lines?.side ?? top,
+            lineNumber: lines?.end ?? 0,
+            metadata: { kind: "comments", key },
+          });
+        }
         return {
           id: fileDiff.name,
           type: "diff" as const,
           fileDiff,
           collapsed,
-          // A file-level annotation (line 0) is where the note goes: above the
-          // first hunk, on the side it describes. Its text comes from
-          // `renderAnnotation`, so a new explanation only has to re-render it.
-          annotations: noted
-            ? [{ side: fileDiff.type === "deleted" ? "deletions" : "additions", lineNumber: 0 }]
-            : undefined,
+          annotations: annotations.length > 0 ? annotations : undefined,
           // Signals to CodeView that the item's own state changed, not just the
           // surrounding list. Each part matters: the item is re-rendered when it
-          // opens or closes, when its note comes or goes, and when a reload
-          // brought different contents for the same path — which is what a file
-          // id alone cannot express.
-          version: diffLoadId * 4 + (collapsed ? 0 : 2) + (noted ? 1 : 0),
+          // opens or closes, when its annotations come, go or move, and when a
+          // reload brought different contents for the same path — which is
+          // what a file id alone cannot express.
+          version: versionOf(
+            [
+              diffLoadId,
+              collapsed,
+              ...annotations.map(
+                ({ side, lineNumber, metadata }) =>
+                  `${side}:${lineNumber}:${metadata.kind === "note" ? "note" : metadata.key}`,
+              ),
+            ].join(" "),
+          ),
         };
       });
-  }, [settled, patch, mergeBase, compare, revision, diffLoadId, summary, viewed, expanded, notes]);
+  }, [
+    settled,
+    patch,
+    mergeBase,
+    compare,
+    revision,
+    diffLoadId,
+    summary,
+    viewed,
+    expanded,
+    notes,
+    anchors,
+  ]);
 
   /**
    * Supplies whole-file contents when the reader expands context past what the
@@ -313,7 +438,7 @@ function DiffSurfaceInner() {
 
   // CodeView treats its options as the single source of truth for every item, so
   // this object must stay stable rather than being rebuilt per file.
-  const options = useMemo<CodeViewReactOptions<undefined>>(
+  const options = useMemo<CodeViewReactOptions<DiffAnnotation>>(
     () => ({
       diffStyle: layout,
       theme: DIFF_THEME,
@@ -347,7 +472,7 @@ function DiffSurfaceInner() {
     // patch has been parsed.
     const item = items.find((entry) => entry.id === selectedPath);
     if (!item) return;
-    const selection = `${selectionTick}:${selectedPath}:${selectedLines ? `${selectedLines.start}-${selectedLines.end}` : ""}`;
+    const selection = `${selectionTick}:${selectedPath}:${selectedLines ? `${selectedLines.side}:${selectedLines.start}-${selectedLines.end}` : ""}`;
     if (openedFor.current === selection) return;
 
     // A collapsed file has no lines laid out, so opening it has to land before
@@ -364,11 +489,12 @@ function DiffSurfaceInner() {
       view?.clearSelectedLines();
       const target = { type: "item", id: selectedPath, align: "start" } as const;
       view?.scrollTo(target);
-      // A file's note is only measured once the file renders, and CodeView
-      // then keeps the first line where the jump put it, which slides the
-      // note up under the sticky header. Going again once it has been
-      // measured lands on the header, note in view.
-      if (item.annotations) {
+      // What sits at the top of a file — its note, comments on it as a whole
+      // — is only measured once the file renders, and CodeView then keeps the
+      // first line where the jump put it, which slides it up under the sticky
+      // header. Going again once it has been measured lands on the header,
+      // all of it in view.
+      if (item.annotations?.some((annotation) => annotation.lineNumber === 0)) {
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             if (openedFor.current === selection) viewRef.current?.scrollTo(target);
@@ -377,13 +503,10 @@ function DiffSurfaceInner() {
       }
       return;
     }
-    // Findings anchor to new-file line numbers.
-    const range = {
-      start: selectedLines.start,
-      end: selectedLines.end,
-      side: "additions",
-      endSide: "additions",
-    } as const;
+    // Findings anchor to new-file line numbers; a comment on the old side
+    // counts the base's.
+    const side = selectedLines.side ?? "additions";
+    const range = { start: selectedLines.start, end: selectedLines.end, side, endSide: side };
     view?.setSelectedLines({ id: selectedPath, range });
     // Centred when it fits; a span taller than the view lands on its start.
     view?.scrollTo({ type: "range", id: selectedPath, range, align: "center" });
@@ -434,10 +557,13 @@ function DiffSurfaceInner() {
               </Checkbox>
             </span>
           )}
-          // The only annotations are file notes, one per file at most.
-          renderAnnotation={(_annotation, item) => {
-            const note = notes.get(item.id);
-            return note ? <FileNote note={note} stale={stale} /> : null;
+          renderAnnotation={({ metadata }, item) => {
+            if (metadata.kind === "note") {
+              const note = notes.get(item.id);
+              return note ? <FileNote note={note} stale={stale} /> : null;
+            }
+            const anchor = anchors.get(item.id)?.find(({ key }) => key === metadata.key);
+            return anchor ? <CommentMarker path={item.id} anchor={anchor} host={host} /> : null;
           }}
         />
       ) : (

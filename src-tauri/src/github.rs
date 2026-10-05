@@ -30,13 +30,18 @@ pub struct PrComment {
     pub body: String,
     pub created_at: String,
     pub path: Option<String>,
-    /// The new-file line an inline comment anchors to, the last for a span, or
-    /// `None` for a comment on a file as a whole. An outdated comment's lines
-    /// are where it was made, on a commit since replaced.
+    /// The line an inline comment anchors to, the last for a span, or `None`
+    /// for a comment on a file as a whole: the new file's, unless `old_side`
+    /// says otherwise. An outdated comment's lines are where it was made, on a
+    /// commit since replaced.
     pub line: Option<u32>,
     /// Where a span starts; `None` for a single line.
     #[serde(default)]
     pub start_line: Option<u32>,
+    /// The lines are numbered as the base has them, on the diff's old side: a
+    /// deleted line, or an unchanged one commented on from that side.
+    #[serde(default)]
+    pub old_side: bool,
     /// The lines it was made on have changed since, so GitHub no longer shows
     /// it in the diff.
     pub outdated: bool,
@@ -319,6 +324,9 @@ struct GhComment {
     original_line: Option<u32>,
     #[serde(default)]
     original_start_line: Option<u32>,
+    /// `LEFT` for the diff's old side, `RIGHT` for its new one.
+    #[serde(default)]
+    side: Option<String>,
 }
 
 /// A page of a PR's review threads, as GraphQL reads them.
@@ -1008,6 +1016,7 @@ fn parse_comments(raw: &[u8]) -> Result<Vec<PrComment>, GitError> {
                 } else {
                     comment.original_start_line
                 },
+                old_side: comment.side.as_deref() == Some("LEFT"),
                 outdated: !current && comment.original_line.is_some(),
             }
         }));
@@ -1540,6 +1549,21 @@ mod tests {
         assert_eq!(lines(&comments[0]), (Some(12), Some(18), false));
         assert_eq!(lines(&comments[1]), (Some(38), Some(40), true));
         assert_eq!(lines(&comments[2]), (None, None, false));
+    }
+
+    /// A comment on a deleted line counts it as the base does.
+    #[test]
+    fn a_comment_on_the_old_side_says_so() {
+        let raw = br#"[[
+          {"id":1,"body":"why drop this?","created_at":"t","user":{"login":"a"},"path":"a.ts",
+           "line":7,"original_line":7,"side":"LEFT"},
+          {"id":2,"body":"new","created_at":"t","user":{"login":"a"},"path":"a.ts",
+           "line":7,"original_line":7,"side":"RIGHT"},
+          {"id":3,"body":"top level","created_at":"t","user":{"login":"a"}}
+        ]]"#;
+        let comments = parse_comments(raw).expect("comments");
+        let sides: Vec<bool> = comments.iter().map(|comment| comment.old_side).collect();
+        assert_eq!(sides, [true, false, false]);
     }
 
     #[test]

@@ -653,6 +653,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: null,
       line: null,
       startLine: null,
+      oldSide: false,
       outdated: false,
     },
     // Vercel's deployment table, as its bot posts it: inline avatars and status
@@ -675,6 +676,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: null,
       line: null,
       startLine: null,
+      oldSide: false,
       outdated: false,
     },
     // Linear's linkback, as its bot posts it: the whole issue folded into a
@@ -704,6 +706,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: null,
       line: null,
       startLine: null,
+      oldSide: false,
       outdated: false,
     },
     {
@@ -714,6 +717,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "migrations/0007_add_reviews_table.sql",
       line: 6,
       startLine: null,
+      oldSide: false,
       outdated: false,
     },
     {
@@ -724,6 +728,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "src/components/DiffViewer/DiffViewer.tsx",
       line: 11,
       startLine: null,
+      oldSide: false,
       outdated: true,
     },
     // A span, answered, then a second conversation started on the same span.
@@ -735,6 +740,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "src/components/DiffViewer/DiffViewer.tsx",
       line: 9,
       startLine: 4,
+      oldSide: false,
       outdated: false,
     },
     {
@@ -745,6 +751,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "src/components/DiffViewer/DiffViewer.tsx",
       line: 9,
       startLine: 4,
+      oldSide: false,
       outdated: false,
     },
     {
@@ -755,6 +762,19 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "src/components/DiffViewer/DiffViewer.tsx",
       line: 9,
       startLine: 4,
+      oldSide: false,
+      outdated: false,
+    },
+    // On a line the PR deletes, counted as the base has it.
+    {
+      id: 110,
+      author: "reviewer",
+      body: "Was anything else reading `contents`? Worth a search before it goes.",
+      createdAt: "2026-08-06T18:45:00Z",
+      path: "src/components/DiffViewer/DiffViewer.tsx",
+      line: 6,
+      startLine: null,
+      oldSide: true,
       outdated: false,
     },
     // On the file as a whole, and resolved.
@@ -766,6 +786,7 @@ Run \`pnpm harness\` and open the pull request fixture.
       path: "src/ipc/git.ts",
       line: null,
       startLine: null,
+      oldSide: false,
       outdated: false,
     },
   ],
@@ -775,6 +796,7 @@ Run \`pnpm harness\` and open the pull request fixture.
     { id: "T106", resolved: false, resolvedBy: null, outdated: false, commentIds: [106, 107] },
     { id: "T108", resolved: false, resolvedBy: null, outdated: false, commentIds: [108] },
     { id: "T109", resolved: true, resolvedBy: "octocat", outdated: false, commentIds: [109] },
+    { id: "T110", resolved: false, resolvedBy: null, outdated: false, commentIds: [110] },
   ],
 };
 

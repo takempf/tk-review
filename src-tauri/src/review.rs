@@ -818,7 +818,8 @@ fn github_thread_note(finding: &ReviewFinding, pr: Option<&PrContext>) -> String
 }
 
 /// Where an inline comment sits, as the prompts show it: ` (src/a.rs:12-18)`,
-/// marked when those lines have changed since. Empty for a top-level comment.
+/// marked when the lines are the old file's, and when they have changed
+/// since. Empty for a top-level comment.
 fn comment_anchor(comment: &PrComment) -> String {
     let Some(path) = &comment.path else {
         return String::new();
@@ -828,8 +829,13 @@ fn comment_anchor(comment: &PrComment) -> String {
         (_, Some(line)) => format!(":{line}"),
         _ => String::new(),
     };
+    let old = if comment.old_side && comment.line.is_some() {
+        " in the old file"
+    } else {
+        ""
+    };
     let outdated = if comment.outdated { ", outdated" } else { "" };
-    format!(" ({path}{lines}{outdated})")
+    format!(" ({path}{lines}{old}{outdated})")
 }
 
 fn append_pr_context(prompt: &mut String, pr: &PrContext) {
@@ -1935,6 +1941,7 @@ mod tests {
                 path: Some("src/api.rs".into()),
                 line: Some(12),
                 start_line: None,
+                old_side: false,
                 outdated: false,
             }],
             threads: Vec::new(),
@@ -2103,6 +2110,7 @@ mod tests {
                 path: Some("src/a.ts".into()),
                 line: Some(14),
                 start_line: Some(12),
+                old_side: false,
                 outdated: true,
             },
             crate::github::PrComment {
@@ -2113,6 +2121,7 @@ mod tests {
                 path: Some("src/a.ts".into()),
                 line: Some(14),
                 start_line: Some(12),
+                old_side: false,
                 outdated: true,
             },
         ];

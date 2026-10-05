@@ -191,13 +191,19 @@ export interface PrComment {
   createdAt: string;
   path: string | null;
   /**
-   * The new-file line an inline comment anchors to, the last for a span, or
-   * `null` for one on a file as a whole. An outdated comment's lines are
-   * where it was made, on a commit since replaced.
+   * The line an inline comment anchors to, the last for a span, or `null` for
+   * one on a file as a whole: the new file's, unless `oldSide` says otherwise.
+   * An outdated comment's lines are where it was made, on a commit since
+   * replaced.
    */
   line: number | null;
   /** Where a span starts; `null` for a single line. */
   startLine: number | null;
+  /**
+   * The lines are numbered as the base has them, on the diff's old side: a
+   * deleted line, or an unchanged one commented on from that side.
+   */
+  oldSide: boolean;
   /** Its lines have changed since, so GitHub no longer shows it in the diff. */
   outdated: boolean;
 }

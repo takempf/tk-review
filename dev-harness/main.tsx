@@ -270,6 +270,7 @@ stdout:
         path,
         line: endLine ?? line,
         startLine: endLine != null ? line : null,
+        oldSide: false,
         outdated: false,
       };
       posted.comments.push(

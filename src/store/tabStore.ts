@@ -298,6 +298,12 @@ export interface TabState {
    */
   selectionTick: number;
   /**
+   * The PR comments the diff last asked the review panel to bring into view:
+   * an anchor of `inlineDiscussion`, by its file and key. `tick` makes asking
+   * for the same ones again a new request, as `selectionTick` does.
+   */
+  commentFocus: { path: string; key: string; tick: number } | null;
+  /**
    * Compare the working tree instead of the compare ref, folding staged,
    * unstaged, and untracked changes into the review. Only takes effect while the
    * compare ref is the checked-out branch — the working tree belongs to no other
@@ -379,6 +385,8 @@ export interface TabState {
    */
   revalidatePr: () => Promise<void>;
   selectFile: (path: string | null, lines?: LineSpan | null) => void;
+  /** Brings a place's PR comments into view in the review panel; see `commentFocus`. */
+  showComments: (path: string, key: string) => void;
   moveSelection: (offset: number) => void;
   setIncludeUncommitted: (include: boolean) => Promise<void>;
   toggleViewed: (path: string) => void;
@@ -717,6 +725,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       selectedPath: null,
       selectedLines: null,
       selectionTick: 0,
+      commentFocus: null,
       includeUncommitted: false,
       viewed: new Set(),
       expanded: new Set(),
@@ -885,6 +894,10 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         // the file you are already on is a request to go back to it, so it has to
         // register as a new selection rather than as no change at all.
         set({ selectedPath: path, selectedLines: lines, selectionTick: get().selectionTick + 1 });
+      },
+
+      showComments(path, key) {
+        set({ commentFocus: { path, key, tick: (get().commentFocus?.tick ?? 0) + 1 } });
       },
 
       moveSelection(offset) {

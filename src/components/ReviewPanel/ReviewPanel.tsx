@@ -29,7 +29,7 @@ import {
 } from "../../ipc/git";
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
-import { findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
+import { describeLines, findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
 import { useModelCatalogs, useModelLabel } from "../../lib/models";
 import {
   findingAfter,
@@ -273,11 +273,8 @@ function AnchorLabel({ path, anchor }: { path: string; anchor: CommentAnchor }) 
     (state) => state.summary?.files.some((file) => file.path === path) ?? false,
   );
   const { lines, outdated } = anchor;
-  const text = !lines
-    ? "Whole file"
-    : lines.end > lines.start
-      ? `Lines ${formatLines(lines)}`
-      : `Line ${lines.start}`;
+  const words = lines ? describeLines(lines) : "whole file";
+  const text = words.charAt(0).toUpperCase() + words.slice(1);
   return (
     <div className={css.anchorLabel}>
       <span className={css.anchorMark} aria-hidden="true" />
@@ -286,7 +283,7 @@ function AnchorLabel({ path, anchor }: { path: string; anchor: CommentAnchor }) 
           type="button"
           className={css.anchorLines}
           onClick={() => selectFile(path, lines)}
-          title={`Jump to ${path}${lines ? `:${formatLines(lines)}` : ""}`}
+          title={`Jump to ${path}${lines ? `, ${describeLines(lines)}` : ""}`}
         >
           {text}
         </button>
@@ -314,7 +311,7 @@ function threadMeta(thread: PrThread | null): ReactNode {
 function InlineFile({ file, host }: { file: FileDiscussion; host: string }) {
   const selectFile = useTab((state) => state.selectFile);
   return (
-    <section className={css.inlineFile}>
+    <section className={css.inlineFile} data-path={file.path}>
       <button type="button" className={css.inlinePath} onClick={() => selectFile(file.path)}>
         {file.path}
       </button>
@@ -323,6 +320,7 @@ function InlineFile({ file, host }: { file: FileDiscussion; host: string }) {
           <li
             key={anchor.key}
             className={css.anchor}
+            data-anchor={anchor.key}
             data-span={(anchor.lines && anchor.lines.end > anchor.lines.start) || undefined}
             data-outdated={anchor.outdated || undefined}
           >
@@ -346,14 +344,52 @@ function InlineFile({ file, host }: { file: FileDiscussion; host: string }) {
   );
 }
 
+/** Room left above comments brought into view, so their file reads as theirs. */
+const FOCUS_MARGIN = 24;
+
+/**
+ * Scrolls `ref` to the comments the diff asked for (`commentFocus`), then
+ * tints them a moment so the eye lands on the right ones. Only requests made
+ * since it mounted count: a PR read in again doesn't go back to the last.
+ */
+function useCommentFocus(ref: RefObject<HTMLElement | null>) {
+  const focus = useTab((state) => state.commentFocus);
+  const handled = useRef(focus?.tick ?? 0);
+
+  useEffect(() => {
+    const body = ref.current;
+    if (!focus || !body || focus.tick === handled.current) return;
+    handled.current = focus.tick;
+    // Matched by value, so a path needs no escaping into a selector.
+    const file = [...body.querySelectorAll<HTMLElement>("[data-path]")].find(
+      (element) => element.dataset.path === focus.path,
+    );
+    const anchor = [...(file?.querySelectorAll<HTMLElement>("[data-anchor]") ?? [])].find(
+      (element) => element.dataset.anchor === focus.key,
+    );
+    if (!anchor) return;
+    const top = anchor.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTo({
+      top: body.scrollTop + top - FOCUS_MARGIN,
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+    // Off and on again, laid out between, so a second ask tints it afresh.
+    anchor.removeAttribute("data-focused");
+    void anchor.offsetWidth;
+    anchor.setAttribute("data-focused", "");
+  }, [ref, focus]);
+}
+
 function PrSection({ pr }: { pr: PrContext }) {
   const prHeadMoved = useTab((state) => state.prHeadMoved);
   const host = githubHost(pr.url);
   const topLevel = pr.comments.filter((comment) => !comment.path);
   const files = useMemo(() => inlineDiscussion(pr), [pr]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useCommentFocus(bodyRef);
 
   return (
-    <div className={css.prBody}>
+    <div ref={bodyRef} className={css.prBody}>
       <div className={css.prHeader}>
         <div className={`${css.itemHead} ${css.titleHead}`}>
           <p className={css.prName}>{pr.title}</p>
@@ -1851,6 +1887,13 @@ export function ReviewPanel() {
   // Every open tab has a panel of its own, so a PR opens on its PR tab and
   // keeps whichever tab the reader picks after that.
   const [tab, setTab] = useState<PanelTab>("pr");
+  // The diff's comment markers lead to the PR tab, where the comments are read.
+  const focusTick = useTab((state) => state.commentFocus?.tick ?? 0);
+  const [focusedTick, setFocusedTick] = useState(focusTick);
+  if (focusTick !== focusedTick) {
+    setFocusedTick(focusTick);
+    setTab("pr");
+  }
   // With no PR there is no PR tab.
   const activeTab: PanelTab = tab === "pr" && !hasPr ? "ai" : tab;
 

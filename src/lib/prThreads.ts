@@ -58,13 +58,18 @@ export interface FileDiscussion {
 
 function linesOf(comment: PrComment): LineSpan | null {
   if (comment.line == null) return null;
-  return { start: Math.min(comment.startLine ?? comment.line, comment.line), end: comment.line };
+  return {
+    start: Math.min(comment.startLine ?? comment.line, comment.line),
+    end: comment.line,
+    side: comment.oldSide ? "deletions" : "additions",
+  };
 }
 
 /**
  * The PR's inline comments, file by file, each gathered at the line or span it
  * was made on with the replies that followed it. Outdated lines belong to an
- * older commit, so they gather apart from the same numbers on the head.
+ * older commit, so they gather apart from the same numbers on the head, as the
+ * old side's do from the new side's.
  */
 export function inlineDiscussion(pr: PrContext): FileDiscussion[] {
   const inline = pr.comments.filter((comment) => comment.path != null);
@@ -87,7 +92,9 @@ export function inlineDiscussion(pr: PrContext): FileDiscussion[] {
     if (!first?.path) continue;
     const lines = linesOf(first);
     const outdated = conversation.thread?.outdated ?? first.outdated;
-    const key = lines ? `${outdated ? "was" : "at"}:${lines.start}-${lines.end}` : "file";
+    const key = lines
+      ? `${outdated ? "was" : "at"}:${lines.side}:${lines.start}-${lines.end}`
+      : "file";
     let anchors = files.get(first.path);
     if (!anchors) {
       anchors = new Map();

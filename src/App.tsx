@@ -115,9 +115,12 @@ function ReviewScreen() {
   const refreshingPr = useTab((state) => state.refreshingPr);
   const refresh = useTab((state) => state.refresh);
   const dismissError = useTab((state) => state.dismissError);
+  // A comment marker in the diff opens its conversation in the review panel.
+  const commentFocus = useTab((state) => state.commentFocus?.tick);
 
   return (
     <Layout
+      revealAside={commentFocus}
       error={error}
       onDismissError={dismissError}
       header={
