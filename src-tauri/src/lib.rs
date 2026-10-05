@@ -6,7 +6,8 @@ pub mod models;
 pub mod review;
 pub mod runs;
 
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::runs::AgentRuns;
 
@@ -15,12 +16,50 @@ use crate::runs::AgentRuns;
 /// in step.
 const DEFAULT_ZOOM: f64 = 0.8;
 
+/// View's zoom items: menu id, title, hotkey, and the step sent to the page.
+const ZOOM_ITEMS: [(&str, &str, &str, &str); 3] = [
+    ("zoom-reset", "Actual Size", "CmdOrCtrl+0", "reset"),
+    ("zoom-in", "Zoom In", "CmdOrCtrl+=", "in"),
+    ("zoom-out", "Zoom Out", "CmdOrCtrl+-", "out"),
+];
+
+/// Tauri's default menu, with the zoom items at the top of View as in Safari.
+/// The page owns the level and takes the same hotkeys itself (WebKit offers
+/// them to the page before the menu), so the items mostly show the keys; a
+/// click reaches the page as a `zoom` event. Only macOS's default menu has a
+/// View menu; elsewhere the hotkeys alone will do.
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app)?;
+    let view = menu.items()?.into_iter().find_map(|item| match item {
+        MenuItemKind::Submenu(submenu) if submenu.text().is_ok_and(|text| text == "View") => {
+            Some(submenu)
+        }
+        _ => None,
+    });
+    if let Some(view) = view {
+        let items = ZOOM_ITEMS
+            .iter()
+            .map(|(id, title, hotkey, _)| MenuItem::with_id(app, *id, *title, true, Some(*hotkey)))
+            .collect::<tauri::Result<Vec<_>>>()?;
+        let separator = PredefinedMenuItem::separator(app)?;
+        view.prepend_items(&[&items[0], &items[1], &items[2], &separator])?;
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentRuns::default())
+        .menu(app_menu)
+        .on_menu_event(|app, event| {
+            let step = ZOOM_ITEMS.iter().find(|(id, ..)| event.id() == *id);
+            if let Some((.., step)) = step {
+                let _ = app.emit("zoom", step);
+            }
+        })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_zoom(DEFAULT_ZOOM)?;
