@@ -31,22 +31,24 @@ export function ComparisonPicker() {
         <Icon name="chevron-down" className={css.chevron} />
       </Popover.Trigger>
       <Popover.Popup sideOffset={6} align="start" className={css.popup}>
-        <section className={css.section}>
-          <Popover.Title className={css.heading}>Pull request</Popover.Title>
-          <PrSelector className={css.prField} onOpened={() => setOpen(false)} />
-        </section>
-        <section className={css.section}>
-          <button
-            type="button"
-            className={css.disclosure}
-            aria-expanded={manualOpen}
-            onClick={() => setManualOpen(!manualOpen)}
-          >
-            <Icon name={manualOpen ? "chevron-down" : "chevron-right"} />
-            Compare branches manually
-          </button>
-          {manualOpen ? <BranchSelector /> : null}
-        </section>
+        <div className={css.body}>
+          <section className={css.section}>
+            <Popover.Title className={css.heading}>Pull request</Popover.Title>
+            <PrSelector className={css.prField} onOpened={() => setOpen(false)} />
+          </section>
+          <section className={css.section}>
+            <button
+              type="button"
+              className={css.disclosure}
+              aria-expanded={manualOpen}
+              onClick={() => setManualOpen(!manualOpen)}
+            >
+              <Icon name={manualOpen ? "chevron-down" : "chevron-right"} />
+              Compare branches manually
+            </button>
+            {manualOpen ? <BranchSelector /> : null}
+          </section>
+        </div>
       </Popover.Popup>
     </Popover.Root>
   );

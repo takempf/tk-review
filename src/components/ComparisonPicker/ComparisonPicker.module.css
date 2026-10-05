@@ -39,6 +39,19 @@
   width: 30rem;
   max-width: var(--available-width);
   max-height: var(--available-height);
+  padding: 0;
+}
+
+/* The body scrolls, not the popup: the popup's frame is drawn behind it
+   (the design system's grow-from-trigger), and would scroll away with it.
+   The popover's own padding and gap move in here, so the content scrolls
+   right to the frame's edge. */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-2);
+  min-height: 0;
+  padding: var(--tk-space-4) var(--tk-space-5);
   overflow-y: auto;
 }
 

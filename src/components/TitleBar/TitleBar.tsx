@@ -1,7 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ReactNode, useEffect, useState } from "react";
-import { cx, Icon, Logo, Menu, SceneryWindow } from "tk-design-system";
+import { Icon, Logo, Menu, SceneryWindow } from "tk-design-system";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { useAppStore } from "../../store/appStore";
 import { type RecentRepo, readRecentRepos } from "../../store/history";
@@ -67,17 +67,11 @@ function RepoSelect() {
 
   return (
     <Menu.Root>
-      <Menu.Trigger
-        className={cx("tk-select-trigger", css.trigger)}
-        data-size="sm"
-        title={repo ? repo.root : undefined}
-      >
-        <span className="tk-select-value" data-placeholder={repo ? undefined : ""}>
+      <Menu.Trigger className={css.trigger} title={repo ? repo.root : undefined}>
+        <span className={css.value} data-placeholder={repo ? undefined : ""}>
           {repo?.name ?? (loading ? "Opening…" : "Open a repository")}
         </span>
-        <span className="tk-select-icon">
-          {loading ? <Spinner /> : <Icon name="chevron-updown" />}
-        </span>
+        <span className={css.icon}>{loading ? <Spinner /> : <Icon name="chevron-updown" />}</span>
       </Menu.Trigger>
       <Menu.Popup className={css.popup}>
         {listed.length > 0 ? (

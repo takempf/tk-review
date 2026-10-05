@@ -134,11 +134,28 @@ body {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--tk-accent) 22%, transparent);
 }
 
-/* In the design system's own reset layer, so a disabled `.tk-button` still
-   gets its own cursor. */
-@layer tk.reset {
-  button {
-    cursor: pointer;
+/*
+ * Popups open and close quicker than the theme's morphs, which are paced for
+ * things crossing the window: both the frame growing out of the trigger (on
+ * the popup) and the label carried between them (a morph typed `open` or
+ * `close`, so on the root).
+ */
+:root {
+  --popup-duration: 180ms;
+}
+
+.tk-popup {
+  --tk-duration-morph: var(--popup-duration);
+}
+
+:root:active-view-transition-type(open, close) {
+  &::view-transition-group(*) {
+    animation-duration: var(--popup-duration);
+  }
+
+  &::view-transition-old(*),
+  &::view-transition-new(*) {
+    animation-duration: calc(var(--popup-duration) * 0.6);
   }
 }
 

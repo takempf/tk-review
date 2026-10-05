@@ -1,10 +1,15 @@
+/* The traffic lights are native, so page zoom neither moves nor scales them.
+   Sizes they depend on are screen pixels, `--zoom` undoing the zoom (see
+   `lib/zoom.ts`): never shorter than the 40px `trafficLightPosition` in
+   `tauri.conf.json` centres them in, though zoomed-in content may grow it.
+   The repository menu, portalled out of the bar, sizes its first row by it. */
+.chrome,
+.popup {
+  --title-row: max(2.5rem, calc(40px / var(--zoom, 1)));
+}
+
 /* The title row, and the tab row under it when there is one. */
 .chrome {
-  /* The traffic lights are native, so page zoom neither moves nor scales them.
-     Sizes they depend on are screen pixels, `--zoom` undoing the zoom (see
-     `lib/zoom.ts`): never shorter than the 40px `trafficLightPosition` in
-     `tauri.conf.json` centres them in, though zoomed-in content may grow it. */
-  --title-row: max(2.5rem, calc(40px / var(--zoom, 1)));
   /* The tab row under it, when there is one (TabBar.module.css). */
   --tab-row: 2.75rem;
 
@@ -14,7 +19,13 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
+  /* The scenery runs on below the bar (see `.scenery`), and `overflow` alone
+     doesn't always cut it off: WebKit drops that clip while the repository
+     menu is open, and the scenery's lower half lies across the top of the
+     screen. A clip path holds. `clip` rather than `hidden`, too, so the bar
+     is no scroll container for focusing to scroll. */
+  overflow: clip;
+  clip-path: inset(0);
   background: var(--bg);
   user-select: none;
   -webkit-user-select: none;
@@ -83,7 +94,6 @@
   filter: drop-shadow(1px 1px 0 oklch(0% 0 0 / 0.6));
 }
 
-/* The design system's select trigger, sized down to sit in a title bar. */
 .divider {
   flex: none;
   width: var(--tk-border-width);
@@ -91,13 +101,58 @@
   background: var(--tk-border);
 }
 
+/* Part of the bar rather than a control set on it: the bar's full height, the
+   scenery showing through, and the brand's shadow on its text. Pointed at or
+   open, it is a pane of the chrome, as a tab is. The edge stays, transparent,
+   so the menu's frame grows out of no edge rather than a bright one. */
 .trigger {
+  display: flex;
   flex: 0 1 auto;
-  width: auto;
+  align-items: center;
+  align-self: stretch;
+  gap: var(--tk-space-3);
   min-width: 10rem;
   max-width: 20rem;
-  min-height: 1.75rem;
+  padding: 0 var(--tk-space-2) 0 var(--tk-space-3);
+  border: var(--tk-border-width) solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--tk-text-sm);
+  font-weight: var(--tk-weight-medium);
+  text-align: start;
+  text-shadow: 1px 1px 0 oklch(0% 0 0 / 0.6);
   cursor: default;
+  transition:
+    background-color var(--tk-duration-1) var(--tk-ease-fade),
+    color var(--tk-duration-1) var(--tk-ease-fade);
+
+  &:hover,
+  &[data-popup-open] {
+    background: color-mix(in oklab, var(--bg) 75%, transparent);
+    color: var(--tk-fg-bright);
+  }
+
+  /* Inside the bar, which clips anything outside it. */
+  &:focus-visible {
+    outline: 2px solid var(--tk-accent);
+    outline-offset: -2px;
+  }
+}
+
+.value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &[data-placeholder] {
+    color: var(--text-dim);
+  }
+}
+
+.icon {
+  display: flex;
+  color: var(--text-faint);
 }
 
 .popup {
@@ -108,9 +163,9 @@
 /*
  * The menu opens over the trigger, its first row a copy of the trigger's label
  * that the label travels into. The design system sets that row, and wraps the
- * label, for a button; here both are drawn as the select trigger instead: the
+ * label, for a button; here both are drawn as the trigger above instead: the
  * name at the start and the chevron at the end, at the trigger's height,
- * padding and icon size, so nothing shifts as the menu opens.
+ * padding, type and icon size, so nothing shifts as the menu opens.
  */
 .trigger > :global(.tk-menu-label),
 .popup :global(.tk-menu-head) > :global(.tk-menu-label) {
@@ -130,10 +185,12 @@
 
 .popup :global(.tk-menu-head) {
   gap: var(--tk-space-3);
-  /* Less the popup's border, so the rule under it lands on the trigger's edge. */
-  min-height: calc(1.75rem - var(--tk-border-width));
+  /* Less the popup's border, so the rule under it lands on the bar's own. */
+  min-height: calc(var(--title-row) - var(--tk-border-width));
   padding: 0 var(--tk-space-2) 0 var(--tk-space-3);
-  font-weight: inherit;
+  color: var(--tk-fg-bright);
+  font-size: var(--tk-text-sm);
+  font-weight: var(--tk-weight-medium);
 
   & :global(.tk-icon) {
     font-size: inherit;
