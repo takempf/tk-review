@@ -22,6 +22,14 @@
   }
 }
 
+/* In a small button's type, lined up with the branches' padding. */
+.author {
+  padding-inline: var(--tk-space-2);
+  font-size: var(--tk-text-xs);
+  font-weight: var(--tk-weight-medium);
+  color: var(--tk-fg-muted);
+}
+
 .branch {
   gap: var(--tk-space-1);
   padding-inline: var(--tk-space-2);

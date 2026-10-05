@@ -40,11 +40,19 @@
   }
 }
 
+/* Stuck, the header reaches a pixel past the scroll area's top edge rather than
+   meeting it. The edge and the header are composited apart, and at a scale that
+   puts CSS pixels between device pixels (the app's 0.8 zoom does) each rounds to
+   its own device pixel: meeting exactly left a row of the list showing above the
+   header. Overlapping puts that seam outside the scroll area, which clips it,
+   and the pixel comes back as padding so the stuck header keeps its spacing. */
 .table thead th {
+  --overlap: 1px;
+
   position: sticky;
-  top: 0;
+  top: calc(-1 * var(--overlap));
   z-index: 1;
-  padding-top: var(--tk-space-2);
+  padding-top: calc(var(--tk-space-2) + var(--overlap));
   padding-bottom: var(--tk-space-2);
   background: var(--tk-bg);
   border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
@@ -119,10 +127,6 @@
   &:hover > td,
   &:focus-within > td {
     background: var(--bg-hover);
-  }
-
-  &[data-busy] > td {
-    background: var(--tk-accent-soft);
   }
 
   &[data-disabled] {
@@ -210,14 +214,6 @@
   align-items: center;
 }
 
-.opening {
-  display: inline-flex;
-  gap: var(--tk-space-1);
-  align-items: center;
-  font-size: var(--tk-text-xs);
-  color: var(--tk-fg-muted);
-}
-
 .author {
   color: var(--tk-fg);
 }
@@ -242,6 +238,12 @@
 
 .when {
   color: var(--tk-fg);
+
+  /* When the review ran, in the accent, against Updated's yellow once the PR
+     moves on from it. */
+  &[data-reviewed] {
+    color: var(--tk-accent);
+  }
 
   /* Updated since the review read it: there are commits it hasn't seen. */
   &[data-stale] {

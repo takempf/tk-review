@@ -202,6 +202,8 @@ function runFailure(error: unknown, title: string): AppError | null {
 export interface PrPreview {
   number: number;
   title: string;
+  /** `null` for an account that has since been deleted. */
+  author?: string | null;
   /** Known when the PR came from a listed row; a recent entry doesn't keep them. */
   headRef?: string;
   baseRef?: string;

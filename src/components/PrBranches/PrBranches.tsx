@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Button, Icon, Tooltip } from "tk-design-system";
+import { Author } from "../Author/Author";
 import { useCopy } from "../CopyButton/CopyButton";
 import css from "./PrBranches.module.css";
 
@@ -56,15 +57,27 @@ function Branch({ name, side }: { name: string; side: "head" | "base" }) {
 }
 
 /**
- * A PR's head and base branches, `head → base` as its row in the list reads.
- * They are the first thing the header gives up: out of room, they hide whole
- * rather than squeeze the title.
+ * Who opened a PR, then its head and base branches, `head → base` as its row
+ * in the list reads. They are the first thing the header gives up: out of
+ * room, they hide whole rather than squeeze the title.
  */
-export function PrBranches({ headRef, baseRef }: { headRef: string; baseRef: string }) {
+export function PrBranches({
+  author,
+  host,
+  headRef,
+  baseRef,
+}: {
+  /** Unknown while a PR opened from a recent entry loads. */
+  author: string | null;
+  host: string;
+  headRef: string;
+  baseRef: string;
+}) {
   const { frame, content, fits } = useFits();
   return (
     <div ref={frame} className={css.frame}>
       <div ref={content} className={css.branches} data-hidden={!fits || undefined}>
+        {author ? <Author login={author} host={host} className={css.author} /> : null}
         <Branch name={headRef} side="head" />
         <Icon name="arrow-right" className={css.arrow} />
         <Branch name={baseRef} side="base" />

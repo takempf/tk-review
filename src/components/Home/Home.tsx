@@ -384,6 +384,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
     void open(row.url, {
       number: row.number,
       title: row.title,
+      author: row.author,
       headRef: row.pr?.headRef,
       baseRef: row.pr?.baseRef,
     });

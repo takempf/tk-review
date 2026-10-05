@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useMemo } from "react";
 import { Button, Icon } from "tk-design-system";
 import css from "./App.module.css";
+import { githubHost } from "./components/Author/Author";
 import { CommitList } from "./components/CommitList/CommitList";
 import { ComparisonPicker } from "./components/ComparisonPicker/ComparisonPicker";
 import { DiffStats } from "./components/DiffStats/DiffStats";
@@ -84,14 +85,21 @@ function useAgentRunOutput() {
 }
 
 /**
- * The pull request's branches. Its number, title and status are its tab's to
- * show, in the tab bar above.
+ * The pull request's author and branches. Its number, title and status are its
+ * tab's to show, in the tab bar above.
  */
 function PrHeading() {
-  // While it opens, the list's branches stand in for the fetched ones.
+  // While it opens, the list's author and branches stand in for the fetched ones.
   const pr = useTab((state) => state.pr ?? state.pendingPr);
   if (!pr?.headRef || !pr.baseRef) return null;
-  return <PrBranches headRef={pr.headRef} baseRef={pr.baseRef} />;
+  return (
+    <PrBranches
+      author={pr.author ?? null}
+      host={githubHost(pr.url)}
+      headRef={pr.headRef}
+      baseRef={pr.baseRef}
+    />
+  );
 }
 
 /** A tab's comparison open in the diff, with the file list and the review beside it. */

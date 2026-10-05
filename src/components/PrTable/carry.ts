@@ -3,16 +3,12 @@ import { prMorphKey } from "../../lib/screenTransition";
 import { useAppStore } from "../../store/appStore";
 
 /**
- * The pull request being opened from the list, while one is. Its row says
- * "Opening…" and carries its number and title into the review. A store of its
- * own, so setting it re-renders that row and nothing else on the list.
+ * The pull request being opened from the list, while one is. Its row carries
+ * its number and title into the review, which shows its own loading state. A
+ * store of its own, so setting it re-renders that row and nothing else on the
+ * list.
  */
 export const useOpening = create<{ url: string | null }>(() => ({ url: null }));
-
-/** Whether the row for `url` is the one opening. */
-export function useRowOpening(url: string | null): boolean {
-  return useOpening((state) => url != null && state.url === url);
-}
 
 /**
  * Whether a row carries its number and title into the review, or takes them
@@ -25,6 +21,6 @@ export function useCarries(root: string, number: number, url: string | null): bo
   const inTab = useAppStore((state) =>
     state.tabs.some((tab) => tab.root === root && tab.number === number),
   );
-  const opening = useRowOpening(url);
+  const opening = useOpening((state) => url != null && state.url === url);
   return returning || (opening && !inTab);
 }

@@ -1,0 +1,42 @@
+/* Sized in ems throughout, so it fits whatever text it sits in, and centred
+   on that text's line when it's set inline. */
+.author {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+/* The initial is set a size down; the circle is 1.5em of the text around it. */
+.avatar {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2em;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--tk-border-subtle);
+  background: var(--tk-surface-hover);
+  color: var(--tk-fg-subtle);
+  font-size: 0.75em;
+  font-weight: var(--tk-weight-medium);
+  line-height: 1;
+  user-select: none;
+
+  & img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.login {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

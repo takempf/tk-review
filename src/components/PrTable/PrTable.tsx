@@ -19,8 +19,8 @@ import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
 import type { StackLinks } from "../../lib/stacks";
 import { absoluteTime, shortTime } from "../../lib/time";
 import type { ReviewedPr } from "../../store/history";
-import { Spinner } from "../Spinner/Spinner";
-import { useCarries, useRowOpening } from "./carry";
+import { Author, githubHost } from "../Author/Author";
+import { useCarries } from "./carry";
 import css from "./PrTable.module.css";
 
 /**
@@ -135,7 +135,6 @@ function Branches({ pr }: { pr: PrSummary }) {
 function TitleCell({ row }: { row: PrRow }) {
   const { root, grouped } = useTableContext();
   const carries = useCarries(root, row.number, row.url);
-  const busy = useRowOpening(row.url);
   const depth = grouped ? row.depth : 0;
   // Grouped, the rows themselves draw the stack: a child sits indented under
   // its parent. Badges only say what the rows can't: a parent that isn't listed
@@ -153,7 +152,6 @@ function TitleCell({ row }: { row: PrRow }) {
         type="button"
         className={css.titleButton}
         disabled={!row.url}
-        aria-busy={busy || undefined}
         title={row.url ? undefined : "Load the open pull requests to reopen this one"}
       >
         <ScreenMorph id={prMorphKey(root, row.number)} part="title" active={carries}>
@@ -161,13 +159,8 @@ function TitleCell({ row }: { row: PrRow }) {
         </ScreenMorph>
       </button>
       {row.pr ? <Branches pr={row.pr} /> : null}
-      {busy || parent || children.length > 0 ? (
+      {parent || children.length > 0 ? (
         <span className={css.titleMeta}>
-          {busy ? (
-            <span className={css.opening}>
-              <Spinner /> Opening…
-            </span>
-          ) : null}
           {parent ? (
             <Badge title={`Targets #${parent.number}: ${parent.title}`}>
               Stacked on #{parent.number}
@@ -215,7 +208,7 @@ function ReviewedCell({ row }: { row: PrRow }) {
       className={css.twoLine}
       title={`Reviewed ${absoluteTime(reviewed.createdAt)} with ${ENGINES[reviewed.engine] ?? reviewed.engine}`}
     >
-      <time dateTime={reviewed.createdAt} className={css.when}>
+      <time dateTime={reviewed.createdAt} className={css.when} data-reviewed>
         {shortTime(reviewed.createdAt)}
       </time>
       <span className={css.secondary}>{findings}</span>
@@ -274,7 +267,15 @@ const columns = column.columns([
     sortDescFirst: false,
     sortUndefined: "last",
     cell: ({ row }) =>
-      row.original.author ? <span className={css.author}>@{row.original.author}</span> : <Empty />,
+      row.original.author ? (
+        <Author
+          login={row.original.author}
+          host={githubHost(row.original.url)}
+          className={css.author}
+        />
+      ) : (
+        <Empty />
+      ),
   }),
   column.accessor((row) => row.pr?.labels.map((label) => label.name).join(" ") || undefined, {
     id: "labels",
@@ -418,33 +419,6 @@ export function ColumnMenu({
 
 const SORT_ICONS = { asc: "chevron-up", desc: "chevron-down" } as const;
 
-/** A row of the list, which marks itself while its PR opens. */
-function BodyRow({
-  number,
-  url,
-  onClick,
-  children,
-}: {
-  number: number;
-  url: string | null;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  const busy = useRowOpening(url);
-  return (
-    <tr
-      // What the list holds its place by as rows come and go (Home's `useHeldPlace`).
-      data-pr={number}
-      className={css.row}
-      data-disabled={!url || undefined}
-      data-busy={busy || undefined}
-      onClick={onClick}
-    >
-      {children}
-    </tr>
-  );
-}
-
 /**
  * The Size column's two slots, each as wide as its longest count among the
  * rows (sign included), so every row's additions and deletions sit in the same
@@ -542,10 +516,12 @@ export function PrTable({
             const { url } = row.original;
             // The title's button is the row's keyboard route; the row widens its pointer target.
             return (
-              <BodyRow
+              <tr
                 key={row.id}
-                number={row.original.number}
-                url={url}
+                // What the list holds its place by as rows come and go (Home's `useHeldPlace`).
+                data-pr={row.original.number}
+                className={css.row}
+                data-disabled={!url || undefined}
                 onClick={() => url && onOpen(row.original)}
               >
                 {row.getVisibleCells().map((cell) => (
@@ -553,7 +529,7 @@ export function PrTable({
                     <table.FlexRender cell={cell} />
                   </td>
                 ))}
-              </BodyRow>
+              </tr>
             );
           })}
         </tbody>
