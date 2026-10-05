@@ -12,8 +12,9 @@ const FRAME_MS = 1000 / 15;
 const PIXEL = 1;
 /** A 4×4 matrix, since an 8×8 one's pattern is half the width of the icon. */
 const BAYER = bayerMatrix(4);
-/** The loader's three strengths of the text colour, dimmest to brightest. */
-const STRENGTHS = [0.22, 0.55, 1];
+/** Dimmest to brightest, from `Spinner.module.css`. */
+const INKS = ["--spinner-ink-1", "--spinner-ink-2", "--spinner-ink-3"];
+const TRANSPARENT: Vec4 = [0, 0, 0, 0];
 
 type Frame = (time: number) => void;
 
@@ -60,12 +61,6 @@ function rgba(color: string): Vec4 {
   return value;
 }
 
-/** Transparent, then the current text colour at the loader's three strengths. */
-function inksFor(color: Vec4): Vec4[] {
-  const [r, g, b, a] = color;
-  return [[0, 0, 0, 0], ...STRENGTHS.map((strength): Vec4 => [r, g, b, Math.round(a * strength)])];
-}
-
 interface Props {
   className?: string;
 }
@@ -73,8 +68,8 @@ interface Props {
 /**
  * A small busy indicator for buttons and other async actions: a low-poly solid
  * turning over slowly, lit and dithered like the review loader's shapes. It
- * takes the text colour and is sized like an icon (1.15em); set `width` in CSS
- * to change that. Decorative, so the label beside it should say what's
+ * draws in the active inks (on a primary button, its label colour) and is
+ * sized like an icon (1.15em); set `width` in CSS to change that. Decorative, so the label beside it should say what's
  * happening ("Refreshing…").
  */
 export function Spinner({ className }: Props) {
@@ -100,14 +95,16 @@ export function Spinner({ className }: Props) {
 
     const raster = new Raster(cells, cells);
     const image = context.createImageData(cells, cells);
-    let color = "";
+    let key = "";
     let inks: Vec4[] = [];
     const draw = (time: number) => {
-      // Re-read each frame, so it follows hover states and theme changes.
-      const current = getComputedStyle(canvas).color;
-      if (current !== color) {
-        color = current;
-        inks = inksFor(rgba(color));
+      // Re-read each frame, so it follows theme changes and the button it is in.
+      const style = getComputedStyle(canvas);
+      const colors = INKS.map((name) => style.getPropertyValue(name).trim() || "#808080");
+      const current = colors.join();
+      if (current !== key) {
+        key = current;
+        inks = [TRANSPARENT, ...colors.map(rgba)];
       }
       renderSpinner(raster, time);
       raster.dither(inks, BAYER, image.data);

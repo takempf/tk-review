@@ -12,7 +12,20 @@
   vertical-align: middle;
 }
 
+/* Its three inks, dimmest to brightest: the active ones (`global.css`). */
 .canvas {
+  --spinner-ink-1: var(--active-ink-1);
+  --spinner-ink-2: var(--active-ink-2);
+  --spinner-ink-3: var(--active-ink-3);
+
   display: block;
   image-rendering: pixelated;
+}
+
+/* A primary button's light fill would swallow the active inks' pale top, so
+   there it shades with the label colour, the way the loader uses the text. */
+:global(.tk-button[data-variant="primary"]) .canvas {
+  --spinner-ink-1: color-mix(in oklab, var(--tk-primary-fg) 22%, transparent);
+  --spinner-ink-2: color-mix(in oklab, var(--tk-primary-fg) 55%, transparent);
+  --spinner-ink-3: var(--tk-primary-fg);
 }

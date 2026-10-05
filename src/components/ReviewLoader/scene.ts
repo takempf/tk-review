@@ -360,6 +360,28 @@ export class Scene {
     }
   }
 
+  /**
+   * How far a shape has taken the accent: it warms up as it is fetched, holds
+   * while inspected, and cools off again on the way back to the pile or the
+   * loop. A shape told to leave keeps whatever it had.
+   */
+  private focus(time: number, phase: Phase): number {
+    switch (phase.kind) {
+      case "fetching":
+        return smoothstep(0, FETCH_SECONDS, time - phase.start);
+      case "inspecting":
+        return 1;
+      case "setting":
+        return 1 - smoothstep(0, SET_SECONDS, time - phase.start);
+      case "releasing":
+        return 1 - smoothstep(0, RELEASE_SECONDS, time - phase.start);
+      case "leaving":
+        return this.focus(time, phase.prior);
+      default:
+        return 0;
+    }
+  }
+
   /** Advances the entity: finishes moves that have landed and decides the next one. */
   update(time: number) {
     // Leaving shapes carry their last phase through to the end on their own.
@@ -467,7 +489,11 @@ export class Scene {
     const camera: Camera = { ...CAMERA, focal: (CAMERA.focal * raster.width) / 120 };
     // Shapes yet to arrive, or already gone, have shrunk to nothing: not even a shadow.
     const instances: Instance[] = this.shapes
-      .map((shape) => ({ mesh: shape.mesh, ...this.pose(shape, time) }))
+      .map((shape) => ({
+        mesh: shape.mesh,
+        ...this.pose(shape, time),
+        accent: this.focus(time, shape.phase),
+      }))
       .filter((instance) => instance.scale > 0.002);
     const shadows: Shadow[] = instances.map((instance) => {
       const height = instance.position[1] - FLOOR_Y - instance.mesh.bottom * instance.scale;

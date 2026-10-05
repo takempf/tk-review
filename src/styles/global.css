@@ -90,6 +90,15 @@
   --tk-code-inline-fg: var(--tk-fg-bright);
 
   --accent: var(--tk-accent);
+  /* Work under way: the spinner, and the shape the review loader is looking
+     at. The three inks are for those dithered drawings, dimmest to brightest,
+     and each matches the lightness of the text ink it stands in for (the text
+     at 22%, 55% and 100% on `--bg`), so a shape taking them on changes hue
+     and not brightness. Mixed in oklab, where black and white keep the hue. */
+  --active: var(--accent);
+  --active-ink-1: color-mix(in oklab, var(--active) 50%, black);
+  --active-ink-2: color-mix(in oklab, var(--active) 78%, black);
+  --active-ink-3: color-mix(in oklab, var(--active) 44%, white);
   --danger: var(--tk-danger);
   --danger-bg: var(--tk-danger-soft);
 

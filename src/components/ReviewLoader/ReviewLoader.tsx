@@ -10,6 +10,8 @@ const FRAME_MS = 1000 / 15;
 interface Look {
   /** Transparent, then the three shades from `ReviewLoader.module.css`. */
   inks: Vec4[];
+  /** The same, in the active inks, for the shape being looked at. */
+  activeInks: Vec4[];
   bayer: Float32Array;
   /** CSS pixels a side for one dither cell. */
   pixel: number;
@@ -18,8 +20,9 @@ interface Look {
 const TRANSPARENT: Vec4 = [0, 0, 0, 0];
 
 /**
- * The palette and the dither, read from the stylesheet so they follow the
- * theme. The three shades are the text colour at rising strength; the Bayer
+ * The palettes and the dither, read from the stylesheet so they follow the
+ * theme. The three shades are the text colour at rising strength, and the
+ * active inks (`global.css`) stand in for them on the shape in hand; the Bayer
  * size and pixel scale are the design system's scenery tokens, so the pattern
  * matches its scenery. Colours are resolved through a 2D context rather than
  * parsed, which accepts any CSS colour, `color-mix()` and alpha included.
@@ -39,6 +42,12 @@ function readLook(element: HTMLElement): Look {
   const pixel = Math.round(Number(style.getPropertyValue("--tk-scenery-pixel")));
   return {
     inks: [TRANSPARENT, color("--loader-ink-1"), color("--loader-ink-2"), color("--loader-ink-3")],
+    activeInks: [
+      TRANSPARENT,
+      color("--active-ink-1"),
+      color("--active-ink-2"),
+      color("--active-ink-3"),
+    ],
     bayer: bayerMatrix(bayer === 2 || bayer === 4 ? bayer : 8),
     pixel: Number.isFinite(pixel) && pixel >= 1 ? pixel : 2,
   };
@@ -65,7 +74,9 @@ interface Props {
  * A waiting animation for agent runs: three shades of the text colour on a
  * transparent ground, under the design system's ordered dither. Shapes arrive
  * one by one, are held up and turned over by something unseen, and are set
- * down in a pile; when the run ends they leave, top to bottom.
+ * down in a pile; when the run ends they leave, top to bottom. The shape in
+ * hand dissolves into the active colour as it is fetched, and back out as it
+ * is put down.
  */
 export function ReviewLoader({ count, progress = null, leaving = false, onLeft }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -126,7 +137,7 @@ export function ReviewLoader({ count, progress = null, leaving = false, onLeft }
       scene.setProgress(progressRef.current);
       scene.update(time);
       scene.render(raster, TONES, time);
-      raster.dither(look.inks, look.bayer, image.data);
+      raster.dither(look.inks, look.bayer, image.data, look.activeInks);
       context.putImageData(image, 0, 0);
       if (scene.gone(time)) onLeftRef.current?.();
     };

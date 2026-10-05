@@ -326,6 +326,8 @@ export interface Instance {
   position: Vec3;
   rotation: Vec3;
   scale: number;
+  /** 0–1: how far the shape has turned from the plain inks to the accent ones. */
+  accent?: number;
 }
 
 export interface Shadow {
@@ -372,6 +374,8 @@ export function bayerMatrix(size: 2 | 4 | 8): Float32Array {
 
 export class Raster {
   readonly tone: Float32Array;
+  /** 0–1 per pixel: how much of the accent palette it takes, from the shape drawn there. */
+  readonly accent: Float32Array;
   private readonly depth: Float32Array;
 
   constructor(
@@ -379,6 +383,7 @@ export class Raster {
     readonly height: number,
   ) {
     this.tone = new Float32Array(width * height);
+    this.accent = new Float32Array(width * height);
     this.depth = new Float32Array(width * height);
   }
 
@@ -396,6 +401,7 @@ export class Raster {
   ) {
     const { width, height, tone, depth } = this;
     depth.fill(Number.POSITIVE_INFINITY);
+    this.accent.fill(0);
     const cos = Math.cos(camera.pitch);
     const sin = Math.sin(camera.pitch);
     const drop = floorY - camera.position[1];
@@ -429,11 +435,12 @@ export class Raster {
   /** A plain background, for scenes with no floor. */
   blank(tone: number) {
     this.tone.fill(tone);
+    this.accent.fill(0);
     this.depth.fill(Number.POSITIVE_INFINITY);
   }
 
   draw(instance: Instance, camera: Camera, tones: Tones) {
-    const { mesh } = instance;
+    const { mesh, accent = 0 } = instance;
     const matrix = rotation(instance.rotation);
     const cos = Math.cos(camera.pitch);
     const sin = Math.sin(camera.pitch);
@@ -484,12 +491,13 @@ export class Raster {
           vertexTones ? (vertexTones[first] as number) : flat,
           vertexTones ? (vertexTones[b] as number) : flat,
           vertexTones ? (vertexTones[c] as number) : flat,
+          accent,
         );
       }
     }
   }
 
-  private triangle(a: Vec3, b: Vec3, c: Vec3, ta: number, tb: number, tc: number) {
+  private triangle(a: Vec3, b: Vec3, c: Vec3, ta: number, tb: number, tc: number, accent: number) {
     const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     if (Math.abs(area) < 1e-9) return;
     const minX = Math.max(0, Math.floor(Math.min(a[0], b[0], c[0])));
@@ -510,6 +518,7 @@ export class Raster {
         if (z >= (this.depth[index] as number)) continue;
         this.depth[index] = z;
         this.tone[index] = wa * ta + wb * tb + wc * tc;
+        this.accent[index] = accent;
       }
     }
   }
@@ -518,8 +527,13 @@ export class Raster {
    * Writes RGBA pixels the way the design system's finish pass does: each tone
    * snapped to one of the inks by the ordered threshold. Inks carry their own
    * alpha, so the background ink can be transparent.
+   *
+   * A pixel takes the same ink from `accentInks` where its accent clears the
+   * same threshold, so a shape turning over to the accent dissolves into it
+   * pixel by pixel, never showing a colour outside the two palettes. Both
+   * palettes need the same number of inks.
    */
-  dither(inks: Vec4[], bayer: Float32Array, out: Uint8ClampedArray) {
+  dither(inks: Vec4[], bayer: Float32Array, out: Uint8ClampedArray, accentInks = inks) {
     const last = inks.length - 1;
     const size = Math.round(Math.sqrt(bayer.length));
     for (let py = 0; py < this.height; py++) {
@@ -530,7 +544,8 @@ export class Raster {
           last,
           Math.max(0, Math.floor((this.tone[index] as number) + threshold)),
         );
-        const color = inks[level] as Vec4;
+        const palette = (this.accent[index] as number) > threshold ? accentInks : inks;
+        const color = palette[level] as Vec4;
         out[index * 4] = color[0];
         out[index * 4 + 1] = color[1];
         out[index * 4 + 2] = color[2];

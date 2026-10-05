@@ -8,6 +8,7 @@
  * Width and height are set inline, snapped to whole device pixels per dither
  * cell. The background is transparent, so the panel shows through; the shapes
  * are shaded with three strengths of the text colour, dimmest to brightest.
+ * The one being looked at takes the active inks from `global.css` instead.
  */
 .canvas {
   --loader-ink-1: color-mix(in oklab, var(--text) 22%, transparent);
