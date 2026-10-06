@@ -264,6 +264,8 @@ export interface PrSummary {
   number: number;
   title: string;
   author: string;
+  /** Public profile name; older cached lists and accounts without one omit it. */
+  authorName?: string | null;
   isDraft: boolean;
   url: string;
   labels: PrLabel[];

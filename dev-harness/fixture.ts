@@ -548,6 +548,7 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     number: 124,
     title: "Persist reviews to the app data directory instead of localStorage",
     author: "tkempf",
+    authorName: "Timothy Kempf",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/124",
     labels: [
@@ -570,6 +571,7 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     number: 127,
     title: "Migrate reviews saved in localStorage on first launch",
     author: "tkempf",
+    authorName: "Timothy Kempf",
     isDraft: false,
     url: "https://github.com/example/tk-review/pull/127",
     labels: [{ name: "storage", color: "0e8a16" }],
@@ -589,6 +591,7 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     number: 131,
     title: "Show where each stored review lives on disk",
     author: "tkempf",
+    authorName: "Timothy Kempf",
     isDraft: true,
     url: "https://github.com/example/tk-review/pull/131",
     labels: [],

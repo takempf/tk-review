@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { cx } from "tk-design-system";
+import { useAvatar } from "../../lib/avatars";
 import css from "./Author.module.css";
 
 /**
@@ -8,11 +9,6 @@ import css from "./Author.module.css";
  */
 function accountName(login: string): string {
   return login.replace(/^app\//, "").replace(/\[bot\]$/, "");
-}
-
-/** Where `host` serves `name`'s avatar, at twice its size here for a Retina screen. */
-function avatarUrl(name: string, host: string): string {
-  return `https://${host}/${encodeURIComponent(name)}.png?size=64`;
 }
 
 /**
@@ -43,16 +39,22 @@ export function Author({
   className?: string;
 }) {
   const name = accountName(login);
-  const src = avatarUrl(name, host);
-  // Keyed by the URL, so a different account gets its own try.
-  const [failed, setFailed] = useState<string | null>(null);
+  const image = useAvatar(name, host);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    // Paint the shared decoded image before this byline's first frame. An img
+    // with the same URL would still go through the browser's loading path.
+    const context = canvas.current?.getContext("2d");
+    if (image && context) {
+      context.clearRect(0, 0, 64, 64);
+      context.drawImage(image, 0, 0, 64, 64);
+    }
+  }, [image]);
   return (
     <span className={cx(css.author, className)}>
       <span className={css.avatar} aria-hidden="true">
         {name.charAt(0).toUpperCase()}
-        {failed === src ? null : (
-          <img src={src} alt="" loading="lazy" draggable={false} onError={() => setFailed(src)} />
-        )}
+        {image ? <canvas ref={canvas} width={64} height={64} /> : null}
       </span>
       <span className={css.login}>{login}</span>
     </span>

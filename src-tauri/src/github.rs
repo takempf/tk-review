@@ -114,6 +114,7 @@ pub struct PrSummary {
     pub number: u64,
     pub title: String,
     pub author: String,
+    pub author_name: Option<String>,
     pub is_draft: bool,
     pub url: String,
     pub labels: Vec<PrLabel>,
@@ -305,6 +306,7 @@ struct GhGraphError {
 #[derive(Debug, Deserialize)]
 struct GhAuthor {
     login: String,
+    name: Option<String>,
 }
 
 /// A comment as REST lists it. Inline ones carry two sets of lines: where they
@@ -539,7 +541,7 @@ const PR_PAGE_SIZE: u32 = 100;
 
 const PR_FIELDS: &str = "number title url isDraft createdAt updatedAt additions deletions \
     changedFiles reviewDecision headRefName baseRefName headRefOid isCrossRepository \
-    author { login } labels(first: 20) { nodes { name color } }";
+    author { login ... on User { name } } labels(first: 20) { nodes { name color } }";
 
 /// One page of a pull-request list, most recently updated first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -638,6 +640,13 @@ fn parse_pr_page(raw: &[u8]) -> Result<PrPage, GitError> {
         .map(|pr| PrSummary {
             number: pr.number,
             title: pr.title,
+            author_name: pr
+                .author
+                .as_ref()
+                .and_then(|author| author.name.as_deref())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
             author: pr
                 .author
                 .map_or_else(|| "ghost".into(), |author| author.login),
@@ -1492,7 +1501,7 @@ mod tests {
         let raw = br#"{"data":{"repository":{"pullRequests":{"totalCount":120,
             "pageInfo":{"hasNextPage":true,"endCursor":"abc"},
             "nodes":[
-              {"number":2,"title":"New","author":{"login":"b"},"isDraft":true,"url":"u2",
+              {"number":2,"title":"New","author":{"login":"b","name":"  Bea Example  "},"isDraft":true,"url":"u2",
                "headRefName":"two","baseRefName":"main","isCrossRepository":true,"headRefOid":"bbb",
                "createdAt":"2026-09-18T10:00:00Z","updatedAt":"2026-09-20T10:00:00Z",
                "additions":10,"deletions":0,"changedFiles":4,"reviewDecision":"APPROVED",
@@ -1520,6 +1529,9 @@ mod tests {
             }]
         );
         assert_eq!(prs[0].changed_files, 4);
+        assert_eq!(prs[0].author, "b");
+        assert_eq!(prs[0].author_name.as_deref(), Some("Bea Example"));
+        assert_eq!(prs[1].author_name, None);
         // A deleted account shows as GitHub shows it.
         assert_eq!(prs[1].author, "ghost");
     }
@@ -1539,6 +1551,7 @@ mod tests {
         assert_eq!(page.next, None);
         // The empty node is search turning up something that isn't a pull request.
         assert_eq!(page.prs.iter().map(|pr| pr.number).collect::<Vec<_>>(), [7]);
+        assert_eq!(page.prs[0].author_name, None);
     }
 
     #[test]

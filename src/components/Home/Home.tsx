@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Button, Eyebrow, Icon, morph, Panel, Reveal, SceneryWindow, Tabs } from "tk-design-system";
+import { Button, Eyebrow, Icon, Panel, SceneryWindow, Tabs } from "tk-design-system";
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
@@ -137,11 +137,22 @@ function buildRows(
 
   if (tab !== "reviewed") {
     return openPrs
-      .filter((pr) => matches(query, pr.number, pr.title, pr.author, pr.headRef, ...labelNames(pr)))
+      .filter((pr) =>
+        matches(
+          query,
+          pr.number,
+          pr.title,
+          pr.author,
+          pr.authorName,
+          pr.headRef,
+          ...labelNames(pr),
+        ),
+      )
       .map((pr) => ({
         number: pr.number,
         title: pr.title,
         author: pr.author,
+        authorName: pr.authorName,
         url: pr.url,
         pr,
         reviewed: reviewed.byNumber.get(pr.number),
@@ -151,6 +162,9 @@ function buildRows(
   }
 
   const openByNumber = new Map(openPrs.map((pr) => [pr.number, pr]));
+  const authorNames = new Map(
+    openPrs.flatMap((pr) => (pr.authorName ? [[pr.author, pr.authorName] as const] : [])),
+  );
   // Any open PR's URL gives the repository's; older history entries lack their own.
   const urlFor = (number: number) =>
     openPrs[0]?.url.replace(/\/pull\/\d+$/, `/pull/${number}`) ?? null;
@@ -160,6 +174,7 @@ function buildRows(
       number: entry.number,
       title: live?.title ?? entry.title ?? `Pull request #${entry.number}`,
       author: live?.author ?? entry.author,
+      authorName: live?.authorName ?? authorNames.get(entry.author ?? ""),
       url: live?.url ?? entry.url ?? urlFor(entry.number),
       pr: live,
       reviewed: entry,
@@ -171,6 +186,7 @@ function buildRows(
       row.number,
       row.title,
       row.author,
+      row.authorName,
       live?.headRef,
       ...labelNames(live),
     );
@@ -329,7 +345,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   }, [ready]);
 
   function selectTab(next: HomeTab) {
-    morph(() => setTab(next), { scope: "home-list" });
+    setTab(next);
     try {
       localStorage.setItem(TAB_KEY, next);
     } catch {
@@ -371,6 +387,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
           row.number,
           row.title,
           row.author,
+          row.authorName,
           row.pr?.headRef,
           row.pr?.baseRef,
           ...(row.pr?.labels.map((label) => label.name) ?? []),
@@ -393,7 +410,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
       id: `pr:${row.number}`,
       scope: "pullRequests",
       title: row.title,
-      text: `#${row.number} ${row.title} ${row.author ?? ""} ${row.pr?.headRef ?? ""} ${row.pr?.labels.map((label) => label.name).join(" ") ?? ""}`,
+      text: `#${row.number} ${row.title} ${row.author ?? ""} ${row.authorName ?? ""} ${row.pr?.headRef ?? ""} ${row.pr?.labels.map((label) => label.name).join(" ") ?? ""}`,
       detail: `#${row.number}`,
       activate: () => {
         if (row.url)
@@ -405,7 +422,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   }, [allPrs, reviewed, stacks, openPr]);
   useSearchDocuments(searchDocuments);
   const filtering = isFiltering(filters);
-  // A tab's list scrolls in an area of its own, made afresh for each tab.
+  // All tabs share the table and its scroll area; only the rows change.
   const [listScroll, setListScroll] = useState<HTMLDivElement | null>(null);
   useHeldPlace(listScroll, rows);
 
@@ -490,78 +507,66 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
           </div>
         </div>
 
-        {/* The scroll area is what rises in and sinks away, not the list inside
-            it: a view transition snapshots a named element whole, unclipped, so
-            a list scrolled down would paint its hidden rows over the header. A
-            tab of its own also starts at the top. */}
-        <Reveal key={tab} scope="home-list">
-          <div ref={setListScroll} className={css.listScroll}>
-            {reference ? (
-              <button type="button" className={css.pasted} onClick={() => void open(reference)}>
-                <Icon name="external" />
-                <span>
-                  Open <code>{reference}</code>
-                </span>
-                <span className={css.pastedHint}>Enter</span>
-              </button>
-            ) : null}
+        <div ref={setListScroll} className={css.listScroll}>
+          {reference ? (
+            <button type="button" className={css.pasted} onClick={() => void open(reference)}>
+              <Icon name="external" />
+              <span>
+                Open <code>{reference}</code>
+              </span>
+              <span className={css.pastedHint}>Enter</span>
+            </button>
+          ) : null}
 
-            {refreshFailed ? (
-              <p className={css.refreshFailed} role="status">
-                Could not refresh: {errorMessage(listing.error)} Showing what was listed{" "}
-                {relativeTime(new Date(listing.dataUpdatedAt).toISOString())}.
-              </p>
-            ) : null}
+          {refreshFailed ? (
+            <p className={css.refreshFailed} role="status">
+              Could not refresh: {errorMessage(listing.error)} Showing what was listed{" "}
+              {relativeTime(new Date(listing.dataUpdatedAt).toISOString())}.
+            </p>
+          ) : null}
 
-            {listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed" ? (
-              <ErrorNotice
-                error={toAppError(listing.error, "Could not list pull requests")}
-                className={css.listError}
-              >
-                Pasting a PR link above still works.
-              </ErrorNotice>
-            ) : tab !== "reviewed" && !listing.data ? (
-              // Only with nothing cached: no earlier visit or launch has listed this tab.
-              <ListMessage>
-                <Spinner /> Loading pull requests…
-              </ListMessage>
-            ) : (
-              <>
-                {rows.length > 0 ? (
-                  <PrTable
-                    rows={rows}
-                    root={root}
-                    listed={listed}
-                    visibility={columns}
-                    onOpen={openRow}
-                  />
-                ) : filtering ? (
-                  <ListMessage>
-                    Nothing {hasMore ? "loaded yet " : ""}matches these filters.{" "}
-                    <Button variant="ghost" size="sm" onClick={() => setFilters(NO_FILTERS)}>
-                      Clear filters
-                    </Button>
-                  </ListMessage>
-                ) : (
-                  <ListMessage>
-                    {query
-                      ? "Nothing matches that filter."
-                      : tab === "reviewed"
-                        ? "Nothing reviewed in this repository yet. Reviews you run show up here."
-                        : tab === "reviewRequested"
-                          ? "No open pull requests are waiting on your review."
-                          : tab === "mine"
-                            ? "You have no open pull requests here."
-                            : "No open pull requests."}
-                  </ListMessage>
-                )}
-                {/* Under an empty list too, so a filter matching nothing loaded
+          <PrTable rows={rows} root={root} listed={listed} visibility={columns} onOpen={openRow} />
+
+          {listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed" ? (
+            <ErrorNotice
+              error={toAppError(listing.error, "Could not list pull requests")}
+              className={css.listError}
+            >
+              Pasting a PR link above still works.
+            </ErrorNotice>
+          ) : tab !== "reviewed" && !listing.data ? (
+            // Only with nothing cached: no earlier visit or launch has listed this tab.
+            <ListMessage>
+              <Spinner /> Loading pull requests…
+            </ListMessage>
+          ) : (
+            <>
+              {rows.length > 0 ? null : filtering ? (
+                <ListMessage>
+                  Nothing {hasMore ? "loaded yet " : ""}matches these filters.{" "}
+                  <Button variant="ghost" size="sm" onClick={() => setFilters(NO_FILTERS)}>
+                    Clear filters
+                  </Button>
+                </ListMessage>
+              ) : (
+                <ListMessage>
+                  {query
+                    ? "Nothing matches that filter."
+                    : tab === "reviewed"
+                      ? "Nothing reviewed in this repository yet. Reviews you run show up here."
+                      : tab === "reviewRequested"
+                        ? "No open pull requests are waiting on your review."
+                        : tab === "mine"
+                          ? "You have no open pull requests here."
+                          : "No open pull requests."}
+                </ListMessage>
+              )}
+              {/* Under an empty list too, so a filter matching nothing loaded
                     so far keeps looking through the pages still on GitHub. */}
-                {hasMore ? <MorePrs listing={listing} /> : null}
-              </>
-            )}
-          </div>
-        </Reveal>
+              {hasMore ? <MorePrs listing={listing} /> : null}
+            </>
+          )}
+        </div>
       </Tabs.Root>
     </div>
   );

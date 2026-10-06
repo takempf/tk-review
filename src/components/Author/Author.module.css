@@ -26,7 +26,7 @@
   line-height: 1;
   user-select: none;
 
-  & img {
+  & canvas {
     position: absolute;
     inset: 0;
     width: 100%;

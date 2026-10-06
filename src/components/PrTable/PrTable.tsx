@@ -32,6 +32,7 @@ export interface PrRow {
   number: number;
   title: string;
   author: string | null;
+  authorName?: string | null;
   url: string | null;
   pr: PrSummary | null;
   reviewed: ReviewedPr | undefined;

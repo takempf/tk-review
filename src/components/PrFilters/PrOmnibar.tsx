@@ -97,6 +97,15 @@ export function PrOmnibar({
     [rows],
   );
   const host = githubHost(rows.find((row) => row.url)?.url);
+  const authorNames = useMemo(
+    () =>
+      new Map(
+        rows.flatMap((row) =>
+          row.author && row.authorName ? [[row.author, row.authorName] as const] : [],
+        ),
+      ),
+    [rows],
+  );
   const scope = filterQuery(query).facet;
 
   function content(item: FilterItem) {
@@ -141,9 +150,14 @@ export function PrOmnibar({
           ? `Remove ${item.facet} ${itemName(item)}`
           : `Remove ${itemName(item)}`
       }
-      itemAriaLabel={(item) =>
-        item.kind === "pr" ? `Open pull request ${itemName(item)}` : undefined
-      }
+      itemAriaLabel={(item) => {
+        if (item.kind === "pr") return `Open pull request ${itemName(item)}`;
+        const name =
+          item.facet === "author"
+            ? [item.value, authorNames.get(item.value)].filter(Boolean).join(" ")
+            : itemName(item);
+        return `${name} ${item.count}`;
+      }}
       emptyMessage={
         scope
           ? `No matching ${FACET_INFO[scope].title.toLowerCase()} filters.`
@@ -159,15 +173,23 @@ export function PrOmnibar({
           return (
             !facet &&
             needle !== "" &&
-            [item.row.number, item.row.title, item.row.pr?.headRef, item.row.pr?.baseRef].some(
-              (field) => field != null && String(field).toLowerCase().includes(needle),
-            )
+            [
+              item.row.number,
+              item.row.title,
+              item.row.author,
+              item.row.authorName,
+              item.row.pr?.headRef,
+              item.row.pr?.baseRef,
+            ].some((field) => field != null && String(field).toLowerCase().includes(needle))
           );
         }
         if (filters[item.facet].includes(item.value)) return false;
         if (facet && facet !== item.facet) return false;
         const needle = text.trim().toLowerCase().replace(/^@/, "");
-        return `${FACET_INFO[item.facet].title} ${itemName(item)}`.toLowerCase().includes(needle);
+        const name = item.facet === "author" ? (authorNames.get(item.value) ?? "") : "";
+        return `${FACET_INFO[item.facet].title} ${itemName(item)} ${name}`
+          .toLowerCase()
+          .includes(needle);
       }}
       onValueChange={(next, details) => {
         const pr = next.find((item) => item.kind === "pr");
@@ -213,6 +235,9 @@ export function PrOmnibar({
         ) : (
           <>
             {content(item)}
+            {item.facet === "author" && authorNames.get(item.value) ? (
+              <span className={css.optionName}>{authorNames.get(item.value)}</span>
+            ) : null}
             <span className={css.optionCount}>{item.count}</span>
           </>
         )

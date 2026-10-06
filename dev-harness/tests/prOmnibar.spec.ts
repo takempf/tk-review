@@ -122,6 +122,31 @@ test("chips survive tabs with no matches and can still be removed", async ({ pag
   await expect(rows(page)).toHaveCount(3);
 });
 
+test("real names match author filters and PRs while filters keep their username identity", async ({
+  page,
+}) => {
+  await input(page).fill("tImOtHy");
+  const author = page.getByRole("option", { name: /^tkempf Timothy Kempf 1$/ });
+  await expect(author).toBeVisible();
+  await expect(page.getByRole("option", { name: /^Open pull request #131 / })).toBeVisible();
+  await expect(rows(page)).toHaveCount(1);
+  await author.click();
+  await expect(input(page)).toHaveValue("");
+  await expect(remove(page, "author @tkempf")).toBeVisible();
+  await expect(rows(page)).toHaveCount(1);
+
+  await page.getByRole("tab", { name: /^Mine/ }).click();
+  await expect(rows(page)).toHaveCount(2);
+  await remove(page, "author @tkempf").click();
+  await expect(rows(page)).toHaveCount(3);
+  await input(page).fill("AUTHOR:kempf");
+  await expect(page.getByRole("option", { name: /^tkempf Timothy Kempf 2$/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /^Open pull request / })).toHaveCount(0);
+  await input(page).press("Enter");
+  await expect(remove(page, "author @tkempf")).toBeVisible();
+  await expect(rows(page)).toHaveCount(2);
+});
+
 test("suggestions dismiss on Escape and Tab without losing filters or text", async ({
   page,
 }, testInfo) => {
