@@ -54,6 +54,7 @@ function Row({ file, depth, selected, viewed, onSelect, onToggleViewed }: RowPro
         type="button"
         className={css.row}
         style={indent(depth)}
+        data-search-id={`file:${file.path}`}
         onClick={onSelect}
         title={`${file.path}\n${describeChange(file)}`}
       >
@@ -197,6 +198,7 @@ function FileListSkeleton() {
 }
 
 export function FileList() {
+  const selectionTick = useTab((state) => state.selectionTick);
   const summary = useTab((state) => state.summary);
   const loading = useTab((state) => state.loadingDiff || state.openingPr);
   const selectedPath = useTab((state) => state.selectedPath);
@@ -205,6 +207,7 @@ export function FileList() {
 
   // Keyboard navigation walks the flat file order, so it can land inside a
   // folder that is folded shut: reopen the ancestors rather than lose the row.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reselecting the same path must reopen its folded ancestors
   useEffect(() => {
     if (!selectedPath) return;
     const segments = selectedPath.split("/").slice(0, -1);
@@ -215,7 +218,7 @@ export function FileList() {
       for (const path of ancestors) next.delete(path);
       return next;
     });
-  }, [selectedPath]);
+  }, [selectedPath, selectionTick]);
 
   if (loading && !summary) return <FileListSkeleton />;
   if (!summary) return null;

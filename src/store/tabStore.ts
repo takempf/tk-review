@@ -303,6 +303,16 @@ export interface TabState {
    * for the same ones again a new request, as `selectionTick` does.
    */
   commentFocus: { path: string; key: string; tick: number } | null;
+  /** The file explanation requested from the diff; repeated clicks scroll again. */
+  explanationFocus: { path: string; tick: number } | null;
+  commentDrafts: Record<string, { prUrl: string; location: PrPostLocation; body: string }>;
+  activeComment: string | null;
+  /** The clicked reply row, or null for the conversation/diff composer. */
+  commentOwner: string | null;
+  commentComposeTick: number;
+  postingComment: boolean;
+  commentError: AppError | null;
+  postedCommentUrl: string | null;
   /**
    * Compare the working tree instead of the compare ref, folding staged,
    * unstaged, and untracked changes into the review. Only takes effect while the
@@ -387,6 +397,7 @@ export interface TabState {
   selectFile: (path: string | null, lines?: LineSpan | null) => void;
   /** Brings a place's PR comments into view in the review panel; see `commentFocus`. */
   showComments: (path: string, key: string) => void;
+  showExplanation: (path: string) => void;
   moveSelection: (offset: number) => void;
   setIncludeUncommitted: (include: boolean) => Promise<void>;
   toggleViewed: (path: string) => void;
@@ -407,7 +418,7 @@ export interface TabState {
    * Appends a user comment to a thread of `engine`'s review and asks that
    * engine to respond.
    */
-  addComment: (engine: ReviewEngine, threadKey: string, text: string) => Promise<void>;
+  addComment: (engine: ReviewEngine, threadKey: string, text: string) => Promise<boolean>;
   /**
    * Sends a finding or summary of `engine`'s review to the open PR and saves
    * its permalink. `prior` says the finding is one the re-review judged.
@@ -419,6 +430,11 @@ export interface TabState {
     location: PrPostLocation,
     prior?: boolean,
   ) => Promise<boolean>;
+  /** Opens the PR tab on a saved draft for this location or reply. */
+  beginPrComment: (location: PrPostLocation, initialBody?: string, owner?: string | null) => void;
+  editPrComment: (body: string) => void;
+  closePrComment: () => void;
+  sendPrComment: () => Promise<boolean>;
   /** Submits `engine`'s conclusion as a GitHub review with the chosen verdict. */
   submitPrReview: (engine: ReviewEngine, verdict: ReviewVerdict, body: string) => Promise<boolean>;
   /** Resolves a review thread on the open PR, or reopens one. */
@@ -444,6 +460,8 @@ export function keepsTab(state: TabState): boolean {
     state.reReviewing ||
     state.explaining ||
     state.replyingTo != null ||
+    state.postingComment ||
+    Object.values(state.commentDrafts).some((draft) => draft.body.trim()) ||
     state.unseen
   );
 }
@@ -726,6 +744,14 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       selectedLines: null,
       selectionTick: 0,
       commentFocus: null,
+      explanationFocus: null,
+      commentDrafts: {},
+      activeComment: null,
+      commentOwner: null,
+      commentComposeTick: 0,
+      postingComment: false,
+      commentError: null,
+      postedCommentUrl: null,
       includeUncommitted: false,
       viewed: new Set(),
       expanded: new Set(),
@@ -809,6 +835,10 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             branches,
             pendingPr: null,
             openingPr: false,
+            activeComment: null,
+            commentOwner: null,
+            commentError: null,
+            postedCommentUrl: null,
           });
           await loadDiff();
           return true;
@@ -898,6 +928,10 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
 
       showComments(path, key) {
         set({ commentFocus: { path, key, tick: (get().commentFocus?.tick ?? 0) + 1 } });
+      },
+
+      showExplanation(path) {
+        set({ explanationFocus: { path, tick: (get().explanationFocus?.tick ?? 0) + 1 } });
       },
 
       moveSelection(offset) {
@@ -1159,7 +1193,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       async addComment(engine, threadKey, text) {
         const { repo, base, compare, reviews, replyingTo, pr } = get();
         const stored = reviews[engine];
-        if (!base || !compare || !stored || replyingTo) return;
+        if (!base || !compare || !stored || replyingTo) return false;
 
         const worktree = reviewsWorkingTree(get());
         const scope = viewedScope(compare, worktree);
@@ -1222,14 +1256,114 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           set(
             stillCurrent() ? { reviews: answeredReviews, replyingTo: null } : { replyingTo: null },
           );
+          return true;
         } catch (error) {
           set(
             stillCurrent()
               ? { replyingTo: null, reviewError: runFailure(error, "No reply to your comment") }
               : { replyingTo: null },
           );
+          return false;
         } finally {
           endRun(runId);
+        }
+      },
+
+      beginPrComment(location, initialBody = "", owner = null) {
+        const pr = get().pr;
+        if (get().postingComment || !pr) return;
+        const key = JSON.stringify([
+          pr.url,
+          location.destination,
+          location.path,
+          location.line,
+          location.endLine,
+          location.oldSide,
+          location.replyTo,
+          location.quoteCommentId,
+          location.headSha,
+        ]);
+        set({
+          activeComment: key,
+          commentOwner: owner,
+          commentDrafts: {
+            ...get().commentDrafts,
+            [key]: get().commentDrafts[key] ?? { prUrl: pr.url, location, body: initialBody },
+          },
+          commentComposeTick: get().commentComposeTick + 1,
+          commentError: null,
+          postedCommentUrl: null,
+        });
+      },
+
+      editPrComment(body) {
+        const { activeComment, commentDrafts, postingComment } = get();
+        const draft = activeComment ? commentDrafts[activeComment] : null;
+        if (!activeComment || !draft || postingComment) return;
+        set({ commentDrafts: { ...commentDrafts, [activeComment]: { ...draft, body } } });
+      },
+
+      closePrComment() {
+        if (!get().postingComment) set({ activeComment: null, commentError: null });
+      },
+
+      async sendPrComment() {
+        const { repo, pr, activeComment, commentDrafts, postingComment } = get();
+        const draft = activeComment ? commentDrafts[activeComment] : null;
+        if (!pr || !activeComment || !draft || postingComment || !draft.body.trim()) return false;
+        if (draft.prUrl !== pr.url) return false;
+        const { location, body } = draft;
+        if (location.headSha && location.headSha !== pr.headSha) {
+          set({
+            commentError: toAppError(
+              "This comment was drafted on an older diff. Select its lines again before posting.",
+              "Could not post comment",
+            ),
+          });
+          return false;
+        }
+        const stillCurrent = () => get().pr?.url === pr.url;
+        set({ postingComment: true, commentError: null, postedCommentUrl: null });
+        try {
+          const posted = await gitApi.postPrComment({
+            root: repo.root,
+            pr,
+            body: body.trim(),
+            path: location.path,
+            line: location.line,
+            endLine: location.endLine,
+            destination: location.destination,
+            oldSide: location.oldSide,
+            replyTo: location.replyTo,
+          });
+          // Posting succeeded. Clear the draft before refreshing so a failed
+          // read can never invite sending the same comment a second time.
+          const { [activeComment]: sent, ...remaining } = get().commentDrafts;
+          void sent;
+          if (stillCurrent())
+            set({ commentDrafts: remaining, activeComment: null, postedCommentUrl: posted.url });
+          try {
+            const [comments, threads] = await gitApi.prDiscussion(pr);
+            const latest = get().pr;
+            if (stillCurrent() && latest) set({ pr: { ...latest, comments, threads } });
+          } catch (error) {
+            if (stillCurrent())
+              set({
+                commentError: toAppError(
+                  error,
+                  "Comment posted, but the conversation could not refresh",
+                ),
+              });
+          }
+          set({ postingComment: false });
+          return true;
+        } catch (error) {
+          set(
+            stillCurrent()
+              ? { postingComment: false, commentError: toAppError(error, "Could not post comment") }
+              : { postingComment: false },
+          );
+          return false;
         }
       },
 

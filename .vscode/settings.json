@@ -1,0 +1,9 @@
+{
+    "workbench.colorCustomizations": {
+        "[Clean Slate]": {
+            "statusBar.background": "#1f7a55",
+            "statusBar.foreground": "#ffffff",
+            "statusBar.border": "#1f7a55"
+        }
+    }
+}

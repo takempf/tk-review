@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { sceneryHeld } from "tk-design-system/scenery/hold";
 import type { GitError, PrContext, PrThread } from "../src/ipc/git";
 import { Root } from "../src/Root";
 import { storageRoot } from "../src/store/account";
@@ -139,6 +140,8 @@ function later<T>(ms: number, value: T, error?: GitError): Promise<T> {
 }
 
 let nextPostedComment = 900;
+const commentRequests: unknown[] = [];
+Object.assign(window, { commentRequests, sceneryHeld });
 
 /**
  * What the harness has posted as inline or file comments, each a thread of its
@@ -147,7 +150,7 @@ let nextPostedComment = 900;
  */
 const posted: { comments: PrContext["comments"]; threads: PrThread[] } = {
   comments: [],
-  threads: PR.threads.map((thread) => ({ ...thread })),
+  threads: structuredClone(PR.threads),
 };
 
 /** The fixture PR's conversation, with what the harness has posted and resolved since. */
@@ -252,9 +255,23 @@ stdout:
             }
           : undefined,
       );
+    case "pr_discussion": {
+      const pr = (payload as { pr: PrContext }).pr;
+      // The input already contains earlier posts, so read the fixture afresh.
+      const fresh = prFor(pr.url);
+      return later(
+        100,
+        [fresh.comments, fresh.threads],
+        failing.has("discussion") ? GH_POST_ERROR : undefined,
+      );
+    }
     case "post_pr_comment": {
+      commentRequests.push(structuredClone(payload));
       if (failing.has("post")) return later(600, null, GH_POST_ERROR);
-      const { body, path, line, endLine, destination } = payload as {
+      const { pr, body, path, line, endLine, destination, oldSide, replyTo } = payload as {
+        pr: PrContext;
+        oldSide?: boolean;
+        replyTo?: number;
         body: string;
         path: string | null;
         line: number | null;
@@ -262,15 +279,46 @@ stdout:
         destination: string;
       };
       nextPostedComment += 1;
-      if (destination === "topLevel") return { url: `${PR.url}#issuecomment-${nextPostedComment}` };
+      if (destination === "topLevel") {
+        posted.comments.push({
+          id: nextPostedComment,
+          author: repo.githubLogin ?? "you",
+          body,
+          createdAt: new Date().toISOString(),
+          path: null,
+          line: null,
+          startLine: null,
+          oldSide: false,
+          outdated: false,
+        });
+        return later(600, { url: `${pr.url}#issuecomment-${nextPostedComment}` });
+      }
+      if (replyTo != null) {
+        const parent = [...PR.comments, ...posted.comments].find(
+          (comment) => comment.id === replyTo,
+        );
+        if (!parent) throw new Error("Missing reply target");
+        posted.comments.push({
+          ...parent,
+          id: nextPostedComment,
+          inReplyTo: replyTo,
+          author: repo.githubLogin ?? "you",
+          body,
+          createdAt: new Date().toISOString(),
+        });
+        posted.threads
+          .find((thread) => thread.commentIds.includes(replyTo))
+          ?.commentIds.push(nextPostedComment);
+        return later(600, { url: `${pr.url}#discussion_r${nextPostedComment}` });
+      }
       const id = nextPostedComment;
       const reply = ++nextPostedComment;
       const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
       const anchor = {
         path,
-        line: endLine ?? line,
+        line: destination === "file" ? null : (endLine ?? line),
         startLine: endLine != null ? line : null,
-        oldSide: false,
+        oldSide: oldSide ?? false,
         outdated: false,
       };
       posted.comments.push(
@@ -290,7 +338,7 @@ stdout:
         outdated: false,
         commentIds: [id, reply],
       });
-      return { url: `${PR.url}#discussion_r${id}` };
+      return later(600, { url: `${pr.url}#discussion_r${id}` });
     }
     // Delayed like a real `gh` round-trip, so "Resolving…" is visible.
     case "set_pr_thread_resolved": {

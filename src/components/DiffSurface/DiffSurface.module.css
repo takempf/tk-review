@@ -36,6 +36,8 @@
 .surface {
   flex: 1;
   min-height: 0;
+  /* Match CodeView's default 8px gap between files. */
+  padding-inline: 8px;
   overflow-x: hidden;
   overflow-y: auto;
   /* Mounts once a screen change has settled; fading in keeps it from popping.
@@ -66,6 +68,21 @@
  */
 .surface diffs-container {
   scrollbar-color: auto;
+}
+
+/*
+ * CodeView puts the rendered files in a sticky wrapper, then makes each file
+ * header sticky too. The wrapper's top/bottom insets change as lines are
+ * virtualized (with a random offset), making WebKit reconcile two nested
+ * sticky positions during scrolling. Let the file headers stick directly to
+ * the scroll pane instead. The spacer before this wrapper still positions the
+ * rendered slice, so virtualization and scroll targets keep their layout.
+ *
+ * CodeView sets the wrapper's position inline; this override is intentional.
+ */
+.surface > div > div:has(> diffs-container) {
+  /* biome-ignore lint/complexity/noImportantStyles: override CodeView's inline position */
+  position: static !important;
 }
 
 /*
@@ -175,60 +192,10 @@
 }
 
 /*
- * An explanation's note at the top of a file. The renderer slots it into the
- * code column, where it would inherit the code's font and spacing, so it sets
- * its own. Tinted the info colour, apart from the accent that marks the
- * selected file and from the added/deleted greens and reds.
+ * Links to comments and explanations share a compact row in the code column.
+ * Each uses its own tone and icon, so their destination is visible at a glance.
  */
-.fileNote {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  max-width: 72ch;
-  margin: var(--space-2) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  font-family: var(--font-ui);
-  font-size: var(--tk-text-sm);
-  line-height: var(--tk-leading-reading);
-  color: var(--text);
-  white-space: normal;
-  background: color-mix(in oklab, var(--tk-info-soft) 60%, var(--bg));
-  border-left: 2px solid var(--tk-info);
-  border-radius: var(--radius);
-}
-
-.fileNoteLabel {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--tk-info);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.fileNoteStale {
-  font-weight: 400;
-  color: var(--text-faint);
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.fileNoteStale::before {
-  content: "· ";
-}
-
-/*
- * The PR's comments at a place in the file, under the line they end on: a
- * byline in the UI font, slotted into the code column like a note, so it sets
- * its own type. Quiet until pointed at, when it takes the accent as the PR
- * tab's line links do. The people are set brighter than the words around them.
- */
-/* A row rather than running text: the people's avatars centre on it, and the
-   gap stands in for the spaces between its words. */
-.commentMarker {
+.annotationMarker {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 2px 0.35em;
@@ -238,7 +205,7 @@
   font-family: var(--font-ui);
   font-size: var(--tk-text-sm);
   line-height: var(--tk-leading-normal);
-  color: var(--text-dim);
+  color: var(--marker-tone);
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -247,8 +214,16 @@
   transition: color var(--tk-duration-2) var(--tk-ease-out);
 }
 
-.commentMarker:hover {
-  color: var(--accent);
+.annotationMarker:hover {
+  color: color-mix(in oklab, var(--marker-tone) 75%, var(--text));
+}
+
+.commentMarker {
+  --marker-tone: var(--accent);
+}
+
+.explanationMarker {
+  --marker-tone: var(--tk-info);
 }
 
 .commentAuthor {
@@ -260,6 +235,14 @@
   color: inherit;
 }
 
-.commentResolved::before {
+.commentResolved::before,
+.markerNote::before {
   content: "· ";
+}
+
+.commentWarning {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--tk-warning);
+  border-bottom: 1px solid var(--border);
 }

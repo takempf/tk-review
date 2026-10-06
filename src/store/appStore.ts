@@ -99,7 +99,7 @@ interface AppState {
   screenChange: ScreenChange | null;
   layout: DiffLayout;
   /**
-   * Show an explanation's file notes at the top of each file in the diff.
+   * Show links to explanations at the top of each file in the diff.
    * Turning it off hides them without discarding them.
    */
   fileNotes: boolean;

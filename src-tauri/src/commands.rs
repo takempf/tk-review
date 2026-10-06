@@ -95,6 +95,8 @@ pub async fn post_pr_comment(
     line: Option<u32>,
     end_line: Option<u32>,
     destination: PrCommentDestination,
+    old_side: Option<bool>,
+    reply_to: Option<u64>,
 ) -> Result<PostedPrComment, GitError> {
     blocking(move || {
         github::post_pr_comment(
@@ -105,9 +107,18 @@ pub async fn post_pr_comment(
             line,
             end_line,
             destination,
+            old_side.unwrap_or(false),
+            reply_to,
         )
     })
     .await
+}
+
+#[tauri::command]
+pub async fn pr_discussion(
+    pr: PrContext,
+) -> Result<(Vec<github::PrComment>, Vec<PrThread>), GitError> {
+    blocking(move || github::pr_discussion(&pr)).await
 }
 
 /// Finishes a review on GitHub: approve, comment, or request changes.

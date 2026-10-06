@@ -56,6 +56,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 0;
   min-height: 0;
 }
 
@@ -86,28 +87,12 @@
 
 .toolbarEnd {
   display: flex;
+  flex: 1 1 32rem;
   gap: var(--tk-space-2);
   align-items: center;
+  min-width: 0;
+  max-width: 46rem;
   margin-bottom: var(--tk-space-2);
-}
-
-.search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: min(100%, 18rem);
-}
-
-.searchIcon {
-  position: absolute;
-  left: var(--tk-space-3);
-  color: var(--tk-fg-subtle);
-  pointer-events: none;
-}
-
-.searchInput {
-  width: 100%;
-  padding-left: calc(var(--tk-space-3) * 2 + 1em);
 }
 
 .listScroll {
@@ -116,15 +101,6 @@
   margin: 0 calc(var(--tk-space-3) * -1);
   padding: 0 var(--tk-space-3) var(--tk-space-8);
   overflow: auto;
-
-  /* The space under the tabs, as a spacer that scrolls away rather than as
-     padding: the table's sticky header sticks inside the padding, which left a
-     strip above it for scrolled rows to show through. */
-  &::before {
-    display: block;
-    height: var(--tk-space-3);
-    content: "";
-  }
 }
 
 /* Where the next page loads, under the rows already listed. */

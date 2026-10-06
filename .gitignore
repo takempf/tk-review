@@ -9,3 +9,7 @@ src-tauri/gen/
 plan.md
 github-pr-plan.md
 pr-explanation-plan.md
+
+# Playwright artifacts.
+test-results/
+playwright-report/

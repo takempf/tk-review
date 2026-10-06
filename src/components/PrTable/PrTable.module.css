@@ -54,7 +54,9 @@
   z-index: 1;
   padding-top: calc(var(--tk-space-2) + var(--overlap));
   padding-bottom: var(--tk-space-2);
-  background: var(--tk-bg);
+  background: color-mix(in oklab, var(--tk-bg) 85%, transparent);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
 }
 
@@ -64,7 +66,7 @@
   align-items: center;
   margin: 0 calc(var(--tk-space-1) * -1);
   padding: var(--tk-space-1);
-  color: var(--tk-fg-muted);
+  color: var(--tk-accent-2);
   font-family: var(--tk-label-font);
   font-size: var(--tk-text-xs);
   font-weight: var(--tk-label-weight);
@@ -75,11 +77,6 @@
   border: 0;
   border-radius: var(--tk-radius-sm);
   transition: color var(--tk-duration-1) var(--tk-ease-fade);
-
-  &:hover,
-  &[data-sorted] {
-    color: var(--tk-fg);
-  }
 
   [data-column="size"] & {
     flex-direction: row-reverse;
@@ -96,10 +93,6 @@
   .sort:focus-visible &,
   .sort[data-sorted] & {
     opacity: 1;
-  }
-
-  .sort:not([data-sorted]) & {
-    color: var(--tk-fg-subtle);
   }
 }
 

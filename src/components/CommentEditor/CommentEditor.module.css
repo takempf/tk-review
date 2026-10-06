@@ -1,0 +1,52 @@
+.editor {
+  width: 100%;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--tk-text-md);
+  line-height: var(--tk-leading-reading);
+  text-shadow: none;
+  background: color-mix(in oklch, var(--bg) 92%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.editor:focus-within {
+  border-color: var(--accent);
+}
+
+.tabs {
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.body {
+  min-width: 0;
+}
+
+textarea.input {
+  display: block;
+  width: 100%;
+  min-height: 5lh;
+  padding: var(--space-3);
+  --textarea-padding-and-border: var(--space-3);
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+}
+
+.preview {
+  min-height: calc(5lh + 2 * var(--space-3));
+  max-height: 24rem;
+  padding: var(--space-3);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  margin: 0;
+  color: var(--text-faint);
+}

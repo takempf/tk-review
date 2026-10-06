@@ -11,6 +11,7 @@ import { Button, Tooltip } from "tk-design-system";
 import type { AppError } from "../../ipc/git";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { ResizeHandle, useStoredSize } from "../ResizeHandle/ResizeHandle";
+import { useSearch, useSearchReveal } from "../Search/Search";
 import css from "./Layout.module.css";
 
 const SIDEBAR = { storageKey: "tk-review:sidebar-width", min: 180, max: 640, fallback: 280 };
@@ -204,6 +205,9 @@ export function Layout({
   error,
   onDismissError,
 }: LayoutProps) {
+  const search = useSearch();
+  const appRef = useRef<HTMLDivElement>(null);
+  useSearchReveal(appRef);
   const sidebarWidth = useStoredSize(SIDEBAR);
   const asideWidth = useStoredSize(ASIDE);
   const sidebarShown = useStoredShown("tk-review:sidebar-shown");
@@ -224,6 +228,15 @@ export function Layout({
     revealed.current = revealAside;
     showAside(true);
   }, [revealAside, showAside]);
+
+  const searchTick = search.reveal?.tick;
+  const searchScope = search.reveal?.document.scope;
+  const showSidebar = sidebarShown.show;
+  useEffect(() => {
+    if (!searchTick) return;
+    if (searchScope === "files" || searchScope === "commits") showSidebar(true);
+    if (searchScope === "conversations") showAside(true);
+  }, [searchTick, searchScope, showSidebar, showAside]);
 
   // Each panel is its stored width unless the window can't hold both plus a
   // usable diff. The review panel yields first — the diff is the point — and
@@ -286,7 +299,7 @@ export function Layout({
   const pushed = sidebarShown.shown && !sidebarLaidOut;
 
   return (
-    <div className={css.app} style={timing}>
+    <div ref={appRef} className={css.app} style={timing}>
       <header className={css.header}>
         <PanelToggle
           edge="start"
@@ -319,6 +332,8 @@ export function Layout({
           ref={sidebarRef}
           id={sidebarId}
           className={css.sidebar}
+          aria-label="Files and commits"
+          data-panel="files"
           style={{ width: sidebarSize }}
           data-shown={sidebarShown.shown}
           inert={!sidebarShown.shown}
@@ -339,6 +354,9 @@ export function Layout({
         <main
           ref={mainRef}
           className={css.main}
+          tabIndex={-1}
+          aria-label="Diff"
+          data-panel="diff"
           style={pushed ? { transform: `translateX(${sidebarSize}px)` } : undefined}
         >
           {main}
@@ -348,6 +366,8 @@ export function Layout({
             ref={asideRef}
             id={asideId}
             className={css.aside}
+            aria-label="Conversations"
+            data-panel="conversations"
             style={{ width: asideSize }}
             data-shown={asideShown.shown}
             inert={!asideShown.shown}

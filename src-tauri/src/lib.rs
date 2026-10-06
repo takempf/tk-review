@@ -127,6 +127,7 @@ pub fn run() {
             commands::open_pr,
             commands::refresh_pr,
             commands::post_pr_comment,
+            commands::pr_discussion,
             commands::submit_pr_review,
             commands::set_pr_thread_resolved,
             commands::get_github_image,

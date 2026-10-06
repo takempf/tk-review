@@ -51,19 +51,29 @@
 }
 
 .bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: var(--tk-space-3);
   min-height: var(--title-row);
   min-width: 0;
-  padding: 0 var(--tk-space-3);
+  padding: 0 6rem;
 
   /* Clear of the traffic lights, which end 70px in. Both sides, so the
      contents stay centred on the window. */
   &[data-inset] {
-    padding-inline: calc(84px / var(--zoom, 1));
+    padding-inline: max(6rem, calc(84px / var(--zoom, 1)));
   }
+}
+
+.actions {
+  position: absolute;
+  inset-inline-end: var(--tk-space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
 }
 
 .brand {

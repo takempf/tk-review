@@ -185,6 +185,7 @@ export interface ExplainResult {
 
 /** One existing GitHub conversation or inline review comment on an open PR. */
 export interface PrComment {
+  inReplyTo?: number | null;
   id: number;
   author: string;
   body: string;
@@ -459,7 +460,11 @@ export const gitApi = {
     /** Where an inline comment's span ends; `null` for a single line. */
     endLine: number | null;
     destination: PrCommentDestination;
+    oldSide?: boolean;
+    replyTo?: number | null;
   }) => invoke<PostedPrComment>("post_pr_comment", { ...args }),
+
+  prDiscussion: (pr: PrContext) => invoke<[PrComment[], PrThread[]]>("pr_discussion", { pr }),
 
   /** Submits a GitHub review — approve, comment, or request changes — through `gh`. */
   submitPrReview: (args: { pr: PrContext; verdict: ReviewVerdict; body: string }) =>

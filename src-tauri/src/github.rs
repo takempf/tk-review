@@ -29,6 +29,8 @@ pub struct PrComment {
     pub author: String,
     pub body: String,
     pub created_at: String,
+    #[serde(default)]
+    pub in_reply_to: Option<u64>,
     pub path: Option<String>,
     /// The line an inline comment anchors to, the last for a span, or `None`
     /// for a comment on a file as a whole: the new file's, unless `old_side`
@@ -314,6 +316,8 @@ struct GhComment {
     body: String,
     created_at: String,
     user: GhAuthor,
+    #[serde(default)]
+    in_reply_to_id: Option<u64>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -728,7 +732,7 @@ fn read_pr(reference: &PrRef) -> Result<GhPr, GitError> {
     })
 }
 
-/// Posts one review finding without ever handling a GitHub token directly.
+/// Posts a PR conversation, file or line comment, or replies to an existing review thread.
 ///
 /// A review is anchored to the fetched PR commit. Re-read the current head
 /// first so an otherwise-valid inline line cannot land on a newer commit.
@@ -744,14 +748,28 @@ pub fn post_pr_comment(
     line: Option<u32>,
     end_line: Option<u32>,
     destination: PrCommentDestination,
+    old_side: bool,
+    reply_to: Option<u64>,
 ) -> Result<PostedPrComment, GitError> {
     let _ = root;
     let reference = parse_pr_ref(&pr.url)?;
-    let current = read_pr(&reference)?;
-    if current.head_ref_oid != pr.head_sha {
+    if body.trim().is_empty() {
+        return Err(GitError::Command("A comment needs some text.".into()));
+    }
+    // Replies keep the original thread's anchor, and conversation comments
+    // have no anchor to drift when the author pushes.
+    if reply_to.is_none() && destination != PrCommentDestination::TopLevel {
+        let current = read_pr(&reference)?;
+        if current.head_ref_oid != pr.head_sha {
+            return Err(GitError::Command(
+                "This pull request has new commits. Refresh it before posting so line anchors do not drift."
+                    .into(),
+            ));
+        }
+    }
+    if reply_to.is_some() && destination == PrCommentDestination::TopLevel {
         return Err(GitError::Command(
-            "This pull request has new commits. Refresh it before posting so line anchors do not drift."
-                .into(),
+            "Conversation replies must be posted as quoted comments.".into(),
         ));
     }
 
@@ -770,34 +788,52 @@ pub fn post_pr_comment(
     // all fields correctly typed (and safely carries multi-line Markdown).
     let mut fields = serde_json::Map::new();
     fields.insert("body".into(), serde_json::Value::String(body.into()));
-    match destination {
-        PrCommentDestination::Inline => {
-            let path = path
-                .ok_or_else(|| GitError::Command("An inline comment needs a file path.".into()))?;
-            let line = line.ok_or_else(|| {
-                GitError::Command("An inline comment needs a new-file line.".into())
+    if let Some(id) = reply_to {
+        let parent = pr
+            .comments
+            .iter()
+            .find(|comment| comment.id == id && comment.path.is_some())
+            .ok_or_else(|| {
+                GitError::Command(
+                    "The review comment is no longer in this PR. Refresh it before replying."
+                        .into(),
+                )
             })?;
-            fields.insert(
-                "commit_id".into(),
-                serde_json::Value::String(pr.head_sha.clone()),
-            );
-            fields.insert("path".into(), serde_json::Value::String(path.into()));
-            insert_line_span(&mut fields, line, end_line);
+        let root_id = parent.in_reply_to.unwrap_or(id);
+        fields.insert("in_reply_to".into(), serde_json::Value::from(root_id));
+    } else {
+        match destination {
+            PrCommentDestination::Inline => {
+                let path = path.ok_or_else(|| {
+                    GitError::Command("An inline comment needs a file path.".into())
+                })?;
+                let line = line
+                    .ok_or_else(|| GitError::Command("An inline comment needs a line.".into()))?;
+                fields.insert(
+                    "commit_id".into(),
+                    serde_json::Value::String(pr.head_sha.clone()),
+                );
+                fields.insert("path".into(), serde_json::Value::String(path.into()));
+                if line == 0 || end_line.is_some_and(|end| end < line) {
+                    return Err(GitError::Command("Choose a valid line range.".into()));
+                }
+                insert_line_span(&mut fields, line, end_line, old_side);
+            }
+            PrCommentDestination::File => {
+                let path = path
+                    .ok_or_else(|| GitError::Command("A file comment needs a file path.".into()))?;
+                fields.insert(
+                    "commit_id".into(),
+                    serde_json::Value::String(pr.head_sha.clone()),
+                );
+                fields.insert("path".into(), serde_json::Value::String(path.into()));
+                fields.insert(
+                    "subject_type".into(),
+                    serde_json::Value::String("file".into()),
+                );
+            }
+            PrCommentDestination::TopLevel => {}
         }
-        PrCommentDestination::File => {
-            let path =
-                path.ok_or_else(|| GitError::Command("A file comment needs a file path.".into()))?;
-            fields.insert(
-                "commit_id".into(),
-                serde_json::Value::String(pr.head_sha.clone()),
-            );
-            fields.insert("path".into(), serde_json::Value::String(path.into()));
-            fields.insert(
-                "subject_type".into(),
-                serde_json::Value::String("file".into()),
-            );
-        }
-        PrCommentDestination::TopLevel => {}
     }
     let payload = serde_json::to_vec(&serde_json::Value::Object(fields)).map_err(|error| {
         GitError::Command(format!("Could not encode the comment for GitHub: {error}"))
@@ -825,25 +861,26 @@ pub fn post_pr_comment(
     })
 }
 
-/// Anchors an inline comment to the new side of the diff. GitHub's `line` is
+/// Anchors an inline comment to the selected side of the diff. GitHub's `line` is
 /// where a comment ends; a span also names where it starts.
 fn insert_line_span(
     fields: &mut serde_json::Map<String, serde_json::Value>,
     line: u32,
     end_line: Option<u32>,
+    old_side: bool,
 ) {
-    let right = || serde_json::Value::String("RIGHT".into());
+    let side = || serde_json::Value::String(if old_side { "LEFT" } else { "RIGHT" }.into());
     match end_line {
         Some(end) if end > line => {
             fields.insert("start_line".into(), serde_json::Value::from(line));
-            fields.insert("start_side".into(), right());
+            fields.insert("start_side".into(), side());
             fields.insert("line".into(), serde_json::Value::from(end));
         }
         _ => {
             fields.insert("line".into(), serde_json::Value::from(line));
         }
     }
-    fields.insert("side".into(), right());
+    fields.insert("side".into(), side());
 }
 
 /// Submits a review of the PR: approve, comment, or request changes, with the
@@ -960,6 +997,11 @@ fn read_discussion(reference: &PrRef) -> Result<(Vec<PrComment>, Vec<PrThread>),
     Ok((comments, threads))
 }
 
+/// Reads only the conversation after posting, without fetching or replacing the diff.
+pub fn pr_discussion(pr: &PrContext) -> Result<(Vec<PrComment>, Vec<PrThread>), GitError> {
+    read_discussion(&parse_pr_ref(&pr.url)?)
+}
+
 /// One kind of comment, every page of it: `pulls` for inline comments,
 /// `issues` for top-level ones.
 fn read_comments(reference: &PrRef, kind: &str) -> Result<Vec<PrComment>, GitError> {
@@ -1005,6 +1047,7 @@ fn parse_comments(raw: &[u8]) -> Result<Vec<PrComment>, GitError> {
             // is shown where it was made.
             let current = comment.line.is_some();
             PrComment {
+                in_reply_to: comment.in_reply_to_id,
                 id: comment.id,
                 author: comment.user.login,
                 body: comment.body,
@@ -1365,7 +1408,7 @@ mod tests {
     #[test]
     fn a_span_anchors_from_its_first_line_to_its_last_on_the_new_side() {
         let mut fields = serde_json::Map::new();
-        insert_line_span(&mut fields, 12, Some(18));
+        insert_line_span(&mut fields, 12, Some(18), false);
         assert_eq!(
             serde_json::Value::Object(fields),
             serde_json::json!({"start_line": 12, "start_side": "RIGHT", "line": 18, "side": "RIGHT"})
@@ -1374,12 +1417,41 @@ mod tests {
         // No span, or one that ends where it starts: a single line.
         for end_line in [None, Some(12)] {
             let mut fields = serde_json::Map::new();
-            insert_line_span(&mut fields, 12, end_line);
+            insert_line_span(&mut fields, 12, end_line, false);
             assert_eq!(
                 serde_json::Value::Object(fields),
                 serde_json::json!({"line": 12, "side": "RIGHT"})
             );
         }
+    }
+
+    #[test]
+    fn comments_on_removed_lines_use_the_old_side_for_both_ends() {
+        let mut fields = serde_json::Map::new();
+        insert_line_span(&mut fields, 6, Some(9), true);
+        assert_eq!(
+            serde_json::Value::Object(fields),
+            serde_json::json!({
+                "start_line": 6, "start_side": "LEFT", "line": 9, "side": "LEFT"
+            })
+        );
+        let mut fields = serde_json::Map::new();
+        insert_line_span(&mut fields, 6, None, true);
+        assert_eq!(
+            serde_json::Value::Object(fields),
+            serde_json::json!({"line": 6, "side": "LEFT"})
+        );
+    }
+
+    #[test]
+    fn review_replies_keep_the_root_comment_id_even_without_graphql_threads() {
+        let raw = br#"[
+          {"id":10,"body":"Original","created_at":"a","user":{"login":"octo"},"path":"file.rs","line":6},
+          {"id":11,"body":"Reply","created_at":"b","user":{"login":"mona"},"path":"file.rs","line":6,"in_reply_to_id":10}
+        ]"#;
+        let comments = parse_comments(raw).expect("comments");
+        assert_eq!(comments[0].in_reply_to, None);
+        assert_eq!(comments[1].in_reply_to, Some(10));
     }
 
     #[test]

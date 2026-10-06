@@ -1934,6 +1934,7 @@ mod tests {
             head_sha: "abc123".into(),
             compare_ref: "tk-review/pr/7".into(),
             comments: vec![crate::github::PrComment {
+                in_reply_to: None,
                 id: 1,
                 author: "reviewer".into(),
                 body: "Please keep the old endpoint.".into(),
@@ -2103,6 +2104,7 @@ mod tests {
         let posted = "https://github.com/acme/widgets/pull/7#discussion_r40";
         pr.comments = vec![
             crate::github::PrComment {
+                in_reply_to: None,
                 id: 40,
                 author: "me".into(),
                 body: "Off-by-one in loop bound.".into(),
@@ -2114,6 +2116,7 @@ mod tests {
                 outdated: true,
             },
             crate::github::PrComment {
+                in_reply_to: None,
                 id: 41,
                 author: "octo".into(),
                 body: "Fixed: the bound is now inclusive.\nAdded a test.".into(),

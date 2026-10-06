@@ -19,9 +19,6 @@
  */
 .status,
 .findingTitle,
-.commentText,
-.commentInput,
-.composerInput,
 .prMarkdown,
 .prCommentMarkdown,
 .agentMarkdown {
@@ -317,15 +314,17 @@
 
 /* Brought into view from the diff's marker: tinted a moment, the tint spread
    past the comments' edges so it frames them without moving anything. */
-.anchor[data-focused] {
+.anchor[data-focused],
+.explainFile[data-focused] {
   animation: anchor-focused 1.6s var(--tk-ease-out);
 }
 
 @keyframes anchor-focused {
   from,
   30% {
-    background-color: color-mix(in oklab, var(--accent) 14%, transparent);
-    box-shadow: 0 0 0 var(--space-2) color-mix(in oklab, var(--accent) 14%, transparent);
+    background-color: color-mix(in oklab, var(--focus-tone, var(--accent)) 14%, transparent);
+    box-shadow: 0 0 0 var(--space-2)
+      color-mix(in oklab, var(--focus-tone, var(--accent)) 14%, transparent);
   }
 }
 
@@ -510,6 +509,49 @@ button.anchorLines:hover {
   overflow-y: auto;
 }
 
+/* A commit owns a complete set of review sections. Its stronger heading
+   separates revisions while the finer rules separate sections within one. */
+.commitReviews + .commitReviews,
+.notice + .commitReviews {
+  border-top: 1px solid var(--border);
+}
+
+.commitHeading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--panel-inset);
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.commitByline {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--text-dim);
+}
+
+.commitHash {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--tk-text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.commitSubject {
+  margin: 0;
+  font-size: var(--tk-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.commitNote {
+  margin: 0;
+  font-size: var(--tk-text-xs);
+  color: var(--text-faint);
+}
+
 .section {
   padding: var(--space-4) var(--panel-inset) var(--panel-inset);
 }
@@ -664,13 +706,6 @@ button.anchorLines:hover {
   display: contents;
 }
 
-/* A ghost button shows no edge until hovered, so leading the row it is pulled
-   out by its own padding: its label lines up with the text above, and the
-   hover fill spills into the inset instead. */
-.askButton:first-child {
-  margin-left: calc(-1 * var(--space-3));
-}
-
 .postedLink {
   display: inline-flex;
   gap: var(--space-1);
@@ -684,36 +719,6 @@ button.anchorLines:hover {
 
 .postedLink:hover {
   text-decoration-color: currentColor;
-}
-
-.composerEditor {
-  display: flex;
-  flex: 1 0 100%;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  padding: var(--space-2);
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.composerInput {
-  box-sizing: border-box;
-  width: 100%;
-  padding: var(--space-3);
-  --textarea-padding-and-border: calc(var(--space-3) + 1px);
-  color: var(--text);
-  font: inherit;
-  line-height: 1.4;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.composerInput:focus {
-  border-color: var(--accent);
-  outline: none;
 }
 
 .composerNote,
@@ -763,11 +768,6 @@ button.anchorLines:hover {
   color: var(--text-faint);
 }
 
-.commentText {
-  margin: 2px 0 0;
-  white-space: pre-wrap;
-}
-
 .commentPending {
   margin: 0;
   font-style: italic;
@@ -777,43 +777,8 @@ button.anchorLines:hover {
 .commentForm {
   display: flex;
   gap: var(--space-1);
-  /* The field grows downward, so the button rides its bottom edge and stays
-     beside the line being typed rather than drifting up with the box. */
-  align-items: flex-end;
-}
-
-/* One line of text stands a control's height tall, the Send button's, so the
-   two line up until the field grows past it. */
-.commentInput {
-  flex: 1;
-  min-width: 0;
-  padding: calc((var(--tk-control-h) - 1lh) / 2 - 1px) var(--space-3);
-  --textarea-padding-and-border: calc((var(--tk-control-h) - 1lh) / 2);
-  line-height: 1.5;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.commentInput:focus {
-  border-color: var(--accent);
-  outline: none;
-}
-
-.commentSend {
-  display: inline-flex;
-  flex: none;
-  gap: var(--space-1);
-  align-items: center;
-  height: var(--tk-control-h);
-  padding: 0 var(--space-3);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.commentSend:disabled {
-  opacity: 0.5;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .error {
@@ -929,10 +894,13 @@ button.anchorLines:hover {
 
 /* A file's note: its path, as a finding shows one, over the text. */
 .explainFile {
+  --focus-tone: var(--tk-info);
+
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   margin-top: var(--space-2);
+  border-radius: var(--radius);
 }
 
 /* Its own row, so the path is never the thing a long title squeezes out. Flex
@@ -1039,4 +1007,29 @@ button.anchorLines:hover {
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.newComment {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--panel-inset);
+  border-top: 1px solid var(--border);
+}
+
+.replyComposer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  width: 100%;
+}
+
+.commentDestination {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--tk-text-sm);
+  overflow-wrap: anywhere;
 }

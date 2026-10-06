@@ -1,11 +1,8 @@
-import { useMemo } from "react";
-import { Button, Icon, Menu } from "tk-design-system";
 import { prStatus, STATUS_LABELS, STATUSES } from "../../lib/prStatus";
-import { labelColor, type PrRow } from "../PrTable/PrTable";
-import css from "./PrFilters.module.css";
+import type { PrRow } from "../PrTable/PrTable";
 
-const FACETS = ["author", "status", "label"] as const;
-type Facet = (typeof FACETS)[number];
+export const FACETS = ["author", "status", "label"] as const;
+export type Facet = (typeof FACETS)[number];
 
 /**
  * What the list is narrowed to. A row passes a filter holding any of its
@@ -48,19 +45,17 @@ export function filterRows(rows: PrRow[], filters: PrFilters, listed: boolean): 
 
 const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
 
-const FACET_INFO: Record<
+export const FACET_INFO: Record<
   Facet,
-  { title: string; none: string; name: (value: string) => string; order: typeof byName }
+  { title: string; name: (value: string) => string; order: typeof byName }
 > = {
   author: {
     title: "Author",
-    none: "No authors in this list",
     name: (login) => `@${login}`,
     order: byName,
   },
   status: {
     title: "Status",
-    none: "No statuses in this list",
     name: (status) => STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status,
     order: (a, b) =>
       STATUSES.indexOf(a as (typeof STATUSES)[number]) -
@@ -68,13 +63,12 @@ const FACET_INFO: Record<
   },
   label: {
     title: "Label",
-    none: "No labels in this list",
     name: (label) => label,
     order: byName,
   },
 };
 
-interface Option {
+export interface FilterOption {
   value: string;
   /** How many rows it would show, given the other filters. */
   count: number;
@@ -82,10 +76,15 @@ interface Option {
 
 /**
  * What one filter offers: every value among the rows the other filters let
- * through, so its counts say what choosing each would show. A value already
- * chosen stays on offer, at zero if need be, so it can be unchosen.
+ * through, so its counts say what choosing each would show. Keep chosen values
+ * in the collection, even at zero, so their chips survive tabs without matches.
  */
-function optionsFor(facet: Facet, rows: PrRow[], filters: PrFilters, listed: boolean): Option[] {
+export function optionsFor(
+  facet: Facet,
+  rows: PrRow[],
+  filters: PrFilters,
+  listed: boolean,
+): FilterOption[] {
   const counts = new Map<string, number>();
   for (const row of rows) {
     const values = valuesOf(row, listed);
@@ -98,110 +97,14 @@ function optionsFor(facet: Facet, rows: PrRow[], filters: PrFilters, listed: boo
     .sort((a, b) => FACET_INFO[facet].order(a.value, b.value));
 }
 
-function FilterMenu({
-  facet,
-  options,
-  chosen,
-  colors,
-  onChange,
-}: {
-  facet: Facet;
-  options: Option[];
-  chosen: string[];
-  colors: Map<string, string>;
-  onChange: (next: string[]) => void;
-}) {
-  const { title, none, name } = FACET_INFO[facet];
-  const [only] = chosen;
-  return (
-    <Menu.Root>
-      <Menu.Trigger render={<Button size="sm" variant={only ? "default" : "ghost"} />}>
-        {title}
-        {only ? (
-          <span className={css.chosen}>{chosen.length === 1 ? name(only) : chosen.length}</span>
-        ) : null}
-        <Icon name="chevron-down" className={css.chevron} />
-      </Menu.Trigger>
-      <Menu.Popup size="sm" align="end">
-        {options.length === 0 ? <Menu.Item disabled>{none}</Menu.Item> : null}
-        {options.map(({ value, count }) => (
-          <Menu.CheckboxItem
-            key={value}
-            checked={chosen.includes(value)}
-            onCheckedChange={(checked) =>
-              onChange(checked ? [...chosen, value] : chosen.filter((other) => other !== value))
-            }
-            closeOnClick={false}
-          >
-            <span className={css.option}>
-              {facet === "label" ? (
-                <span
-                  className={css.swatch}
-                  style={{ "--label": labelColor(colors.get(value)) } as React.CSSProperties}
-                />
-              ) : null}
-              <span className={css.optionName}>{name(value)}</span>
-              <span className={css.optionCount}>{count}</span>
-            </span>
-          </Menu.CheckboxItem>
-        ))}
-        {only ? (
-          <>
-            <Menu.Separator />
-            <Menu.Item icon="close" onClick={() => onChange([])}>
-              Clear
-            </Menu.Item>
-          </>
-        ) : null}
-      </Menu.Popup>
-    </Menu.Root>
-  );
+/** A facet prefix scopes autocomplete without filtering the PR titles by the prefix. */
+export function filterQuery(query: string): { facet: Facet | null; text: string } {
+  const match = /^\s*(author|status|label):\s*(.*)$/i.exec(query);
+  return match?.[1] && match[2] !== undefined
+    ? { facet: match[1].toLowerCase() as Facet, text: match[2] }
+    : { facet: null, text: query };
 }
 
-/**
- * A menu per filter, offering what the tab's rows hold: whatever pages of the
- * list have loaded, which the list keeps loading while a filter leaves it short.
- */
-export function PrFilterMenus({
-  rows,
-  listed,
-  filters,
-  onChange,
-}: {
-  /** The tab's rows before these filters. */
-  rows: PrRow[];
-  listed: boolean;
-  filters: PrFilters;
-  onChange: (next: PrFilters) => void;
-}) {
-  const options = useMemo(
-    () =>
-      Object.fromEntries(
-        FACETS.map((facet) => [facet, optionsFor(facet, rows, filters, listed)]),
-      ) as Record<Facet, Option[]>,
-    [rows, filters, listed],
-  );
-  const colors = useMemo(
-    () =>
-      new Map(
-        rows.flatMap(
-          (row) => row.pr?.labels.map((label) => [label.name, label.color] as const) ?? [],
-        ),
-      ),
-    [rows],
-  );
-  return (
-    <>
-      {FACETS.map((facet) => (
-        <FilterMenu
-          key={facet}
-          facet={facet}
-          options={options[facet]}
-          chosen={filters[facet]}
-          colors={colors}
-          onChange={(next) => onChange({ ...filters, [facet]: next })}
-        />
-      ))}
-    </>
-  );
+export function textQuery(query: string): string {
+  return filterQuery(query).facet ? "" : query;
 }

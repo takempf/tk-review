@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Icon } from "tk-design-system";
 import css from "./App.module.css";
 import { githubHost } from "./components/Author/Author";
@@ -12,6 +12,8 @@ import { Home } from "./components/Home/Home";
 import { Layout } from "./components/Layout/Layout";
 import { PrBranches } from "./components/PrBranches/PrBranches";
 import { ReviewPanel } from "./components/ReviewPanel/ReviewPanel";
+import { ReviewSearchIndex } from "./components/Search/ReviewSearchIndex";
+import { SearchProvider } from "./components/Search/Search";
 import { Spinner } from "./components/Spinner/Spinner";
 import { TabBar } from "./components/TabBar/TabBar";
 import { TitleBar } from "./components/TitleBar/TitleBar";
@@ -29,7 +31,8 @@ function useFileKeyboardNav() {
 
       // Never steal keystrokes aimed at a form control.
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, select, textarea, [contenteditable='true']")) return;
+      if (target?.closest("input, select, textarea, [contenteditable='true'], [role='dialog']"))
+        return;
 
       const tab = shownTab(useAppStore.getState());
       if (!tab) return;
@@ -115,74 +118,91 @@ function ReviewScreen() {
   const refreshingPr = useTab((state) => state.refreshingPr);
   const refresh = useTab((state) => state.refresh);
   const dismissError = useTab((state) => state.dismissError);
-  // A comment marker in the diff opens its conversation in the review panel.
-  const commentFocus = useTab((state) => state.commentFocus?.tick);
+  // Diff links reveal the review panel for comments or file explanations.
+  const panelFocus = useTab(
+    (state) => (state.commentFocus?.tick ?? 0) + (state.explanationFocus?.tick ?? 0),
+  );
 
   return (
-    <Layout
-      revealAside={commentFocus}
-      error={error}
-      onDismissError={dismissError}
-      header={
-        <>
-          <div className={css.headerGroup}>
-            {/* A PR is chosen from the list; only a branch comparison is picked here. */}
-            {hasPr ? <PrHeading /> : <ComparisonPicker key={root} />}
+    <>
+      <ReviewSearchIndex />
+      <Layout
+        revealAside={panelFocus}
+        error={error}
+        onDismissError={dismissError}
+        header={
+          <>
+            <div className={css.headerGroup}>
+              {/* A PR is chosen from the list; only a branch comparison is picked here. */}
+              {hasPr ? <PrHeading /> : <ComparisonPicker key={root} />}
+            </div>
+            <span className={css.spacer} />
+            <DiffStats />
+            <Button
+              size="sm"
+              onClick={() => void refresh()}
+              disabled={loadingDiff || refreshingPr || openingPr}
+            >
+              {loadingDiff || refreshingPr ? (
+                <>
+                  <Spinner /> Refreshing…
+                </>
+              ) : (
+                <>
+                  <Icon name="refresh" /> Refresh
+                </>
+              )}
+            </Button>
+          </>
+        }
+        sidebar={
+          <div className={css.sidebar}>
+            <FileList />
+            <CommitList />
           </div>
-          <span className={css.spacer} />
-          <DiffStats />
-          <Button
-            size="sm"
-            onClick={() => void refresh()}
-            disabled={loadingDiff || refreshingPr || openingPr}
-          >
-            {loadingDiff || refreshingPr ? (
-              <>
-                <Spinner /> Refreshing…
-              </>
-            ) : (
-              <>
-                <Icon name="refresh" /> Refresh
-              </>
-            )}
-          </Button>
-        </>
-      }
-      sidebar={
-        <div className={css.sidebar}>
-          <FileList />
-          <CommitList />
-        </div>
-      }
-      aside={<ReviewPanel />}
-      main={
-        summary ? (
-          <DiffSurface />
-        ) : loadingDiff || openingPr ? (
-          <DiffSkeleton />
-        ) : (
-          <p className={css.placeholder}>Choose two refs to compare.</p>
-        )
-      }
-    />
+        }
+        aside={<ReviewPanel />}
+        main={
+          summary ? (
+            <DiffSurface />
+          ) : loadingDiff || openingPr ? (
+            <DiffSkeleton />
+          ) : (
+            <p className={css.placeholder}>Choose two refs to compare.</p>
+          )
+        }
+      />
+    </>
   );
 }
 
 type Screen = "home" | `tab:${string}`;
 
-function renderScreen(screen: Screen) {
-  if (screen === "home") return <Home />;
+function renderScreen(screen: Screen, searchContainer: HTMLDivElement | null) {
+  if (screen === "home")
+    return (
+      <SearchProvider actionContainer={searchContainer}>
+        <Home />
+      </SearchProvider>
+    );
   // Found even once closed, so its screen can fade out.
   const tab = findTab(screen.slice("tab:".length));
   if (!tab) return null;
   return (
     <TabProvider value={tab}>
-      <ReviewScreen />
+      <SearchProvider actionContainer={searchContainer}>
+        <ReviewScreen />
+      </SearchProvider>
     </TabProvider>
   );
 }
 
 export function App() {
+  const [searchContainer, setSearchContainer] = useState<HTMLDivElement | null>(null);
+  const render = useCallback(
+    (screen: Screen) => renderScreen(screen, searchContainer),
+    [searchContainer],
+  );
   const tab = useAppStore(shownTab);
   const tabs = useAppStore((state) => state.tabs);
   // The list and every open tab stay mounted, the one on show in front.
@@ -203,14 +223,14 @@ export function App() {
 
   return (
     <div className={css.window}>
-      <TitleBar>
+      <TitleBar actionsRef={setSearchContainer}>
         <TabBar />
       </TitleBar>
       <div className={css.screen}>
         <ScreenStack<Screen>
           screens={screens}
           screen={tab ? `tab:${tab.id}` : "home"}
-          render={renderScreen}
+          render={render}
         />
       </div>
     </div>

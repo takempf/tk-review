@@ -102,7 +102,7 @@ function CommitRow({
 }) {
   const { copied, copy } = useCopy(commit.sha);
   return (
-    <li className={css.item}>
+    <li className={css.item} data-search-id={`commit:${commit.sha}`} tabIndex={-1}>
       <Tooltip content={copied ? "Copied" : "Copy commit hash"}>
         <button
           type="button"

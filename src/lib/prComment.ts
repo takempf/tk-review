@@ -8,6 +8,11 @@ export interface PrPostLocation {
   /** Where an inline comment's span ends; `null` for a single line. */
   endLine: number | null;
   note: string;
+  oldSide?: boolean;
+  replyTo?: number;
+  quoteCommentId?: number;
+  /** The diff commit the user selected; preserved if the PR is refreshed. */
+  headSha?: string;
 }
 
 /**

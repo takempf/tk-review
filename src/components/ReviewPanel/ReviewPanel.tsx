@@ -33,6 +33,7 @@ import { describeLines, findingLines, formatLines, type LineSpan } from "../../l
 import { useModelCatalogs, useModelLabel } from "../../lib/models";
 import {
   findingAfter,
+  type PrPostLocation,
   postBodyForFinding,
   postLocationForFinding,
   postLocationForPriorFinding,
@@ -57,6 +58,7 @@ import {
   type ResolvedFinding,
   resolutionThreadKey,
   reviewsNewestFirst,
+  reviewsWorkingTree,
   type StoredExplanation,
   type StoredReview,
   sourcedKey,
@@ -65,16 +67,18 @@ import {
 } from "../../store/tabStore";
 import { Author, githubHost } from "../Author/Author";
 import { Combobox } from "../Combobox/Combobox";
+import { CommentEditor } from "../CommentEditor/CommentEditor";
 import { CopyButton } from "../CopyButton/CopyButton";
+import { Details } from "../Details/Details";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
 import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Model } from "../Model/Model";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
+import { useSearch } from "../Search/Search";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import { Spinner } from "../Spinner/Spinner";
-import { Textarea } from "../Textarea/Textarea";
 import css from "./ReviewPanel.module.css";
 
 const ENGINE_OPTIONS = (Object.keys(ENGINE_LABELS) as ReviewEngine[]).map((engine) => ({
@@ -240,13 +244,17 @@ function GitHubPost({
   comment,
   host,
   meta,
+  replyTo,
+  scope = "pr",
 }: {
   comment: PrComment;
   host: string;
   meta?: ReactNode;
+  replyTo?: number;
+  scope?: string;
 }) {
   return (
-    <div className={css.prComment}>
+    <div className={css.prComment} data-search-id={`pr:comment:${comment.id}`} tabIndex={-1}>
       <div className={css.itemHead}>
         <span className={css.prByline}>
           <Author login={comment.author} host={host} className={css.prAuthor} />
@@ -258,6 +266,27 @@ function GitHubPost({
         <CopyButton text={comment.body} label="Copy comment" />
       </div>
       <GitHubMarkdown markdown={comment.body} className={css.prCommentMarkdown} />
+      <NewPrComment
+        owner={`${scope}:${comment.id}`}
+        trigger="Reply"
+        location={{
+          destination: comment.path ? "inline" : "topLevel",
+          path: comment.path,
+          line: null,
+          endLine: null,
+          quoteCommentId: comment.path ? undefined : comment.id,
+          replyTo: comment.path ? (replyTo ?? comment.inReplyTo ?? comment.id) : undefined,
+          note: `Reply to @${comment.author}${comment.path ? ` on ${comment.path}` : " in the PR conversation"}.`,
+        }}
+        initialBody={
+          comment.path
+            ? ""
+            : `@${comment.author} wrote:\n${comment.body
+                .split("\n")
+                .map((line) => `> ${line}`)
+                .join("\n")}\n\n`
+        }
+      />
     </div>
   );
 }
@@ -333,6 +362,7 @@ function InlineFile({ file, host }: { file: FileDiscussion; host: string }) {
                     comment={comment}
                     host={host}
                     meta={index === 0 ? threadMeta(thread) : null}
+                    replyTo={comments[0]?.inReplyTo ?? comments[0]?.id}
                   />
                 ))}
               </div>
@@ -380,6 +410,131 @@ function useCommentFocus(ref: RefObject<HTMLElement | null>) {
   }, [ref, focus]);
 }
 
+/** Diff explanation links land on the file note, with the same cue as comments. */
+function useExplanationFocus(ref: RefObject<HTMLElement | null>, shown: StoredExplanation | null) {
+  const focus = useTab((state) => state.explanationFocus);
+  const handled = useRef(focus?.tick ?? 0);
+
+  useEffect(() => {
+    const body = ref.current;
+    if (!focus || !shown || !body || focus.tick === handled.current) return;
+    const file = [...body.querySelectorAll<HTMLElement>("[data-explain-path]")].find(
+      (element) => element.dataset.explainPath === focus.path,
+    );
+    if (!file) return;
+    // Let the tab and any folded section finish opening before measuring.
+    const frame = requestAnimationFrame(() => {
+      handled.current = focus.tick;
+      const top = file.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      body.scrollTo({
+        top: body.scrollTop + top - FOCUS_MARGIN,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+      file.removeAttribute("data-focused");
+      void file.offsetWidth;
+      file.setAttribute("data-focused", "");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [ref, focus, shown]);
+}
+
+/** Replies expand at their own trigger; diff targets use the conversation's composer. */
+function NewPrComment({
+  owner = null,
+  trigger = "Add comment",
+  location = {
+    destination: "topLevel",
+    path: null,
+    line: null,
+    endLine: null,
+    note: "Comment on the PR conversation.",
+  },
+  initialBody = "",
+}: {
+  owner?: string | null;
+  trigger?: string;
+  location?: PrPostLocation;
+  initialBody?: string;
+}) {
+  const active = useTab((state) => state.activeComment);
+  const currentOwner = useTab((state) => state.commentOwner);
+  const currentDraft = useTab((state) =>
+    state.activeComment ? state.commentDrafts[state.activeComment] : null,
+  );
+  const open = !!active && currentOwner === owner;
+  // Retain the contents through the closing animation; the store owns saved drafts.
+  const lastDraft = useRef(currentDraft);
+  if (open) lastDraft.current = currentDraft;
+  const draft = open ? currentDraft : lastDraft.current;
+  const tick = useTab((state) => state.commentComposeTick);
+  const begin = useTab((state) => state.beginPrComment);
+  const edit = useTab((state) => state.editPrComment);
+  const close = useTab((state) => state.closePrComment);
+  const send = useTab((state) => state.sendPrComment);
+  const posting = useTab((state) => state.postingComment);
+  const error = useTab((state) => state.commentError);
+  const url = useTab((state) => state.postedCommentUrl);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open || tick === 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (owner === null) ref.current?.scrollIntoView({ block: "nearest" });
+      ref.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [tick, open, owner]);
+  return (
+    <div ref={ref} className={owner === null ? css.newComment : css.replyComposer}>
+      <Details
+        open={open}
+        onOpenChange={(next) => (next ? begin(location, initialBody, owner) : close())}
+        disabled={posting}
+        trigger={
+          <>
+            <Icon name="comment" /> {trigger}
+          </>
+        }
+      >
+        {draft ? (
+          <>
+            <p className={css.commentDestination}>{draft.location.note}</p>
+            <CommentEditor
+              key={`${active}:${tick}`}
+              value={draft.body}
+              onChange={edit}
+              onSubmit={() => void send()}
+              canSubmit={!posting && !!draft.body.trim()}
+              disabled={posting}
+              ariaLabel="Pull request comment"
+              placeholder="Leave a comment (Markdown supported)"
+            />
+            <div className={css.composerActions}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void send()}
+                disabled={posting || !draft.body.trim()}
+              >
+                {posting ? <Spinner /> : <Icon name="send" />}
+                {posting ? "Posting…" : draft.location.replyTo ? "Reply" : "Comment"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={close} disabled={posting}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </Details>
+      {currentOwner === owner && url ? (
+        <a className={css.postedLink} href={url} target="_blank" rel="noreferrer">
+          Posted to PR <Icon name="external" />
+        </a>
+      ) : null}
+      {currentOwner === owner && error ? <ErrorNotice error={error} /> : null}
+    </div>
+  );
+}
+
 function PrSection({ pr }: { pr: PrContext }) {
   const prHeadMoved = useTab((state) => state.prHeadMoved);
   const host = githubHost(pr.url);
@@ -390,23 +545,26 @@ function PrSection({ pr }: { pr: PrContext }) {
 
   return (
     <div ref={bodyRef} className={css.prBody}>
-      <div className={css.prHeader}>
-        <div className={`${css.itemHead} ${css.titleHead}`}>
-          <p className={css.prName}>{pr.title}</p>
-          {pr.body ? <CopyButton text={pr.body} label="Copy description" /> : null}
+      <div data-search-id="pr:description" tabIndex={-1}>
+        <div className={css.prHeader}>
+          <div className={`${css.itemHead} ${css.titleHead}`}>
+            <p className={css.prName}>{pr.title}</p>
+            {pr.body ? <CopyButton text={pr.body} label="Copy description" /> : null}
+          </div>
+          <a className={css.prLink} href={pr.url} target="_blank" rel="noreferrer">
+            #{pr.number} on GitHub <Icon name="external" />
+          </a>
+          {prHeadMoved ? (
+            <p className={css.prMoved}>PR has new commits; the comparison was refreshed.</p>
+          ) : null}
         </div>
-        <a className={css.prLink} href={pr.url} target="_blank" rel="noreferrer">
-          #{pr.number} on GitHub <Icon name="external" />
-        </a>
-        {prHeadMoved ? (
-          <p className={css.prMoved}>PR has new commits; the comparison was refreshed.</p>
-        ) : null}
+        {pr.body ? (
+          <GitHubMarkdown markdown={pr.body} className={css.prMarkdown} />
+        ) : (
+          <p className={css.muted}>No description.</p>
+        )}
       </div>
-      {pr.body ? (
-        <GitHubMarkdown markdown={pr.body} className={css.prMarkdown} />
-      ) : (
-        <p className={css.muted}>No description.</p>
-      )}
+      <NewPrComment />
       {topLevel.length > 0 ? (
         <div className={css.prDiscussion}>
           <div className={css.prPosts}>
@@ -491,6 +649,8 @@ function Section({
   tag,
   reveal = false,
   defaultOpen = true,
+  openTick = 0,
+  searchId,
   children,
 }: {
   title: string;
@@ -500,11 +660,38 @@ function Section({
   /** Part of a run's result, so it takes part in `useRevealInOrder`. */
   reveal?: boolean;
   defaultOpen?: boolean;
+  /** A new request opens a folded section without remounting its contents. */
+  openTick?: number;
+  searchId?: string;
   children: ReactNode;
 }) {
+  const section = useRef<HTMLElement>(null);
+  const { reveal: searchReveal } = useSearch();
   const [open, setOpen] = useState(defaultOpen);
+  useLayoutEffect(() => {
+    if (!searchReveal?.document.target) return;
+    const target = searchReveal.document.target;
+    if (
+      section.current?.dataset.searchId === target ||
+      [...(section.current?.querySelectorAll<HTMLElement>("[data-search-id]") ?? [])].some(
+        (node) => node.dataset.searchId === target,
+      )
+    )
+      setOpen(true);
+  }, [searchReveal]);
+  const [openedTick, setOpenedTick] = useState(openTick);
+  if (openTick !== openedTick) {
+    setOpenedTick(openTick);
+    setOpen(true);
+  }
   return (
-    <section className={css.section} data-reveal-frame={reveal || undefined}>
+    <section
+      ref={section}
+      className={css.section}
+      data-search-id={searchId}
+      tabIndex={-1}
+      data-reveal-frame={reveal || undefined}
+    >
       <button
         type="button"
         className={css.sectionHeading}
@@ -529,11 +716,11 @@ const NOT_IN_DIFF = Number.MAX_SAFE_INTEGER;
 
 /**
  * An explanation of the change: the walkthrough, then an index of the notes it
- * left on files. The notes are read at the top of each file in the diff, so
- * here they start folded away, as a list to jump from or copy.
+ * left on files. Diff links lead here to read the full explanation.
  */
 function Explanation({ stored }: { stored: StoredExplanation }) {
   const summary = useTab((state) => state.summary);
+  const focusTick = useTab((state) => state.explanationFocus?.tick ?? 0);
   const { overall, cutShort } = stored.explanation;
 
   // Diff order, so the notes read in the order the files are scrolled
@@ -554,7 +741,7 @@ function Explanation({ stored }: { stored: StoredExplanation }) {
 
   return (
     <>
-      <Section title="Walkthrough" reveal>
+      <Section title="Walkthrough" searchId="explain:overall" reveal>
         <div className={css.itemHead}>
           <Provenance
             engine={stored.engine}
@@ -577,9 +764,9 @@ function Explanation({ stored }: { stored: StoredExplanation }) {
         <GitHubMarkdown markdown={overall} className={css.agentMarkdown} />
       </Section>
       {files.length > 0 ? (
-        <Section title="File notes" count={files.length} defaultOpen={false} reveal>
+        <Section title="File notes" count={files.length} openTick={focusTick} reveal>
           <div className={css.itemActions}>
-            <span className={css.provenance}>Also shown at the top of each file in the diff.</span>
+            <span className={css.provenance}>Linked from each file in the diff.</span>
             <CopyButton
               className={css.actionsEnd}
               text={files.map(fileMarkdown).join("\n\n")}
@@ -587,7 +774,13 @@ function Explanation({ stored }: { stored: StoredExplanation }) {
             />
           </div>
           {files.map((file) => (
-            <div className={css.explainFile} key={file.path}>
+            <div
+              className={css.explainFile}
+              key={file.path}
+              data-explain-path={file.path}
+              data-search-id={`explain:${file.path}`}
+              tabIndex={-1}
+            >
               <div className={css.itemHead}>
                 <FindingLocation path={file.path} lines={null} />
                 <CopyButton text={fileMarkdown(file)} label="Copy file note" />
@@ -633,22 +826,27 @@ function Thread({
   const pending = replyingTo === sourcedKey(engine, threadKey);
   const busy = replyingTo !== null;
   const canSend = !busy && draft.trim() !== "";
-  const open = asking || comments.length > 0 || pending;
   const agent = ENGINE_LABELS[engine] ?? engine;
 
   function send() {
     if (!canSend) return;
-    setDraft("");
-    void addComment(engine, threadKey, draft.trim());
+    void addComment(engine, threadKey, draft.trim()).then((sent) => {
+      if (sent) {
+        setDraft("");
+        setAsking(false);
+      }
+    });
   }
 
   return (
     <>
-      {open ? (
+      {comments.length > 0 || pending ? (
         <div className={css.thread}>
-          {comments.map((comment) => (
+          {comments.map((comment, index) => (
             <div
               key={`${comment.at}:${comment.author}`}
+              data-search-id={`thread:${engine}:${threadKey}:${index}`}
+              tabIndex={-1}
               className={comment.author === "user" ? css.commentUser : css.commentAgent}
             >
               <div className={css.itemHead}>
@@ -657,11 +855,7 @@ function Thread({
                 </span>
                 <CopyButton text={comment.text} label="Copy message" />
               </div>
-              {comment.author === "user" ? (
-                <p className={css.commentText}>{comment.text}</p>
-              ) : (
-                <GitHubMarkdown markdown={comment.text} className={css.agentMarkdown} />
-              )}
+              <GitHubMarkdown markdown={comment.text} className={css.agentMarkdown} />
             </div>
           ))}
           {pending ? (
@@ -672,6 +866,19 @@ function Thread({
               <RunProgress kind="reply" />
             </>
           ) : null}
+        </div>
+      ) : null}
+      <div className={css.itemActions}>
+        <Details
+          open={asking}
+          onOpenChange={setAsking}
+          disabled={busy}
+          trigger={
+            <>
+              <Icon name="comment" /> {askLabel}
+            </>
+          }
+        >
           <form
             className={css.commentForm}
             onSubmit={(event) => {
@@ -679,41 +886,27 @@ function Thread({
               send();
             }}
           >
-            <Textarea
-              className={css.commentInput}
+            <CommentEditor
               value={draft}
               onChange={setDraft}
               onSubmit={send}
-              submitOn="enter"
               canSubmit={canSend}
-              autoFocus={asking && comments.length === 0}
-              onBlur={() => {
-                if (!draft.trim()) setAsking(false);
-              }}
+              ariaLabel="AI reply"
               placeholder={placeholder}
               disabled={busy}
             />
-            <button type="submit" className={css.commentSend} disabled={!canSend}>
-              <Icon name="send" /> Send
-            </button>
+            <div className={css.composerActions}>
+              <Button variant="primary" size="sm" type="submit" disabled={!canSend}>
+                <Icon name="send" /> Send
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setAsking(false)} disabled={busy}>
+                Cancel
+              </Button>
+            </div>
           </form>
-        </div>
-      ) : null}
-      {!open || actions ? (
-        <div className={css.itemActions}>
-          {!open ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={css.askButton}
-              onClick={() => setAsking(true)}
-            >
-              <Icon name="comment" /> {askLabel}
-            </Button>
-          ) : null}
-          {actions}
-        </div>
-      ) : null}
+        </Details>
+        {actions}
+      </div>
     </>
   );
 }
@@ -785,7 +978,13 @@ function PostedThread({
           </p>
           <div className={css.prPosts}>
             {replies.map((reply) => (
-              <GitHubPost key={reply.id} comment={reply} host={host} />
+              <GitHubPost
+                key={reply.id}
+                comment={reply}
+                host={host}
+                replyTo={thread.commentIds[0]}
+                scope={`posted:${postedUrl}`}
+              />
             ))}
           </div>
         </div>
@@ -866,11 +1065,6 @@ function PrCommentComposer({
 
   return (
     <div className={css.prComposer}>
-      {!open ? (
-        <Button size="sm" onClick={() => setOpen(true)} disabled={busy || prior === "pending"}>
-          <Icon name="send" /> {postedUrl ? "Post again" : "Send to PR"}
-        </Button>
-      ) : null}
       {postedUrl ? (
         <a className={css.postedLink} href={postedUrl} target="_blank" rel="noreferrer">
           Posted to PR <Icon name="external" />
@@ -879,41 +1073,47 @@ function PrCommentComposer({
       {postedUrl && thread ? (
         <PostedThread pr={pr} thread={thread} postedUrl={postedUrl} settled={settled} />
       ) : null}
-      {open ? (
-        <div className={css.composerEditor}>
-          <Textarea
-            className={css.composerInput}
-            value={body}
-            onChange={setBody}
-            onSubmit={post}
-            canSubmit={!busy && body.trim() !== ""}
-            disabled={busy}
-            ariaLabel="Pull request comment"
-          />
-          <p className={css.composerNote}>{location.note}</p>
-          {confirming ? (
-            <p className={css.composerWarning}>
-              This PR is {pr.isDraft ? "a draft" : pr.state}. Post anyway?
-            </p>
-          ) : null}
-          <div className={css.composerActions}>
-            <Button variant="primary" size="sm" onClick={post} disabled={busy || !body.trim()}>
-              {pending ? (
-                <>
-                  <Spinner /> Posting…
-                </>
-              ) : (
-                <>
-                  <Icon name="send" /> {confirming ? "Post anyway" : "Post"}
-                </>
-              )}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={close} disabled={busy}>
-              Cancel
-            </Button>
-          </div>
+      <Details
+        open={open}
+        onOpenChange={(next) => (next ? setOpen(true) : close())}
+        disabled={busy || prior === "pending"}
+        trigger={
+          <>
+            <Icon name="send" /> {postedUrl ? "Post again" : "Send to PR"}
+          </>
+        }
+      >
+        <CommentEditor
+          value={body}
+          onChange={setBody}
+          onSubmit={post}
+          canSubmit={!busy && body.trim() !== ""}
+          disabled={busy}
+          ariaLabel="Pull request comment"
+        />
+        <p className={css.composerNote}>{location.note}</p>
+        {confirming ? (
+          <p className={css.composerWarning}>
+            This PR is {pr.isDraft ? "a draft" : pr.state}. Post anyway?
+          </p>
+        ) : null}
+        <div className={css.composerActions}>
+          <Button variant="primary" size="sm" onClick={post} disabled={busy || !body.trim()}>
+            {pending ? (
+              <>
+                <Spinner /> Posting…
+              </>
+            ) : (
+              <>
+                <Icon name="send" /> {confirming ? "Post anyway" : "Post"}
+              </>
+            )}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
         </div>
-      ) : null}
+      </Details>
     </div>
   );
 }
@@ -1072,7 +1272,12 @@ function Resolution({
   const placement = usePriorPlacement(finding, readAt, postable ? pr : null);
 
   return (
-    <li className={`${css.finding} ${resolutionClass(status)}`} data-reveal>
+    <li
+      className={`${css.finding} ${resolutionClass(status)}`}
+      data-reveal
+      data-search-id={`review:${sourcedKey(source.engine, threadKey)}`}
+      tabIndex={-1}
+    >
       <FindingMark icon={resolutionIcon(status)} label={status} />
       <div className={css.findingBody}>
         <div className={css.findingTop}>
@@ -1127,7 +1332,12 @@ function Finding({
   );
 
   return (
-    <li className={`${css.finding} ${severityClass(finding.severity)}`} data-reveal>
+    <li
+      className={`${css.finding} ${severityClass(finding.severity)}`}
+      data-reveal
+      data-search-id={`review:${sourcedKey(source.engine, threadKey)}`}
+      tabIndex={-1}
+    >
       <FindingMark icon={severityIcon(finding.severity)} label={finding.severity} />
       <div className={css.findingBody}>
         <div className={css.findingTop}>
@@ -1176,7 +1386,12 @@ function ReviewSummary({
   pr: PrContext | null;
 }) {
   return (
-    <li className={css.summary} data-reveal>
+    <li
+      className={css.summary}
+      data-reveal
+      data-search-id={`review:${sourcedKey(source.engine, REVIEW_THREAD_KEY)}`}
+      tabIndex={-1}
+    >
       <div className={css.itemHead}>
         <Provenance
           engine={source.engine}
@@ -1238,7 +1453,7 @@ function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] 
  * submitting, and the agent's pick keeps a "suggested" mark so an override
  * stays visible. Without a PR there is nowhere to submit, but the verdict still
  * says where the change stands. With several engines' reviews on record, the
- * most recent one's conclusion is the one offered.
+ * most recent one's conclusion for each commit is the one offered.
  *
  * GitHub won't take an approval or a request for changes on your own pull
  * request, so on one of those the review can only go in as a comment, and the
@@ -1275,7 +1490,12 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
   }
 
   return (
-    <Section title="Conclusion" tag={<SourceTag source={source} />} reveal>
+    <Section
+      title="Conclusion"
+      searchId={`conclusion:${source.engine}`}
+      tag={<SourceTag source={source} />}
+      reveal
+    >
       {own ? null : (
         <RadioGroup
           className={css.verdicts}
@@ -1295,8 +1515,7 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
           ))}
         </RadioGroup>
       )}
-      <Textarea
-        className={css.composerInput}
+      <CommentEditor
         value={body}
         onChange={setBody}
         onSubmit={submit}
@@ -1684,7 +1903,114 @@ function ExplainButton() {
   );
 }
 
-/** The review: every engine's findings, the previous ones' verdicts, and the conclusion. */
+/** Reviews of one commit, with their findings and conclusion kept together. */
+function CommitReviews({
+  head,
+  sources,
+  patch,
+  pr,
+}: {
+  head: string | null;
+  sources: StoredReview[];
+  patch: string | null;
+  pr: PrContext | null;
+}) {
+  const commit = useTab((state) => state.commits?.commits.find((item) => item.sha === head));
+  const worktree = useTab(reviewsWorkingTree);
+  const latest = sources[0];
+  const findings = useMemo(
+    () =>
+      inDiffOrder(
+        sources.flatMap((source) => source.review.findings.map((finding) => ({ finding, source }))),
+        (item) => item.finding,
+      ),
+    [sources],
+  );
+  const resolutions = useMemo(
+    () =>
+      inDiffOrder(
+        sources.flatMap((source) =>
+          (source.resolutions ?? []).map((resolution) => ({ resolution, source })),
+        ),
+        (item) => item.resolution.finding,
+      ),
+    [sources],
+  );
+  // "New" only reads right when every review in this group is a follow-up.
+  const followUps = sources.length > 0 && sources.every((source) => source.resolutions?.length);
+  if (!latest) return null;
+
+  return (
+    <section
+      className={css.commitReviews}
+      aria-label={head ? `Reviews of commit ${head}` : "Reviews without a recorded commit"}
+      data-review-commit={head ?? "unknown"}
+    >
+      <header className={css.commitHeading} data-reveal>
+        <div className={css.commitByline}>
+          <Icon name="branch" />
+          <h3 className={css.commitHash} title={head ?? undefined}>
+            {head ? head.slice(0, 7) : "Commit not recorded"}
+          </h3>
+          {head ? <CopyButton text={head} label="Copy reviewed commit hash" /> : null}
+        </div>
+        {commit ? <p className={css.commitSubject}>{commit.subject}</p> : null}
+        {worktree ? <p className={css.commitNote}>Includes uncommitted changes</p> : null}
+      </header>
+      <Section
+        title={sources.length > 1 ? "Reviews" : "Review"}
+        count={sources.length > 1 ? sources.length : undefined}
+        reveal
+      >
+        <ul className={css.findings}>
+          {sources.map((source) => (
+            <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
+          ))}
+        </ul>
+      </Section>
+      {resolutions.length > 0 ? (
+        <Section title="Previous findings" count={resolutions.length} reveal>
+          <ul className={css.findings}>
+            {resolutions.map(({ resolution, source }) => (
+              <Resolution
+                key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
+                resolution={resolution}
+                source={source}
+                patch={patch}
+                pr={pr}
+              />
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+      <Section title={followUps ? "New findings" : "Findings"} count={findings.length} reveal>
+        {findings.length === 0 ? (
+          <p className={css.status}>
+            {followUps
+              ? "No new findings beyond the previous review."
+              : "No findings — the diff came back clean."}
+          </p>
+        ) : (
+          <ul className={css.findings}>
+            {findings.map(({ finding, source }) => (
+              <Finding
+                key={sourcedKey(source.engine, findingThreadKey(finding))}
+                finding={finding}
+                source={source}
+                patch={patch}
+                pr={pr}
+              />
+            ))}
+          </ul>
+        )}
+      </Section>
+      {/* A fresh review resets the draft and its preselected verdict. */}
+      <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
+    </section>
+  );
+}
+
+/** The review: every engine's results, grouped by the commit it read. */
 function ReviewTab() {
   const pr = useTab((state) => state.pr);
   const reviews = useTab((state) => state.reviews);
@@ -1707,28 +2033,17 @@ function ReviewTab() {
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
 
-  const sources = useMemo(() => reviewsNewestFirst(shown), [shown]);
-  const findings = useMemo(
-    () =>
-      inDiffOrder(
-        sources.flatMap((source) => source.review.findings.map((finding) => ({ finding, source }))),
-        (item) => item.finding,
-      ),
-    [sources],
-  );
-  const resolutions = useMemo(
-    () =>
-      inDiffOrder(
-        sources.flatMap((source) =>
-          (source.resolutions ?? []).map((resolution) => ({ resolution, source })),
-        ),
-        (item) => item.resolution.finding,
-      ),
-    [sources],
-  );
-  const latest = sources[0];
-  // "New" only reads right when every review listed is a follow-up.
-  const followUps = sources.length > 0 && sources.every((source) => source.resolutions?.length);
+  const groups = useMemo(() => {
+    const byCommit = new Map<string | null, StoredReview[]>();
+    // Keep groups and the reviews within them newest first.
+    for (const source of reviewsNewestFirst(shown)) {
+      const head = source.head ?? null;
+      const group = byCommit.get(head) ?? [];
+      group.push(source);
+      byCommit.set(head, group);
+    }
+    return [...byCommit];
+  }, [shown]);
 
   return (
     <>
@@ -1750,62 +2065,17 @@ function ReviewTab() {
           />
         ) : null}
 
-        {latest ? (
-          <>
-            <Section
-              title={sources.length > 1 ? "Reviews" : "Review"}
-              count={sources.length > 1 ? sources.length : undefined}
-              reveal
-            >
-              <ul className={css.findings}>
-                {sources.map((source) => (
-                  <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
-                ))}
-              </ul>
-            </Section>
-            {resolutions.length > 0 ? (
-              <Section title="Previous findings" count={resolutions.length} reveal>
-                <ul className={css.findings}>
-                  {resolutions.map(({ resolution, source }) => (
-                    <Resolution
-                      key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
-                      resolution={resolution}
-                      source={source}
-                      patch={patch}
-                      pr={pr}
-                    />
-                  ))}
-                </ul>
-              </Section>
-            ) : null}
-            <Section title={followUps ? "New findings" : "Findings"} count={findings.length} reveal>
-              {findings.length === 0 ? (
-                <p className={css.status}>
-                  {followUps
-                    ? "No new findings beyond the previous review."
-                    : "No findings — the diff came back clean."}
-                </p>
-              ) : (
-                <ul className={css.findings}>
-                  {findings.map(({ finding, source }) => (
-                    <Finding
-                      key={sourcedKey(source.engine, findingThreadKey(finding))}
-                      finding={finding}
-                      source={source}
-                      patch={patch}
-                      pr={pr}
-                    />
-                  ))}
-                </ul>
-              )}
-            </Section>
-            {/* Keyed on the review, so a fresh one resets the draft and the
-                preselected verdict to what it recommends. */}
-            <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
-          </>
-        ) : null}
+        {groups.map(([head, sources]) => (
+          <CommitReviews
+            key={head ?? "unknown"}
+            head={head}
+            sources={sources}
+            patch={patch}
+            pr={pr}
+          />
+        ))}
         <Fold
-          open={sources.length === 0 && !running && !handingOver && !reviewError}
+          open={groups.length === 0 && !running && !handingOver && !reviewError}
           className={css.notice}
         >
           <p className={css.status}>
@@ -1820,7 +2090,7 @@ function ReviewTab() {
 
 /**
  * The explanation: a walkthrough of the change for a reader who hasn't seen
- * it, written to be skimmed. Its notes on individual files go to the diff.
+ * it, written to be skimmed. Diff links jump to its notes on individual files.
  */
 function ExplainTab() {
   const stored = useTab((state) => state.explanation);
@@ -1837,6 +2107,7 @@ function ExplainTab() {
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
+  useExplanationFocus(bodyRef, shown === stored ? shown : null);
 
   return (
     <>
@@ -1860,7 +2131,7 @@ function ExplainTab() {
         <Fold open={!shown && !explaining && !handingOver && !explainError} className={css.notice}>
           <p className={css.status}>
             Nothing runs until you press Explain. You get a walkthrough of the change here, and a
-            short note at the top of each file in the diff that needs one.
+            link to its explanation at the top of each file in the diff that needs one.
           </p>
         </Fold>
       </div>
@@ -1887,12 +2158,31 @@ export function ReviewPanel() {
   // Every open tab has a panel of its own, so a PR opens on its PR tab and
   // keeps whichever tab the reader picks after that.
   const [tab, setTab] = useState<PanelTab>("pr");
+  const { reveal: searchReveal } = useSearch();
+  useLayoutEffect(() => {
+    if (searchReveal?.document.tab) setTab(searchReveal.document.tab);
+  }, [searchReveal]);
   // The diff's comment markers lead to the PR tab, where the comments are read.
   const focusTick = useTab((state) => state.commentFocus?.tick ?? 0);
+  const composeTick = useTab((state) => state.commentComposeTick);
+  const commentOwner = useTab((state) => state.commentOwner);
   const [focusedTick, setFocusedTick] = useState(focusTick);
+  const explanationTick = useTab((state) => state.explanationFocus?.tick ?? 0);
+  const [explainedTick, setExplainedTick] = useState(explanationTick);
+  const [composedTick, setComposedTick] = useState(composeTick);
   if (focusTick !== focusedTick) {
     setFocusedTick(focusTick);
     setTab("pr");
+  }
+  if (explanationTick !== explainedTick) {
+    setExplainedTick(explanationTick);
+    setTab("explain");
+  }
+  if (composeTick !== composedTick) {
+    setComposedTick(composeTick);
+    // Diff actions target the PR composer. Replies already have a visible
+    // trigger, including the GitHub threads shown beside an AI finding.
+    if (commentOwner === null) setTab("pr");
   }
   // With no PR there is no PR tab.
   const activeTab: PanelTab = tab === "pr" && !hasPr ? "ai" : tab;

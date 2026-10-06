@@ -1,17 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import {
-  Button,
-  Eyebrow,
-  Icon,
-  Input,
-  morph,
-  Panel,
-  Reveal,
-  SceneryWindow,
-  Tabs,
-} from "tk-design-system";
+import { Button, Eyebrow, Icon, morph, Panel, Reveal, SceneryWindow, Tabs } from "tk-design-system";
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
@@ -22,6 +12,7 @@ import {
   useScreenVisit,
 } from "../../lib/screenTransition";
 import { buildStacks, groupStacks } from "../../lib/stacks";
+import type { SearchDocument } from "../../lib/textSearch";
 import { relativeTime } from "../../lib/time";
 import { warmHighlighter } from "../../lib/warmHighlighter";
 import { storageRoot } from "../../store/account";
@@ -33,11 +24,13 @@ import {
   filterRows,
   isFiltering,
   NO_FILTERS,
-  PrFilterMenus,
   type PrFilters,
+  textQuery,
 } from "../PrFilters/PrFilters";
+import { PrOmnibar } from "../PrFilters/PrOmnibar";
 import { useOpening } from "../PrTable/carry";
 import { ColumnMenu, type PrRow, PrTable, useColumnVisibility } from "../PrTable/PrTable";
+import { useSearchDocuments } from "../Search/Search";
 import { Spinner } from "../Spinner/Spinner";
 import css from "./Home.module.css";
 
@@ -366,14 +359,51 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
     () => stacksOf(openPrs, allPrs, defaultBranch),
     [openPrs, allPrs, defaultBranch],
   );
+  const candidates = useMemo(
+    () => buildRows(tab, "", openPrs, reviewed, stacks),
+    [tab, openPrs, reviewed, stacks],
+  );
   const searched = useMemo(
-    () => buildRows(tab, query, openPrs, reviewed, stacks),
-    [tab, query, openPrs, reviewed, stacks],
+    () =>
+      candidates.filter((row) =>
+        matches(
+          textQuery(query),
+          row.number,
+          row.title,
+          row.author,
+          row.pr?.headRef,
+          row.pr?.baseRef,
+          ...(row.pr?.labels.map((label) => label.name) ?? []),
+        ),
+      ),
+    [candidates, query],
   );
   const rows = useMemo(() => {
     const kept = filterRows(searched, filters, listed);
     return tab === "reviewed" ? kept : groupRows(kept, stacks);
   }, [tab, searched, filters, listed, stacks]);
+  const searchDocuments = useMemo<SearchDocument[]>(() => {
+    const known = new Map(
+      [
+        ...buildRows("all", "", allPrs, reviewed, stacks),
+        ...buildRows("reviewed", "", allPrs, reviewed, stacks),
+      ].map((row) => [row.number, row]),
+    );
+    return [...known.values()].map((row) => ({
+      id: `pr:${row.number}`,
+      scope: "pullRequests",
+      title: row.title,
+      text: `#${row.number} ${row.title} ${row.author ?? ""} ${row.pr?.headRef ?? ""} ${row.pr?.labels.map((label) => label.name).join(" ") ?? ""}`,
+      detail: `#${row.number}`,
+      activate: () => {
+        if (row.url)
+          void openPr(row.url, {
+            preview: { number: row.number, title: row.title, author: row.author },
+          });
+      },
+    }));
+  }, [allPrs, reviewed, stacks, openPr]);
+  useSearchDocuments(searchDocuments);
   const filtering = isFiltering(filters);
   // A tab's list scrolls in an area of its own, made afresh for each tab.
   const [listScroll, setListScroll] = useState<HTMLDivElement | null>(null);
@@ -393,8 +423,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   const reference = PR_REFERENCE.test(query.trim()) ? query.trim() : null;
   const hasMore = tab !== "reviewed" && listing.hasNextPage;
 
-  function onSearchKey(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== "Enter") return;
+  function submitSearch() {
     if (reference) void open(reference);
     else if (rows.length === 1 && rows[0]) openRow(rows[0]);
   }
@@ -447,23 +476,15 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
             })}
           </Tabs.List>
           <div className={css.toolbarEnd}>
-            <div className={css.search}>
-              <Icon name="search" className={css.searchIcon} />
-              <Input
-                size="sm"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={onSearchKey}
-                placeholder="Filter, or paste a PR link"
-                aria-label="Filter pull requests, or paste a pull request link"
-                className={css.searchInput}
-              />
-            </div>
-            <PrFilterMenus
-              rows={searched}
+            <PrOmnibar
+              rows={candidates}
               listed={listed}
               filters={filters}
               onChange={setFilters}
+              query={query}
+              onQueryChange={setQuery}
+              onSubmit={submitSearch}
+              onOpenPr={openRow}
             />
             <ColumnMenu visibility={columns} onChange={setColumns} />
           </div>

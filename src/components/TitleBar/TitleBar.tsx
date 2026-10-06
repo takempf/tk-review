@@ -1,6 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, type Ref, useEffect, useState } from "react";
 import { Icon, Logo, Menu, SceneryWindow } from "tk-design-system";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { useAppStore } from "../../store/appStore";
@@ -116,7 +116,13 @@ function RepoSelect() {
  * framed in the bar itself: the viewport-pinned default would give it only the
  * top 40px of the illustration, which is sky.
  */
-export function TitleBar({ children }: { children?: ReactNode }) {
+export function TitleBar({
+  children,
+  actionsRef,
+}: {
+  children?: ReactNode;
+  actionsRef?: Ref<HTMLDivElement>;
+}) {
   const inset = useTrafficLightInset();
 
   return (
@@ -129,6 +135,7 @@ export function TitleBar({ children }: { children?: ReactNode }) {
         </span>
         <span className={css.divider} />
         <RepoSelect />
+        <div ref={actionsRef} className={css.actions} />
       </div>
       {children}
     </header>

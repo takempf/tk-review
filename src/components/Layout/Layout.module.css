@@ -83,6 +83,8 @@
 /* Isolated, so nothing stacked inside the diff can rise over a panel passing
    across it. */
 .main {
+  /* Search can place keyboard focus here; controls keep their own focus rings. */
+  outline: none;
   grid-row: 1;
   grid-column: 2;
   isolation: isolate;

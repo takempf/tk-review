@@ -472,7 +472,7 @@ export const PR_LIST: (PrSummary & { requested?: boolean; mine?: boolean })[] = 
     headRef: "feature/diff-viewer",
     baseRef: "main",
     isCrossRepository: false,
-    headSha: "2f6a1e4f5de7c0d0d6e0f1a4b9c8d7e6f5a4b3c2",
+    headSha: COMMITS.commits[0]?.sha ?? "missing-head",
     createdAt: new Date(Date.now() - 30 * HOUR).toISOString(),
     updatedAt: new Date(Date.now() - 2 * HOUR).toISOString(),
     additions: 52,
@@ -642,7 +642,7 @@ Run \`pnpm harness\` and open the pull request fixture.
   baseRef: "main",
   baseRemote: "origin",
   headRef: "feature/diff-viewer",
-  headSha: "2f6a1e4f5de7c0d0d6e0f1a4b9c8d7e6f5a4b3c2",
+  headSha: COMMITS.commits[0]?.sha ?? "missing-head",
   compareRef: "tk-review/pr/47",
   comments: [
     {

@@ -1,4 +1,4 @@
-import { parsePatchFiles, preloadHighlighter } from "@pierre/diffs";
+import { parsePatchFiles, preloadHighlighter, type SelectedLineRange } from "@pierre/diffs";
 import {
   CodeView,
   type CodeViewHandle,
@@ -7,9 +7,10 @@ import {
   type DiffLineAnnotation,
   type FileDiffContentsLoader,
 } from "@pierre/diffs/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Checkbox, Icon, Toggle, ToggleGroup } from "tk-design-system";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, Checkbox, cx, Icon, Toggle, ToggleGroup } from "tk-design-system";
 import { gitApi } from "../../ipc/git";
+import { diffCommentLocation } from "../../lib/diffComment";
 import { describeLines } from "../../lib/lineSpan";
 import { type CommentAnchor, inlineDiscussion } from "../../lib/prThreads";
 import { useScreenSettled } from "../../lib/screenTransition";
@@ -17,7 +18,6 @@ import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, useAppStore } from "../../store/appStore";
 import { reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { Author, githubHost } from "../Author/Author";
-import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./DiffSurface.module.css";
 import { DIFF_THEME, DIFFS_THEME_CSS } from "./diffsTheme";
@@ -43,12 +43,14 @@ function Toolbar({
   hasNotes,
   layout,
   onLayoutChange,
+  onComment,
 }: {
   fileCount: number;
-  /** An explanation left notes on files, so there is something to show or hide. */
+  /** An explanation left notes on files, so there are links to show or hide. */
   hasNotes: boolean;
   layout: DiffLayout;
   onLayoutChange: (layout: DiffLayout) => void;
+  onComment?: () => void;
 }) {
   const fileNotes = useAppStore((state) => state.fileNotes);
   const setFileNotes = useAppStore((state) => state.setFileNotes);
@@ -57,15 +59,20 @@ function Toolbar({
       <span className={css.toolbarLabel}>
         {fileCount} {fileCount === 1 ? "file" : "files"} in this review
       </span>
+      {onComment ? (
+        <Button size="sm" onClick={onComment}>
+          <Icon name="comment" /> Comment on selection
+        </Button>
+      ) : null}
       {hasNotes ? (
         <ToggleGroup
           size="sm"
-          aria-label="File notes"
+          aria-label="File explanation links"
           value={fileNotes ? ["notes"] : []}
           onValueChange={(value) => setFileNotes(value.includes("notes"))}
         >
-          <Toggle value="notes" title="Show the explanation's note at the top of each file">
-            <Icon name="info" /> Notes
+          <Toggle value="notes" title="Show links to file explanations">
+            <Icon name="info" /> Explanations
           </Toggle>
         </ToggleGroup>
       ) : null}
@@ -132,21 +139,23 @@ export function DiffSkeleton() {
 }
 
 /**
- * An explanation's note on one file, at the top of it: what its changes are
- * for. In a split diff it sits over the new side, which is what it describes
- * (the old side, for a deleted file).
+ * A link to a file's explanation in the AI explain panel, placed like the
+ * comment links. Deleted files put it on the old side of the diff.
  */
-function FileNote({ note, stale }: { note: string; stale: boolean }) {
+function ExplanationMarker({ path, stale }: { path: string; stale: boolean }) {
+  const showExplanation = useTab((state) => state.showExplanation);
+  const label = `Show AI explanation for ${path}${stale ? ", from an older version of this diff" : ""}`;
   return (
-    <aside className={css.fileNote}>
-      <p className={css.fileNoteLabel}>
-        <Icon name="info" /> Note
-        {stale ? (
-          <span className={css.fileNoteStale}>from an older version of this diff</span>
-        ) : null}
-      </p>
-      <GitHubMarkdown markdown={note} />
-    </aside>
+    <button
+      type="button"
+      className={cx(css.annotationMarker, css.explanationMarker)}
+      onClick={() => showExplanation(path)}
+      aria-label={label}
+      title={label}
+    >
+      <Icon name="info" /> AI explanation
+      {stale ? <span className={css.markerNote}>from an older version of this diff</span> : null}
+    </button>
   );
 }
 
@@ -227,12 +236,13 @@ function CommentMarker({
   return (
     <button
       type="button"
-      className={css.commentMarker}
+      className={cx(css.annotationMarker, css.commentMarker)}
       data-resolved={resolved || undefined}
       onClick={() => showComments(path, anchor.key)}
       aria-label={label}
       title={label}
     >
+      <Icon name="comment" />
       <span>{count} by</span>
       {first ? <Author login={first} host={host} className={css.commentAuthor} /> : null}
       {people.length > 2 ? <span>and {people.length - 1} others</span> : null}
@@ -292,6 +302,14 @@ function DiffSurfaceInner() {
   const diffLoadId = useTab((state) => state.diffLoadId);
   const compare = useTab((state) => state.compare);
   const worktree = useTab(reviewsWorkingTree);
+  const pr = useTab((state) => state.pr);
+  const beginPrComment = useTab((state) => state.beginPrComment);
+  const postingComment = useTab((state) => state.postingComment);
+  const [commentSelection, setCommentSelection] = useState<{
+    id: string;
+    range: SelectedLineRange;
+  } | null>(null);
+  const [commentWarning, setCommentWarning] = useState<string | null>(null);
   const selectedPath = useTab((state) => state.selectedPath);
   const selectedLines = useTab((state) => state.selectedLines);
   const selectionTick = useTab((state) => state.selectionTick);
@@ -436,15 +454,39 @@ function DiffSurfaceInner() {
     [root, mergeBase, compare, compareHead, worktree],
   );
 
+  const canComment = pr != null && !worktree && compareHead === pr.headSha && !postingComment;
+  const commentOnLines = useCallback(
+    (id: string, range: SelectedLineRange) => {
+      if (!canComment || !pr) return;
+      const item = items.find((item) => item.id === id);
+      if (item?.type !== "diff") return;
+      const location = diffCommentLocation(item.fileDiff, range, pr.headSha);
+      if (!location) {
+        setCommentWarning(
+          "Choose lines on the same side within one diff hunk. For other locations, use a file comment.",
+        );
+        return;
+      }
+      setCommentWarning(null);
+      beginPrComment(location);
+    },
+    [canComment, pr, items, beginPrComment],
+  );
+
   // CodeView treats its options as the single source of truth for every item, so
   // this object must stay stable rather than being rebuilt per file.
   const options = useMemo<CodeViewReactOptions<DiffAnnotation>>(
     () => ({
       diffStyle: layout,
+      enableLineSelection: true,
+      enableGutterUtility: canComment,
+      onGutterUtilityClick: (range, context) => commentOnLines(context.item.id, range),
       theme: DIFF_THEME,
       // The app is dark-only; left to "system" the renderer would follow the OS.
       themeType: "dark",
       stickyHeaders: true,
+      // File links and comment gutters stay clickable after navigation scrolls.
+      pointerEventsOnScroll: true,
       // Hunks only, the way a pull request reads. `expandUnchanged` would swap
       // every partial diff for its whole file, which both pulls in contents for
       // files that have none to give and resizes every item under the reader's
@@ -457,7 +499,7 @@ function DiffSurfaceInner() {
       // Injected into the renderer's last cascade layer; see diffsTheme.ts.
       unsafeCSS: DIFFS_THEME_CSS,
     }),
-    [layout, loadDiffFiles],
+    [layout, loadDiffFiles, canComment, commentOnLines],
   );
 
   // Selecting a file scrolls the shared surface to it rather than swapping panes,
@@ -524,7 +566,17 @@ function DiffSurfaceInner() {
         hasNotes={hasNotes}
         layout={layout}
         onLayoutChange={setLayout}
+        onComment={
+          canComment && commentSelection
+            ? () => commentOnLines(commentSelection.id, commentSelection.range)
+            : undefined
+        }
       />
+      {commentWarning ? (
+        <p role="alert" className={css.commentWarning}>
+          {commentWarning}
+        </p>
+      ) : null}
       {themesReady && items.length > 0 ? (
         // The file headers CodeView draws already carry each path and its line
         // counts, so there is no metadata to add here — only a marker showing
@@ -545,6 +597,7 @@ function DiffSurfaceInner() {
           className={css.surface}
           items={items}
           options={options}
+          onSelectedLinesChange={setCommentSelection}
           // Renders nothing itself: the stylesheet draws the slot it lands in
           // as a bar on the selected file's header.
           renderHeaderPrefix={(item) =>
@@ -552,6 +605,27 @@ function DiffSurfaceInner() {
           }
           renderHeaderMetadata={(item) => (
             <span className={css.viewedToggle}>
+              {canComment && pr ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Comment on file ${item.id}`}
+                  title="Comment on file"
+                  onClick={() => {
+                    setCommentWarning(null);
+                    beginPrComment({
+                      destination: "file",
+                      path: item.id,
+                      line: null,
+                      endLine: null,
+                      headSha: pr.headSha,
+                      note: `Comment on ${item.id} (whole file).`,
+                    });
+                  }}
+                >
+                  <Icon name="comment" />
+                </Button>
+              ) : null}
               <Checkbox checked={viewed.has(item.id)} onCheckedChange={() => toggleViewed(item.id)}>
                 Viewed
               </Checkbox>
@@ -559,8 +633,7 @@ function DiffSurfaceInner() {
           )}
           renderAnnotation={({ metadata }, item) => {
             if (metadata.kind === "note") {
-              const note = notes.get(item.id);
-              return note ? <FileNote note={note} stale={stale} /> : null;
+              return notes.has(item.id) ? <ExplanationMarker path={item.id} stale={stale} /> : null;
             }
             const anchor = anchors.get(item.id)?.find(({ key }) => key === metadata.key);
             return anchor ? <CommentMarker path={item.id} anchor={anchor} host={host} /> : null;

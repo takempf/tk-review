@@ -3,22 +3,32 @@
  * so the PR description, the comments, the agents' writing and the file notes
  * all space the same way. A caller sets the type, the colour and its padding.
  *
- * One gap stands between blocks of any kind. A heading takes half again above
- * it and half below, so it sits with the text it heads.
+ * One gap stands between blocks of any kind. List items share a smaller gap,
+ * including where a nested list follows its parent item's text.
  */
+/* Resolve the em once at the Markdown root, so headings and code blocks
+   inherit the same gap even when they use a different font size. */
+@property --markdown-gap {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 .markdown {
   --markdown-gap: 1em;
+  --markdown-item-gap: calc(var(--markdown-gap) * 0.25);
 
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.markdown :is(p, ul, ol, blockquote, table, details, :global(.tk-code-block)) {
+/* Keep defaults less specific than list and container-edge spacing. */
+.markdown :where(p, ul, ol, blockquote, pre, table, details, dl, figure, :global(.tk-code-block)) {
   margin: 0 0 var(--markdown-gap);
 }
 
 .markdown :is(h1, h2, h3, h4, h5, h6) {
-  margin: calc(var(--markdown-gap) * 1.5) 0 calc(var(--markdown-gap) * 0.5);
+  margin: var(--markdown-gap) 0;
   color: var(--text);
   font-size: 1.125em;
 }
@@ -74,17 +84,23 @@
 }
 
 .markdown li + li {
-  margin-top: calc(var(--markdown-gap) * 0.25);
+  margin-top: var(--markdown-item-gap);
 }
 
 .markdown li > :is(ul, ol) {
-  margin: calc(var(--markdown-gap) * 0.25) 0 0;
+  margin: var(--markdown-item-gap) 0 0;
 }
 
-/* A rule clears a whole line on each side, in the accent at half strength. */
+/* Loose lists wrap their text in paragraphs. That wrapper must not add a
+   block gap before a nested list; it continues the same item rhythm. */
+.markdown li > p:has(+ :is(ul, ol)) {
+  margin-bottom: var(--markdown-item-gap);
+}
+
+/* A rule uses the same block gap, in the accent at half strength. */
 .markdown hr {
   height: 0;
-  margin: 1lh 0;
+  margin: var(--markdown-gap) 0;
   border: 0;
   border-top: 1px solid color-mix(in oklab, var(--accent) 50%, transparent);
 }
