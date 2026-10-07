@@ -1493,6 +1493,9 @@ fn claude_result_text(
     specialist: Option<&Specialist>,
     run: &AgentRun,
 ) -> Result<AgentText, GitError> {
+    let defaults = ClaudeDefaults::read();
+    let model = model.or(defaults.model.as_deref());
+    let effort = effort.or(defaults.effort.as_deref());
     // Through a file rather than argv: the definition carries the migrations'
     // diffs, which can outgrow the argument-size limit.
     let agents_file = specialist
@@ -1690,6 +1693,43 @@ impl Drop for TempFile {
     fn drop(&mut self) {
         // Best effort: it is small, but don't leave one per review.
         let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The model and effort claude defaults to in the user's own settings.
+/// `--restricted` runs skip that settings file, so a review left on "the CLI's
+/// default" passes these explicitly to get the same thing.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ClaudeDefaults {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+impl ClaudeDefaults {
+    /// From `settings.json` in claude's config directory: `CLAUDE_CONFIG_DIR`,
+    /// or `~/.claude`. None, when there is no such file.
+    fn read() -> Self {
+        let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".claude")));
+        dir.and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+            .map(|text| Self::from_settings(&text))
+            .unwrap_or_default()
+    }
+
+    fn from_settings(text: &str) -> Self {
+        let settings: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+        let field = |name: &str| {
+            settings[name]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Self {
+            model: field("model"),
+            effort: field("effortLevel"),
+        }
     }
 }
 
@@ -2740,6 +2780,23 @@ mod tests {
             "{prompt}"
         );
         assert!(!prompt.contains("forward-only"), "{prompt}");
+    }
+
+    #[test]
+    fn a_blank_model_and_effort_follow_the_users_claude_settings() {
+        let defaults = ClaudeDefaults::from_settings(
+            r#"{"model": "opus[1m]", "effortLevel": "xhigh", "theme": "dark"}"#,
+        );
+        assert_eq!(defaults.model.as_deref(), Some("opus[1m]"));
+        assert_eq!(defaults.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            ClaudeDefaults::from_settings(r#"{"model": " "}"#),
+            ClaudeDefaults::default()
+        );
+        assert_eq!(
+            ClaudeDefaults::from_settings("not json"),
+            ClaudeDefaults::default()
+        );
     }
 
     #[test]

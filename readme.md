@@ -129,7 +129,9 @@ allowed history and discussion, all read-only:
 Every tool that writes is denied outright: file edits, Linear and Slack writes,
 `gh api`, web access, and the spellings of the allowed commands that write a
 file or open a browser. A restricted run doesn't load the repository's
-`CLAUDE.md` itself, so the app puts it (or `AGENTS.md`) in the prompt. Codex
+`CLAUDE.md` itself, so the app puts it (or `AGENTS.md`) in the prompt. It
+skips your `~/.claude/settings.json` too, so a blank model or effort is filled
+from that file's `model` and `effortLevel`. Codex
 runs in its read-only sandbox, with no network, and reads `AGENTS.md` on its
 own.
 
