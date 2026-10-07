@@ -49,6 +49,122 @@ fn turn_budget_note(turns: usize) -> String {
     )
 }
 
+/// The built-in tools a claude run gets. Runs are `--restricted`, which drops
+/// the tools that run commands unless they are named here, so Bash is named,
+/// and the permission rules below hold it to reads.
+const CLAUDE_TOOLS: &str = "Read,Grep,Glob,Bash,Agent,ToolSearch";
+
+/// What a claude run may use beyond reading the repository: its history
+/// through git and `gh`, and the team's tracker and chat through the claude.ai
+/// Linear and Slack connectors, for whoever has them. Reads only, and Slack's
+/// public channels only, since findings can be posted to the pull request. A
+/// headless run is refused anything not allowed here, and `--restricted`
+/// keeps a repository's own settings from allowing more.
+const ALLOWED_TOOLS: &[&str] = &[
+    "ToolSearch",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git blame:*)",
+    "Bash(gh pr view:*)",
+    "Bash(gh pr diff:*)",
+    "Bash(gh pr list:*)",
+    "Bash(gh issue view:*)",
+    "Bash(gh issue list:*)",
+    "Bash(gh search:*)",
+    "mcp__claude_ai_Linear__list_issues",
+    "mcp__claude_ai_Linear__get_issue",
+    "mcp__claude_ai_Linear__list_comments",
+    "mcp__claude_ai_Linear__list_documents",
+    "mcp__claude_ai_Linear__get_document",
+    "mcp__claude_ai_Linear__list_projects",
+    "mcp__claude_ai_Linear__get_project",
+    "mcp__claude_ai_Linear__list_teams",
+    "mcp__claude_ai_Linear__get_team",
+    "mcp__claude_ai_Linear__list_issue_labels",
+    "mcp__claude_ai_Linear__get_attachment",
+    "mcp__claude_ai_Slack__slack_search_public",
+    "mcp__claude_ai_Slack__slack_search_channels",
+    "mcp__claude_ai_Slack__slack_read_channel",
+    "mcp__claude_ai_Slack__slack_read_thread",
+    "mcp__claude_ai_Slack__slack_read_canvas",
+];
+
+/// What no claude run may use, whatever anything else allows: every tool that
+/// writes, anything that could carry the code off to the web, and the
+/// spellings of the allowed commands that write a file or open a browser.
+/// Nothing allows these today, since `--restricted` ignores the settings files
+/// that could; this keeps it that way if that ever changes.
+const DENIED_TOOLS: &[&str] = &[
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Bash(gh api:*)",
+    "Bash(gh * --web*)",
+    "Bash(gh * -w*)",
+    "Bash(git * --output*)",
+    "mcp__claude_ai_Slack__slack_send_message",
+    "mcp__claude_ai_Slack__slack_send_message_draft",
+    "mcp__claude_ai_Slack__slack_schedule_message",
+    "mcp__claude_ai_Slack__slack_add_reaction",
+    "mcp__claude_ai_Slack__slack_create_canvas",
+    "mcp__claude_ai_Slack__slack_update_canvas",
+    "mcp__claude_ai_Slack__slack_create_conversation",
+    "mcp__claude_ai_Slack__slack_search_public_and_private",
+    "mcp__claude_ai_Linear__save_issue",
+    "mcp__claude_ai_Linear__save_comment",
+    "mcp__claude_ai_Linear__save_document",
+    "mcp__claude_ai_Linear__save_project",
+    "mcp__claude_ai_Linear__save_milestone",
+    "mcp__claude_ai_Linear__save_initiative",
+    "mcp__claude_ai_Linear__save_initiative_label",
+    "mcp__claude_ai_Linear__save_issue_label",
+    "mcp__claude_ai_Linear__save_project_label",
+    "mcp__claude_ai_Linear__save_release",
+    "mcp__claude_ai_Linear__save_release_note",
+    "mcp__claude_ai_Linear__save_status_update",
+    "mcp__claude_ai_Linear__save_diff_comment",
+    "mcp__claude_ai_Linear__create_attachment",
+    "mcp__claude_ai_Linear__create_attachment_from_upload",
+    "mcp__claude_ai_Linear__create_initiative_label",
+    "mcp__claude_ai_Linear__create_issue_label",
+    "mcp__claude_ai_Linear__prepare_attachment_upload",
+    "mcp__claude_ai_Linear__delete_attachment",
+    "mcp__claude_ai_Linear__delete_comment",
+    "mcp__claude_ai_Linear__delete_diff_comment",
+    "mcp__claude_ai_Linear__delete_status_update",
+    "mcp__claude_ai_Linear__share_issue",
+    "mcp__claude_ai_Linear__unshare_issue",
+    "mcp__claude_ai_Linear__mark_notification",
+    "mcp__claude_ai_Linear__merge_diff",
+    "mcp__claude_ai_Linear__update_diff",
+    "mcp__claude_ai_Linear__resolve_diff_thread",
+    "mcp__claude_ai_Linear__submit_diff_review",
+    "mcp__claude_ai_Linear__restore_initiative_label",
+    "mcp__claude_ai_Linear__restore_issue_label",
+    "mcp__claude_ai_Linear__restore_project_label",
+    "mcp__claude_ai_Linear__retire_initiative_label",
+    "mcp__claude_ai_Linear__retire_issue_label",
+    "mcp__claude_ai_Linear__retire_project_label",
+];
+
+/// Tells claude what it can read beyond the repository, and when it's worth it.
+const CONTEXT_SOURCES_NOTE: &str = r#"Beyond the repository, this run can read some of the history and discussion around it. All of it is read-only:
+- git history: `git log`, `git show`, and `git blame`, run from the working directory rather than with `git -C`
+- GitHub, through `gh pr view`, `gh pr diff`, `gh pr list`, `gh issue view`, `gh issue list`, and `gh search`
+- Linear, and Slack's public channels, when their tools turn up through ToolSearch
+Reach for these when the code can't answer something that matters: the ticket a change is for, an earlier change to the same code, a past incident. Don't use them as routine, and carry on without any that are missing or refused. What you write may be posted to the pull request, so link to what you found and paraphrase it rather than quoting conversations."#;
+
+/// Adds the access every claude run gets to its arguments: restricted, with
+/// the tools and permission rules above.
+fn push_access(args: &mut Vec<&str>) {
+    args.extend(["--restricted", "--tools", CLAUDE_TOOLS, "--allowedTools"]);
+    args.extend(ALLOWED_TOOLS);
+    args.push("--disallowedTools");
+    args.extend(DENIED_TOOLS);
+}
+
 /// How every prose field the agent writes should read. Shared by all the
 /// prompts so the review, the explanation, and replies sound like one
 /// reviewer. The app renders these fields as GitHub Markdown, and findings can
@@ -224,6 +340,7 @@ pub fn review_diff(
     }
 
     let mut prompt = build_prompt(compare, &patch, pr_context);
+    add_repo_instructions(&mut prompt, &patch, root, engine);
     add_review_rules(&mut prompt, &patch, &rules.review);
     let specialist = add_migration_review(&mut prompt, engine, &patch, &rules.migrations);
     let answer = if engine == "claude" {
@@ -327,6 +444,7 @@ pub fn re_review_diff(
 
     let mut prompt =
         build_re_review_prompt(compare, prior_summary, prior_findings, &patch, pr_context);
+    add_repo_instructions(&mut prompt, &patch, root, engine);
     add_review_rules(&mut prompt, &patch, &rules.review);
     let specialist = add_migration_review(&mut prompt, engine, &patch, &rules.migrations);
     let answer = if engine == "claude" {
@@ -506,7 +624,8 @@ pub fn explain_diff(
         ));
     }
 
-    let prompt = build_explain_prompt(compare, &patch, pr_context);
+    let mut prompt = build_explain_prompt(compare, &patch, pr_context);
+    add_repo_instructions(&mut prompt, &patch, root, engine);
     let answer = if engine == "claude" {
         claude_result_text(root, &prompt, model, effort, turn_budget(&patch), None, run)?
     } else {
@@ -793,6 +912,43 @@ fn insert_before_diff(prompt: &mut String, patch: &str, text: &str) {
     }
 }
 
+/// Most of a repository's agent instructions a prompt carries. The ones seen
+/// run to a few dozen kilobytes; this only stops a runaway file.
+const REPO_INSTRUCTIONS_LIMIT: usize = 64 * 1024;
+
+/// Adds the repository's instructions for agents, its root `CLAUDE.md` or
+/// failing that `AGENTS.md`, to a claude prompt. A `--restricted` run doesn't
+/// load them itself, and they hold the conventions a review is judged by.
+/// Codex reads `AGENTS.md` on its own, so it is left alone.
+fn add_repo_instructions(prompt: &mut String, patch: &str, root: &Path, engine: &str) {
+    if engine != "claude" {
+        return;
+    }
+    let Some((name, text)) = ["CLAUDE.md", "AGENTS.md"].iter().find_map(|name| {
+        let text = std::fs::read_to_string(root.join(name)).ok()?;
+        (!text.trim().is_empty()).then_some((*name, text))
+    }) else {
+        return;
+    };
+    let mut end = text.len().min(REPO_INSTRUCTIONS_LIMIT);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = if end < text.len() {
+        "\n[…cut short]"
+    } else {
+        ""
+    };
+    insert_before_diff(
+        prompt,
+        patch,
+        &format!(
+            "The repository's own instructions for agents working in it, from its root `{name}`. They describe its conventions. Directories may have their own `CLAUDE.md` or `AGENTS.md` for the code beside them, worth reading where they cover changed files:\n\n<repository-instructions>\n{}{cut}\n</repository-instructions>\n\n",
+            text[..end].trim_end()
+        ),
+    );
+}
+
 /// Adds the rules kept for the repository on this machine to a review prompt.
 fn add_review_rules(prompt: &mut String, patch: &str, rules: &str) {
     let rules = rules.trim();
@@ -825,9 +981,10 @@ const MIGRATION_GUIDANCE: &str = include_str!("migration_review.md");
 /// The subagent a claude review hands a diff's migrations to.
 const MIGRATION_REVIEWER: &str = "migration-reviewer";
 
-/// Agentic turns the migration reviewer gets. Its own, not the main run's: a
-/// subagent's turns don't count against the session's `--max-turns`.
-const MIGRATION_REVIEWER_TURNS: usize = 40;
+/// Agentic turns the migration reviewer gets: enough to read around the
+/// migrations and look up their tables' history. Its own, not the main run's:
+/// a subagent's turns don't count against the session's `--max-turns`.
+const MIGRATION_REVIEWER_TURNS: usize = 50;
 
 /// The per-file sections of a patch that change database migrations, as
 /// `(path, section)`. A migration is anything under a `migrations`,
@@ -948,6 +1105,11 @@ fn add_migration_review(
 
 Before judging, read the repository's own rules for migrations (try CLAUDE.md and AGENTS.md at the root and near the migrations directory), and a few of the newest migrations beside these, so you hold these to the repository's conventions. Search the codebase for every table and column they touch, so you know what the running code expects. The working tree may not match the diff's compare side, so the diffs below are the authority on what the migrations say. Make independent reads and searches in the same response rather than one per turn.
 
+Then look for history on each table these migrations touch, and stop as soon as you have enough. Spend a few turns on it at most:
+1. `git log --oneline -S '<table>' -- <the migrations directory>`, for earlier migrations on that table that were reverted, fixed, or followed by a fix.
+2. If Linear or Slack tools turn up through ToolSearch, search them for the table's name alongside words like migration, lock, outage, deadlock, or timeout.
+When a past incident bears on a problem you report, cite it with a link in that entry. Skip any source that's missing or refused.
+
 {guidance}
 
 Report back in plain text, one entry per problem, most serious first:
@@ -961,7 +1123,6 @@ The migrations' diffs:
 
 {diffs}"#,
         ),
-        "tools": ["Read", "Grep", "Glob"],
         "model": "inherit",
         "maxTurns": MIGRATION_REVIEWER_TURNS,
     });
@@ -1341,7 +1502,7 @@ fn claude_result_text(
         .as_ref()
         .map(|file| file.0.display().to_string());
     let max_turns = turns.to_string();
-    let budget_note = turn_budget_note(turns);
+    let system_note = format!("{}\n\n{CONTEXT_SOURCES_NOTE}", turn_budget_note(turns));
     let mut args = vec![
         "-p",
         "--output-format",
@@ -1350,8 +1511,9 @@ fn claude_result_text(
         "--max-turns",
         &max_turns,
         "--append-system-prompt",
-        &budget_note,
+        &system_note,
     ];
+    push_access(&mut args);
     if let Some(agents_arg) = &agents_arg {
         args.extend(["--agents", agents_arg]);
     }
@@ -1466,6 +1628,7 @@ fn insist_on_specialist(
         "--agents",
         agents_arg,
     ];
+    push_access(&mut args);
     push_model_and_effort(&mut args, model, effort);
     match spawn_cli(
         root,
@@ -2381,10 +2544,8 @@ mod tests {
         assert!(subagent_prompt.contains("+ALTER TABLE drawing ADD COLUMN owner_id uuid;"));
         assert!(subagent_prompt.contains("rename to migrations/b.sql"));
         assert!(!subagent_prompt.contains("const owner"));
-        assert_eq!(
-            definition["tools"],
-            serde_json::json!(["Read", "Grep", "Glob"])
-        );
+        // It works with the run's own tools, which the run holds to reads.
+        assert!(definition["tools"].is_null());
         assert_eq!(definition["maxTurns"], MIGRATION_REVIEWER_TURNS);
         assert!(definition["description"]
             .as_str()
@@ -2469,6 +2630,116 @@ mod tests {
             .expect("note");
         assert!(note > prompt.find("After.").expect("PR body"), "{prompt}");
         assert!(prompt.ends_with(&format!("The diff:\n\n{patch}")));
+    }
+
+    /// Every tool the claude.ai Slack and Linear connectors offered as of
+    /// October 2026.
+    const CONNECTOR_TOOLS: &str = "slack_add_reaction slack_create_canvas slack_create_conversation slack_get_reactions slack_list_channel_members slack_read_canvas slack_read_channel slack_read_file slack_read_thread slack_read_user_profile slack_schedule_message slack_search_channels slack_search_emojis slack_search_public slack_search_public_and_private slack_search_users slack_send_message slack_send_message_draft slack_update_canvas | create_attachment create_attachment_from_upload create_initiative_label create_issue_label delete_attachment delete_comment delete_diff_comment delete_status_update extract_images get_agent_skill get_attachment get_diff get_diff_threads get_document get_initiative get_issue get_issue_status get_milestone get_notifications get_project get_release get_release_note get_status_updates get_team get_template get_triage_responsibility get_user get_workspace list_agent_skills list_comments list_custom_views list_cycles list_diffs list_documents list_initiative_labels list_initiatives list_issue_labels list_issue_statuses list_issues list_milestones list_project_labels list_projects list_release_notes list_release_pipelines list_releases list_teams list_templates list_users mark_notification merge_diff prepare_attachment_upload resolve_diff_thread restore_initiative_label restore_issue_label restore_project_label retire_initiative_label retire_issue_label retire_project_label save_comment save_diff_comment save_document save_initiative save_initiative_label save_issue save_issue_label save_milestone save_project save_project_label save_release save_release_note save_status_update search_documentation share_issue submit_diff_review unshare_issue update_diff";
+
+    #[test]
+    fn claude_runs_are_restricted_to_reads() {
+        let mut args = Vec::new();
+        push_access(&mut args);
+        assert_eq!(&args[..3], ["--restricted", "--tools", CLAUDE_TOOLS]);
+        for writer in ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
+            assert!(
+                !CLAUDE_TOOLS.split(',').any(|tool| tool == writer),
+                "{writer}"
+            );
+            assert!(DENIED_TOOLS.contains(&writer), "{writer}");
+        }
+        for rule in ALLOWED_TOOLS {
+            assert!(
+                !DENIED_TOOLS.contains(rule),
+                "{rule} is both allowed and denied"
+            );
+        }
+
+        // Commands: history reads only.
+        let reads = [
+            "Bash(git log:",
+            "Bash(git show:",
+            "Bash(git blame:",
+            "Bash(gh pr view:",
+            "Bash(gh pr diff:",
+            "Bash(gh pr list:",
+            "Bash(gh issue view:",
+            "Bash(gh issue list:",
+            "Bash(gh search:",
+        ];
+        for rule in ALLOWED_TOOLS
+            .iter()
+            .filter(|rule| rule.starts_with("Bash("))
+        {
+            assert!(reads.iter().any(|read| rule.starts_with(read)), "{rule}");
+        }
+
+        // Connectors: every tool that writes is denied, and only reads are
+        // allowed. Slack's private search is out, since findings get posted.
+        let (slack, linear) = CONNECTOR_TOOLS.split_once(" | ").expect("two servers");
+        let tools = slack
+            .split(' ')
+            .map(|tool| format!("mcp__claude_ai_Slack__{tool}"))
+            .chain(
+                linear
+                    .split(' ')
+                    .map(|tool| format!("mcp__claude_ai_Linear__{tool}")),
+            );
+        for tool in tools {
+            let name = tool
+                .rsplit("__")
+                .next()
+                .expect("name")
+                .trim_start_matches("slack_");
+            let reads = ["get_", "list_", "read_", "search_", "extract_"]
+                .iter()
+                .any(|verb| name.starts_with(verb));
+            if !reads {
+                assert!(
+                    DENIED_TOOLS.contains(&tool.as_str()),
+                    "{tool} writes but isn't denied"
+                );
+            }
+            if ALLOWED_TOOLS.contains(&tool.as_str()) {
+                assert!(reads && name != "search_public_and_private", "{tool}");
+            }
+        }
+    }
+
+    #[test]
+    fn claude_prompts_carry_the_repositorys_agent_instructions() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let patch = patch_of(1);
+        let prompt_for = |engine: &str| {
+            let mut prompt = build_prompt(None, &patch, None);
+            add_repo_instructions(&mut prompt, &patch, dir.path(), engine);
+            prompt
+        };
+        let bare = build_prompt(None, &patch, None);
+        assert_eq!(prompt_for("claude"), bare, "no instructions to carry");
+
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "Migrations are forward-only.\n",
+        )
+        .expect("write");
+        let prompt = prompt_for("claude");
+        assert!(prompt.contains("from its root `AGENTS.md`"), "{prompt}");
+        assert!(
+            prompt.contains("<repository-instructions>\nMigrations are forward-only.\n</repository-instructions>"),
+            "{prompt}"
+        );
+        assert!(prompt.ends_with(&format!("The diff:\n\n{patch}")));
+        // Codex reads AGENTS.md itself.
+        assert_eq!(prompt_for("codex"), bare);
+
+        std::fs::write(dir.path().join("CLAUDE.md"), "Use pnpm.").expect("write");
+        let prompt = prompt_for("claude");
+        assert!(
+            prompt.contains("from its root `CLAUDE.md`") && prompt.contains("Use pnpm."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("forward-only"), "{prompt}");
     }
 
     #[test]

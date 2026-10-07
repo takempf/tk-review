@@ -118,6 +118,21 @@ agent's read-only tools check the code around the diff (callers, tests,
 definitions) rather than judging the patch in isolation. Nothing runs until
 you press the button.
 
+Claude runs are `--restricted`, so a repository's own `.claude` settings (and
+yours) can't widen what a review may do. On top of reading files, a run is
+allowed history and discussion, all read-only:
+- `git log`, `git show`, and `git blame`
+- `gh pr view`/`diff`/`list`, `gh issue view`/`list`, and `gh search`
+- the claude.ai Linear connector's reads, and Slack's public channels, for
+  whoever has those connected
+
+Every tool that writes is denied outright: file edits, Linear and Slack writes,
+`gh api`, web access, and the spellings of the allowed commands that write a
+file or open a browser. A restricted run doesn't load the repository's
+`CLAUDE.md` itself, so the app puts it (or `AGENTS.md`) in the prompt. Codex
+runs in its read-only sandbox, with no network, and reads `AGENTS.md` on its
+own.
+
 A diff that changes database migrations (anything under a `migrations`,
 `migration`, or `migrate` directory) gets a specialist's review as well. A
 Claude review is given a `migration-reviewer` subagent through `--agents`,
@@ -125,7 +140,9 @@ read-only, carrying the migrations' diffs and the checklist in
 [`migration_review.md`](src-tauri/src/migration_review.md): locks on busy
 tables, data changes that fire triggers, index builds that fail halfway, code
 running against the new schema mid-deploy, and the rest of what has gone wrong
-with real migrations. The main reviewer is told to launch it first, checks
+with real migrations. It also looks up each touched table's history — earlier
+migrations on it in `git log`, and incidents in Linear and Slack — and cites
+what bears on a finding. The main reviewer is told to launch it first, checks
 what it reports, and merges the findings that hold into its own. The run's
 event stream shows whether it did, and a run that answers without launching it
 is resumed once and told to. Codex takes no subagent definitions, so a Codex
