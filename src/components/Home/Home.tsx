@@ -30,6 +30,7 @@ import {
 import { PrOmnibar } from "../PrFilters/PrOmnibar";
 import { useOpening } from "../PrTable/carry";
 import { ColumnMenu, type PrRow, PrTable, useColumnVisibility } from "../PrTable/PrTable";
+import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { useSearchDocuments } from "../Search/Search";
 import { Spinner } from "../Spinner/Spinner";
 import css from "./Home.module.css";
@@ -507,7 +508,13 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
           </div>
         </div>
 
-        <div ref={setListScroll} className={css.listScroll}>
+        <ScrollArea
+          label="Pull requests"
+          className={css.listArea}
+          viewportClassName={css.listScroll}
+          viewportRef={setListScroll}
+          horizontal
+        >
           {reference ? (
             <button type="button" className={css.pasted} onClick={() => void open(reference)}>
               <Icon name="external" />
@@ -566,7 +573,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
               {hasMore ? <MorePrs listing={listing} /> : null}
             </>
           )}
-        </div>
+        </ScrollArea>
       </Tabs.Root>
     </div>
   );

@@ -94,7 +94,7 @@
 }
 
 /* The panel heading already draws the line the topmost group would repeat. */
-.scroll > .list > .group:first-child {
+.scroll > [data-scroll-content] > .list > .group:first-child {
   border-top: none;
 }
 

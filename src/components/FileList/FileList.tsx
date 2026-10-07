@@ -4,6 +4,7 @@ import type { ChangeStatus, FileChange } from "../../ipc/git";
 import type { TreeNode } from "../../lib/fileChange";
 import { buildFileTree, describeChange, STATUS_META, splitPath } from "../../lib/fileChange";
 import { useTab } from "../../store/tabStore";
+import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import css from "./FileList.module.css";
 
@@ -242,14 +243,14 @@ export function FileList() {
           {viewed.size}/{summary.files.length} viewed
         </span>
       </div>
-      <div className={css.scroll}>
+      <ScrollArea label="Files" viewportClassName={css.scroll}>
         <Nodes
           nodes={buildFileTree(summary.files)}
           depth={0}
           collapsed={collapsed}
           onToggleCollapsed={toggleCollapsed}
         />
-      </div>
+      </ScrollArea>
     </div>
   );
 }

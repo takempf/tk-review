@@ -18,7 +18,9 @@ import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, useAppStore } from "../../store/appStore";
 import { reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { Author, githubHost } from "../Author/Author";
+import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
+import { CodeViewViewport } from "./CodeViewViewport";
 import css from "./DiffSurface.module.css";
 import { DIFF_THEME, DIFFS_THEME_CSS } from "./diffsTheme";
 
@@ -581,63 +583,77 @@ function DiffSurfaceInner() {
         // The file headers CodeView draws already carry each path and its line
         // counts, so there is no metadata to add here — only a marker showing
         // which file the sidebar has selected, and the Viewed checkbox.
-        <CodeView
-          /*
-           * Highlighting stays on the main thread, on the Oniguruma engine (see
-           * `HIGHLIGHTER`). In a worker the renderer can't use it — the WASM
-           * binary doesn't resolve there and nothing renders at all — and falls
-           * back to Shiki's JavaScript regex engine, which cannot compile every
-           * TextMate grammar: SQL is one it silently gives up on, rendering the
-           * file as plain text while JS/TS look fine, so the failure is easy to
-           * miss. Virtualization, the far bigger win, is unaffected by this, and
-           * the preload below keeps the first paint from being empty.
-           */
-          disableWorkerPool
-          ref={viewRef}
-          className={css.surface}
-          items={items}
-          options={options}
-          onSelectedLinesChange={setCommentSelection}
-          // Renders nothing itself: the stylesheet draws the slot it lands in
-          // as a bar on the selected file's header.
-          renderHeaderPrefix={(item) =>
-            item.id === selectedPath ? <span aria-hidden="true" /> : null
-          }
-          renderHeaderMetadata={(item) => (
-            <span className={css.viewedToggle}>
-              {canComment && pr ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`Comment on file ${item.id}`}
-                  title="Comment on file"
-                  onClick={() => {
-                    setCommentWarning(null);
-                    beginPrComment({
-                      destination: "file",
-                      path: item.id,
-                      line: null,
-                      endLine: null,
-                      headSha: pr.headSha,
-                      note: `Comment on ${item.id} (whole file).`,
-                    });
-                  }}
-                >
-                  <Icon name="comment" />
-                </Button>
-              ) : null}
-              <Checkbox checked={viewed.has(item.id)} onCheckedChange={() => toggleViewed(item.id)}>
-                Viewed
-              </Checkbox>
-            </span>
+        <ScrollArea
+          label="Diff"
+          viewportClassName={css.surface}
+          renderViewport={(props) => (
+            <CodeViewViewport viewportProps={props}>
+              <CodeView
+                /*
+                 * Highlighting stays on the main thread, on the Oniguruma engine (see
+                 * `HIGHLIGHTER`). In a worker the renderer can't use it — the WASM
+                 * binary doesn't resolve there and nothing renders at all — and falls
+                 * back to Shiki's JavaScript regex engine, which cannot compile every
+                 * TextMate grammar: SQL is one it silently gives up on, rendering the
+                 * file as plain text while JS/TS look fine, so the failure is easy to
+                 * miss. Virtualization, the far bigger win, is unaffected by this, and
+                 * the preload below keeps the first paint from being empty.
+                 */
+                disableWorkerPool
+                ref={viewRef}
+                items={items}
+                options={options}
+                onSelectedLinesChange={setCommentSelection}
+                // Renders nothing itself: the stylesheet draws the slot it lands in
+                // as a bar on the selected file's header.
+                renderHeaderPrefix={(item) =>
+                  item.id === selectedPath ? <span aria-hidden="true" /> : null
+                }
+                renderHeaderMetadata={(item) => (
+                  <span className={css.viewedToggle}>
+                    {canComment && pr ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Comment on file ${item.id}`}
+                        title="Comment on file"
+                        onClick={() => {
+                          setCommentWarning(null);
+                          beginPrComment({
+                            destination: "file",
+                            path: item.id,
+                            line: null,
+                            endLine: null,
+                            headSha: pr.headSha,
+                            note: `Comment on ${item.id} (whole file).`,
+                          });
+                        }}
+                      >
+                        <Icon name="comment" />
+                      </Button>
+                    ) : null}
+                    <Checkbox
+                      checked={viewed.has(item.id)}
+                      onCheckedChange={() => toggleViewed(item.id)}
+                    >
+                      Viewed
+                    </Checkbox>
+                  </span>
+                )}
+                renderAnnotation={({ metadata }, item) => {
+                  if (metadata.kind === "note") {
+                    return notes.has(item.id) ? (
+                      <ExplanationMarker path={item.id} stale={stale} />
+                    ) : null;
+                  }
+                  const anchor = anchors.get(item.id)?.find(({ key }) => key === metadata.key);
+                  return anchor ? (
+                    <CommentMarker path={item.id} anchor={anchor} host={host} />
+                  ) : null;
+                }}
+              />
+            </CodeViewViewport>
           )}
-          renderAnnotation={({ metadata }, item) => {
-            if (metadata.kind === "note") {
-              return notes.has(item.id) ? <ExplanationMarker path={item.id} stale={stale} /> : null;
-            }
-            const anchor = anchors.get(item.id)?.find(({ key }) => key === metadata.key);
-            return anchor ? <CommentMarker path={item.id} anchor={anchor} host={host} /> : null;
-          }}
         />
       ) : (
         // Takes over from the screen's own skeleton without fading in again.

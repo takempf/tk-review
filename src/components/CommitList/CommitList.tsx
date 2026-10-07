@@ -7,6 +7,7 @@ import { absoluteTime, shortTime } from "../../lib/time";
 import { knownVerdict, REVIEWED_ICON, VERDICT_ICONS } from "../../lib/verdict";
 import { reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { useCopy } from "../CopyButton/CopyButton";
+import { ScrollArea } from "../ScrollArea/ScrollArea";
 import css from "./CommitList.module.css";
 
 /** Past this many on one commit, the older ones are counted rather than drawn. */
@@ -159,7 +160,7 @@ export function CommitList() {
           {sinceLatest ? ` · ${sinceLatest} since last review` : null}
         </span>
       </div>
-      <div className={css.scroll}>
+      <ScrollArea label="Commits" viewportClassName={css.scroll}>
         <ul className={css.list}>
           {worktree ? (
             <li className={css.item}>
@@ -190,7 +191,7 @@ export function CommitList() {
             {plural(unplaced.length, "review")} read commits not listed here.
           </p>
         ) : null}
-      </div>
+      </ScrollArea>
     </section>
   );
 }

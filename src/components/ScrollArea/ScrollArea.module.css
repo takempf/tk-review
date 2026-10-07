@@ -1,0 +1,74 @@
+.root {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.viewport {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  scrollbar-gutter: auto;
+}
+
+/* Base UI updates these distances on every scroll and leaves them inherited
+   in WebKit. Only the viewport needs them: stop inheritance at the content
+   boundary so scrolling doesn't invalidate every table cell or diff line.
+   This also covers CodeView's own scaffold, which replaces Content's div. */
+.viewport > * {
+  --scroll-area-overflow-x-start: 0px;
+  --scroll-area-overflow-x-end: 0px;
+  --scroll-area-overflow-y-start: 0px;
+  --scroll-area-overflow-y-end: 0px;
+}
+
+.content {
+  display: flow-root;
+  min-height: 100%;
+}
+
+/* A generous pointer target around a slim thumb. Base UI positions the track
+   over the viewport and supplies its geometry and dragging behavior. */
+.scrollbar {
+  z-index: 2;
+  display: flex;
+  padding: 3px;
+  opacity: 0;
+  transition: opacity var(--tk-duration-2) var(--tk-ease-fade);
+
+  &[data-orientation="vertical"] {
+    width: 12px;
+  }
+
+  &[data-orientation="horizontal"] {
+    height: 12px;
+  }
+
+  &[data-hovering],
+  &[data-scrolling],
+  &:hover,
+  &:active {
+    opacity: 1;
+  }
+}
+
+.thumb {
+  flex: none;
+  border-radius: 999px;
+  background: var(--tk-border-strong);
+
+  &[data-orientation="vertical"] {
+    width: 100%;
+  }
+
+  &[data-orientation="horizontal"] {
+    height: 100%;
+  }
+
+  &:hover,
+  &:active {
+    background: var(--tk-fg-muted);
+  }
+}

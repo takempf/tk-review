@@ -76,6 +76,7 @@ import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Model } from "../Model/Model";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
+import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { useSearch } from "../Search/Search";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
 import { Spinner } from "../Spinner/Spinner";
@@ -544,7 +545,11 @@ function PrSection({ pr }: { pr: PrContext }) {
   useCommentFocus(bodyRef);
 
   return (
-    <div ref={bodyRef} className={css.prBody}>
+    <ScrollArea
+      label="Pull request conversation"
+      viewportRef={bodyRef}
+      viewportClassName={css.prBody}
+    >
       <div data-search-id="pr:description" tabIndex={-1}>
         <div className={css.prHeader}>
           <div className={`${css.itemHead} ${css.titleHead}`}>
@@ -582,7 +587,7 @@ function PrSection({ pr }: { pr: PrContext }) {
           ))}
         </div>
       ) : null}
-    </div>
+    </ScrollArea>
   );
 }
 
@@ -2049,7 +2054,11 @@ function ReviewTab() {
     <>
       <AgentSettings />
       {/* While a finished run hands over, the review it replaces fades out. */}
-      <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
+      <ScrollArea
+        label="AI reviews"
+        viewportRef={bodyRef}
+        viewportClassName={handingOver ? `${css.body} ${css.replacing}` : css.body}
+      >
         {reviewError ? (
           <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
         ) : null}
@@ -2083,7 +2092,7 @@ function ReviewTab() {
             comparison for when you come back.
           </p>
         </Fold>
-      </div>
+      </ScrollArea>
     </>
   );
 }
@@ -2112,7 +2121,11 @@ function ExplainTab() {
   return (
     <>
       <AgentSettings />
-      <div ref={bodyRef} className={handingOver ? `${css.body} ${css.replacing}` : css.body}>
+      <ScrollArea
+        label="AI explanation"
+        viewportRef={bodyRef}
+        viewportClassName={handingOver ? `${css.body} ${css.replacing}` : css.body}
+      >
         {explainError ? (
           <ErrorNotice error={explainError} onDismiss={dismissExplainError} className={css.error} />
         ) : null}
@@ -2134,7 +2147,7 @@ function ExplainTab() {
             link to its explanation at the top of each file in the diff that needs one.
           </p>
         </Fold>
-      </div>
+      </ScrollArea>
     </>
   );
 }

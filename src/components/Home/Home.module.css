@@ -95,10 +95,13 @@
   margin-bottom: var(--tk-space-2);
 }
 
+.listArea {
+  margin: 0 calc(var(--tk-space-3) * -1);
+}
+
 .listScroll {
   flex: 1;
   min-height: 0;
-  margin: 0 calc(var(--tk-space-3) * -1);
   padding: 0 var(--tk-space-3) var(--tk-space-8);
   overflow: auto;
 }
