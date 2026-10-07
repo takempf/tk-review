@@ -683,7 +683,7 @@ fn parse_pr_page(raw: &[u8]) -> Result<PrPage, GitError> {
 /// repo)`. Remotes are searched in `gh`'s own order of preference — `upstream`
 /// before `origin` — so a fork finds the repository it was forked from, which
 /// is where its pull requests live.
-fn github_remote(root: &Path) -> Result<Option<(String, String, String)>, GitError> {
+pub(crate) fn github_remote(root: &Path) -> Result<Option<(String, String, String)>, GitError> {
     let remotes = git::remote_urls(root)?;
     let named = |wanted: &str| {
         remotes

@@ -4,6 +4,7 @@ pub mod git;
 pub mod github;
 pub mod models;
 pub mod review;
+pub mod rules;
 pub mod runs;
 
 use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
@@ -136,6 +137,8 @@ pub fn run() {
             commands::list_commits,
             commands::get_file_versions,
             commands::review_diff,
+            commands::get_repo_rules,
+            commands::set_repo_rules,
             commands::re_review_diff,
             commands::explain_diff,
             commands::review_reply,

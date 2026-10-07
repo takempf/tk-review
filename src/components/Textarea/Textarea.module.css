@@ -1,5 +1,6 @@
 /*
- * Every field grows with its text from one line to five, then scrolls.
+ * Every field grows with its text from one line to five, then scrolls. A call
+ * site that edits a whole document raises the cap with `--textarea-max-lines`.
  *
  * `textarea.textarea` outranks the single class a call site styles the field
  * with, so a call site's own `resize`, `overflow` or `max-height` cannot undo
@@ -14,5 +15,10 @@ textarea.textarea {
   overflow-y: auto;
   /* Border-box, so the cap adds back what sits above and below the text. A
      call site with padding or a border sets their sum, per side, here. */
-  max-height: calc(5lh + 2 * var(--textarea-padding-and-border, 0px));
+  max-height: calc(
+    var(--textarea-max-lines, 5) *
+    1lh +
+    2 *
+    var(--textarea-padding-and-border, 0px)
+  );
 }

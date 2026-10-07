@@ -418,8 +418,32 @@ export function toAppError(value: unknown, title: string | null = null): AppErro
   return { title, message: lead.join("\n"), detail: message };
 }
 
+/** Review rules kept for one repository on this machine; either part may be empty. */
+export interface RepoRules {
+  /** Added to every review and re-review of the repository. */
+  review: string;
+  /** Handed to the migration reviewer when a diff changes migrations. */
+  migrations: string;
+}
+
+/** A repository's rules, with what they are keyed by and where they are kept. */
+export interface RepoRulesEntry {
+  /** `github.com/owner/repo`, so every clone shares them; a path without a GitHub remote. */
+  repo: string;
+  rules: RepoRules;
+  /** The file every repository's rules are kept in. */
+  file: string;
+}
+
 export const gitApi = {
   selectRepo: (path: string) => invoke<RepoInfo>("select_repo", { path }),
+
+  /** The review rules kept on this machine for the repository at `root`. */
+  getRepoRules: (root: string) => invoke<RepoRulesEntry>("get_repo_rules", { root }),
+
+  /** Replaces the review rules kept for the repository at `root`. */
+  setRepoRules: (root: string, rules: RepoRules) =>
+    invoke<RepoRulesEntry>("set_repo_rules", { root, rules }),
 
   /**
    * Models and effort levels the engine's CLI currently offers, read from the

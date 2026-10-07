@@ -1,0 +1,49 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.hint {
+  margin-bottom: var(--space-1);
+  font-size: var(--tk-text-xs);
+  color: var(--text-dim);
+}
+
+/* A whole document of rules, so the field grows further before it scrolls. */
+.input {
+  --textarea-max-lines: 14;
+}
+
+.loading {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--text-dim);
+}
+
+.footer {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* Where the rules live, for anyone who would rather edit the file. Right to
+   left, so a long path loses its start rather than the file's name. */
+.file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}

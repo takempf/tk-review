@@ -8,7 +8,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { sceneryHeld } from "tk-design-system/scenery/hold";
-import type { GitError, PrContext, PrThread } from "../src/ipc/git";
+import type { GitError, PrContext, PrThread, RepoRules, RepoRulesEntry } from "../src/ipc/git";
 import { Root } from "../src/Root";
 import { storageRoot } from "../src/store/account";
 import "../src/styles/global.css";
@@ -183,6 +183,20 @@ function prFor(url: string): PrContext {
     baseRef: listed.baseRef,
     headSha: listed.headSha ?? PR.headSha,
     compareRef: `tk-review/pr/${listed.number}`,
+  };
+}
+
+/** The repository's review rules, as saved since the harness loaded. */
+let repoRules: RepoRules = {
+  review: "",
+  migrations: "Every lock on `orders` needs `SET LOCAL lock_timeout`: it is the busiest table.",
+};
+
+function rulesEntry(): RepoRulesEntry {
+  return {
+    repo: "github.com/acme/widgets",
+    rules: structuredClone(repoRules),
+    file: "~/Library/Application Support/com.tkempf.tk-review/repo-rules.json",
   };
 }
 
@@ -418,6 +432,11 @@ stdout:
     case "cancel_agent_run":
       cancels.get((payload as { runId: string }).runId)?.();
       return null;
+    case "get_repo_rules":
+      return rulesEntry();
+    case "set_repo_rules":
+      repoRules = (payload as { rules: RepoRules }).rules;
+      return rulesEntry();
     default:
       return null;
   }

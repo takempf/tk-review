@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::error::GitError;
 use crate::git::{self, Branch, CommitLog, DiffSummary, FileVersions, RepoInfo};
@@ -18,6 +18,7 @@ use crate::models::{self, EngineModels};
 use crate::review::{
     self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment,
 };
+use crate::rules::{self, RepoRules, RepoRulesEntry};
 use crate::runs::{AgentRun, AgentRuns};
 
 async fn blocking<T, F>(task: F) -> Result<T, GitError>
@@ -39,6 +40,33 @@ fn agent_run(app: &AppHandle, runs: &AgentRuns, run_id: String) -> AgentRun {
     runs.start(run_id, move || {
         let _ = app.emit("agent-run-output", &id);
     })
+}
+
+/// The file the review rules for every repository are kept in, in the app's
+/// config directory.
+fn rules_file(app: &AppHandle) -> Result<PathBuf, GitError> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("repo-rules.json"))
+        .map_err(|err| GitError::Command(format!("could not find the app's config folder: {err}")))
+}
+
+/// The review rules kept on this machine for the repository at `root`.
+#[tauri::command]
+pub async fn get_repo_rules(app: AppHandle, root: String) -> Result<RepoRulesEntry, GitError> {
+    let file = rules_file(&app)?;
+    blocking(move || rules::load(&file, Path::new(&root))).await
+}
+
+/// Replaces the review rules kept for the repository at `root`.
+#[tauri::command]
+pub async fn set_repo_rules(
+    app: AppHandle,
+    root: String,
+    rules: RepoRules,
+) -> Result<RepoRulesEntry, GitError> {
+    let file = rules_file(&app)?;
+    blocking(move || rules::save(&file, Path::new(&root), rules)).await
 }
 
 #[tauri::command]
@@ -196,16 +224,20 @@ pub async fn review_diff(
     effort: Option<String>,
     pr_context: Option<PrContext>,
 ) -> Result<ReviewResult, GitError> {
+    let rules_file = rules_file(&app)?;
     let run = agent_run(&app, &runs, run_id);
     blocking(move || {
+        let root = PathBuf::from(root);
+        let rules = rules::load(&rules_file, &root)?.rules;
         review::review_diff(
-            &PathBuf::from(root),
+            &root,
             &merge_base,
             compare.as_deref(),
             &engine,
             model.as_deref(),
             effort.as_deref(),
             pr_context.as_ref(),
+            &rules,
             &run,
         )
     })
@@ -231,10 +263,13 @@ pub async fn re_review_diff(
     prior_findings: Vec<ReviewFinding>,
     pr_context: Option<PrContext>,
 ) -> Result<ReReviewResult, GitError> {
+    let rules_file = rules_file(&app)?;
     let run = agent_run(&app, &runs, run_id);
     blocking(move || {
+        let root = PathBuf::from(root);
+        let rules = rules::load(&rules_file, &root)?.rules;
         review::re_review_diff(
-            &PathBuf::from(root),
+            &root,
             &merge_base,
             compare.as_deref(),
             &engine,
@@ -243,6 +278,7 @@ pub async fn re_review_diff(
             &prior_summary,
             &prior_findings,
             pr_context.as_ref(),
+            &rules,
             &run,
         )
     })

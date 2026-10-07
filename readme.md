@@ -78,6 +78,8 @@ src-tauri/src/
   github.rs             pull requests through the gh CLI: list, open, refresh, post
   review.rs             the agent CLI layer (claude, codex): prompt, spawn, parsing
   voice.md              how the explanations should sound (see Agent explanation)
+  migration_review.md   what the migration reviewer checks (see Agent review)
+  rules.rs              the review rules kept per repository on this machine
   runs.rs               agent runs in flight, so they can be cancelled and timed out
   models.rs             model suggestions, read from each CLI's own cache
   commands.rs           the Tauri commands
@@ -115,6 +117,28 @@ The process runs with the repository as its working directory, which lets the
 agent's read-only tools check the code around the diff (callers, tests,
 definitions) rather than judging the patch in isolation. Nothing runs until
 you press the button.
+
+A diff that changes database migrations (anything under a `migrations`,
+`migration`, or `migrate` directory) gets a specialist's review as well. A
+Claude review is given a `migration-reviewer` subagent through `--agents`,
+read-only, carrying the migrations' diffs and the checklist in
+[`migration_review.md`](src-tauri/src/migration_review.md): locks on busy
+tables, data changes that fire triggers, index builds that fail halfway, code
+running against the new schema mid-deploy, and the rest of what has gone wrong
+with real migrations. The main reviewer is told to launch it first, checks
+what it reports, and merges the findings that hold into its own. The run's
+event stream shows whether it did, and a run that answers without launching it
+is resumed once and told to. Codex takes no subagent definitions, so a Codex
+review gets the same checklist in its own prompt.
+
+The **Rules** button beside the agent settings holds rules for the repository
+that every review and re-review follows: review rules for the main reviewer,
+and migration rules for the migration reviewer. They're for what is specific
+or private to one codebase, like which tables are large or which triggers fire
+on an update, so they're kept on this computer in
+`~/Library/Application Support/com.tkempf.tk-review/repo-rules.json` rather
+than in the app or the repository. They're keyed by the GitHub repository, so
+every clone and worktree of it shares them.
 
 Once a review exists, the button becomes **Re-review**, which follows up on
 it in one agent run: every finding from the stored review gets a verdict —

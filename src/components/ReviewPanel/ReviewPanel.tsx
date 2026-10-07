@@ -74,6 +74,7 @@ import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
 import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Model } from "../Model/Model";
+import { RepoRulesButton } from "../RepoRules/RepoRules";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
@@ -1749,9 +1750,11 @@ function RunLoader({
 /**
  * The agent, model and effort the next review or explanation runs with. Both
  * tabs share them, and a run in flight keeps whatever it started with, so they
- * can change at any time.
+ * can change at any time. `rules` adds the repository's review rules, which
+ * reviews follow and explanations don't.
  */
-function AgentSettings() {
+function AgentSettings({ rules = false }: { rules?: boolean }) {
+  const root = useTab((state) => state.repo.root);
   const reviewEngine = useAppStore((state) => state.reviewEngine);
   const reviewModel = useAppStore((state) => state.reviewModel);
   const reviewEffort = useAppStore((state) => state.reviewEffort);
@@ -1836,6 +1839,7 @@ function AgentSettings() {
           </p>
         </Popover.Popup>
       </Popover.Root>
+      {rules ? <RepoRulesButton root={root} /> : null}
     </div>
   );
 }
@@ -2052,7 +2056,7 @@ function ReviewTab() {
 
   return (
     <>
-      <AgentSettings />
+      <AgentSettings rules />
       {/* While a finished run hands over, the review it replaces fades out. */}
       <ScrollArea
         label="AI reviews"
