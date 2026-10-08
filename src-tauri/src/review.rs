@@ -355,6 +355,7 @@ pub fn review_diff(
             effort,
             turn_budget(&patch),
             specialist.as_ref(),
+            Some(REVIEW_SCHEMA),
             run,
         )?
     } else {
@@ -459,6 +460,7 @@ pub fn re_review_diff(
             effort,
             turn_budget(&patch),
             specialist.as_ref(),
+            Some(RE_REVIEW_SCHEMA),
             run,
         )?
     } else {
@@ -631,7 +633,16 @@ pub fn explain_diff(
     let mut prompt = build_explain_prompt(compare, &patch, pr_context);
     add_repo_instructions(&mut prompt, &patch, root, engine);
     let answer = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), None, run)?
+        claude_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            turn_budget(&patch),
+            None,
+            Some(EXPLAIN_SCHEMA),
+            run,
+        )?
     } else {
         AgentText::complete(codex_result_text(
             root,
@@ -789,7 +800,17 @@ pub fn review_reply(
         compare, summary, finding, thread, comment, &patch, pr_context,
     );
     let reply = if engine == "claude" {
-        claude_result_text(root, &prompt, model, effort, turn_budget(&patch), None, run)?.text
+        claude_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            turn_budget(&patch),
+            None,
+            None,
+            run,
+        )?
+        .text
     } else {
         codex_result_text(root, &prompt, model, effort, None, run)?
     };
@@ -1475,7 +1496,7 @@ impl AgentText {
 /// What claude is told when a run stops at the turn limit. The pending tool
 /// calls are dropped, so it has to say where its answer rests on unfinished
 /// checks.
-const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: no more tool calls. Give your final answer now, in exactly the format the first message asked for, based on what you have read so far. Where you did not get to check something, say so where it matters rather than leaving it out.";
+const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: read and search nothing more. Give your final answer now, in exactly the format the first message asked for, based on what you have read so far. Where you did not get to check something, say so where it matters rather than leaving it out.";
 
 /// Runs `claude -p` and unwraps the CLI's result envelope down to the model's
 /// final text. Its events stream as it works, which is what shows the run is
@@ -1488,6 +1509,10 @@ const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: 
 ///
 /// A `specialist` is defined for the run, and a run that answers without
 /// launching it is resumed once and told to.
+///
+/// When a `schema` is given, every one of these runs answers against it; see
+/// `push_schema`. Replies are plain text and pass `None`.
+#[allow(clippy::too_many_arguments)]
 fn claude_result_text(
     root: &Path,
     prompt: &str,
@@ -1495,6 +1520,7 @@ fn claude_result_text(
     effort: Option<&str>,
     turns: usize,
     specialist: Option<&Specialist>,
+    schema: Option<&str>,
     run: &AgentRun,
 ) -> Result<AgentText, GitError> {
     let defaults = ClaudeDefaults::read();
@@ -1525,6 +1551,7 @@ fn claude_result_text(
         args.extend(["--agents", agents_arg]);
     }
     push_model_and_effort(&mut args, model, effort);
+    push_schema(&mut args, schema);
     let output = spawn_cli(root, "claude", &args, prompt, GitError::ClaudeNotFound, run)?;
     let stopped = match read_claude_output(&output) {
         ClaudeOutcome::Answer(text) => {
@@ -1541,6 +1568,7 @@ fn claude_result_text(
                 agents_arg,
                 model,
                 effort,
+                schema,
                 run,
             )?;
             return Ok(AgentText::complete(insisted.unwrap_or(text)));
@@ -1558,10 +1586,12 @@ fn claude_result_text(
         &stopped.session_id,
         "--tools",
         "",
+        // One to answer, and one more in case the schema sends it back.
         "--max-turns",
-        "1",
+        "2",
     ];
     push_model_and_effort(&mut args, model, effort);
+    push_schema(&mut args, schema);
     let wrap_up = spawn_cli(
         root,
         "claude",
@@ -1606,6 +1636,7 @@ const SPECIALIST_RETRY_TURNS: &str = "12";
 /// to, and has it launch it now and answer again. `None` when that produces
 /// no answer, so the caller keeps the one it has: a review without the
 /// specialist beats no review.
+#[allow(clippy::too_many_arguments)]
 fn insist_on_specialist(
     root: &Path,
     output: &Output,
@@ -1613,6 +1644,7 @@ fn insist_on_specialist(
     agents_arg: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    schema: Option<&str>,
     run: &AgentRun,
 ) -> Result<Option<String>, GitError> {
     let Some(session_id) = result_envelope(&String::from_utf8_lossy(&output.stdout))
@@ -1637,6 +1669,7 @@ fn insist_on_specialist(
     ];
     push_access(&mut args);
     push_model_and_effort(&mut args, model, effort);
+    push_schema(&mut args, schema);
     match spawn_cli(
         root,
         "claude",
@@ -1747,6 +1780,16 @@ fn push_model_and_effort<'a>(
     }
     if let Some(effort) = effort {
         args.extend(["--effort", effort]);
+    }
+}
+
+/// Pins claude's final answer to `schema`, as `--output-schema` does codex's.
+/// The model then answers through a tool call the CLI checks against it, so a
+/// malformed answer goes back to the model to fix instead of failing the
+/// parse; the envelope's `result` is still the answer as JSON text.
+fn push_schema<'a>(args: &mut Vec<&'a str>, schema: Option<&'a str>) {
+    if let Some(schema) = schema {
+        args.extend(["--json-schema", schema]);
     }
 }
 
