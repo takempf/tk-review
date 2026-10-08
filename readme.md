@@ -6,12 +6,13 @@ Diffs are rendered with [`@pierre/diffs`](https://diffs.com/), through its `Code
 
 ## Running it
 
-It's built with [Tauri](https://tauri.app/) and used on macOS.
+It's built with [Tauri](https://tauri.app/) 3 on its [Chromium (CEF) runtime](https://v3.tauri.app/develop/cef/), and used on macOS. The window runs a bundled Chromium rather than the system's WebKit.
 
 You'll need:
 
 - Node 20.19+ or 22.12+ (what Vite 8 asks for), with [pnpm](https://pnpm.io/installation)
 - A Rust toolchain from [rustup](https://rustup.rs/), plus Tauri's [system prerequisites](https://tauri.app/start/prerequisites/) (on macOS, the Xcode Command Line Tools)
+- CMake and Ninja (`brew install cmake ninja`), which build CEF's C++ wrapper
 - `git` on your PATH
 
 And for the parts that talk to other services, any of these you want to use:
@@ -31,7 +32,7 @@ pnpm install
 pnpm app        # tauri dev: builds the Rust binary and opens the window
 ```
 
-The first `pnpm app` compiles the whole Rust side, so give it a few minutes. Once the window is up, **Open repository…** picks a local clone. Its GitHub pull requests are listed if `gh` can see them, and **Compare branches** compares any two refs instead. Changes in the design system checkout show up live, since nothing is built in between.
+The first `pnpm app` downloads the CEF distribution (about 1 GB, kept in `~/Library/Caches/tauri-cef`) and compiles the whole Rust side, so give it a few minutes. Once the window is up, **Open repository…** picks a local clone. Its GitHub pull requests are listed if `gh` can see them, and **Compare branches** compares any two refs instead. Changes in the design system checkout show up live, since nothing is built in between.
 
 Other commands:
 

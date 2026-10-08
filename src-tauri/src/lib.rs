@@ -25,8 +25,8 @@ const ZOOM_ITEMS: [(&str, &str, &str, &str); 3] = [
 ];
 
 /// Tauri's default menu, with the zoom items at the top of View as in Safari.
-/// The page owns the level and takes the same hotkeys itself (WebKit offers
-/// them to the page before the menu), so the items mostly show the keys; a
+/// The page owns the level and takes the same hotkeys itself (the webview
+/// offers them to the page before the menu), so the items mostly show the keys; a
 /// click reaches the page as a `zoom` event. Only macOS's default menu has a
 /// View menu; elsewhere the hotkeys alone will do.
 fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -48,49 +48,22 @@ fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     Ok(menu)
 }
 
-/// WebKit holds a page to about 60 frames a second whatever the display can
-/// do (Safari's "Prefer Page Rendering Updates near 60fps"), so every
-/// transition ran at half a 120Hz screen's rate or less. The switch is a
-/// feature flag with no public setter: it's found by key in WebKit's own list
-/// of features, and left alone if this WebKit doesn't list it.
-///
-/// # Safety
-///
-/// `view` must be the live WKWebView, on the main thread.
-#[cfg(target_os = "macos")]
-unsafe fn render_at_display_rate(view: &objc2_web_kit::WKWebView) {
-    use objc2::rc::Retained;
-    use objc2::runtime::{AnyClass, AnyObject};
-    use objc2::{msg_send, sel};
-    use objc2_foundation::NSString;
-
-    const FLAG: &str = "PreferPageRenderingUpdatesNear60FPSEnabled";
-    let preferences = view.configuration().preferences();
-    let Some(class) = AnyClass::get(c"WKPreferences") else {
-        return;
-    };
-    let can_set: bool = msg_send![&*preferences, respondsToSelector: sel!(_setEnabled:forFeature:)];
-    if !class.responds_to(sel!(_features)) || !can_set {
-        return;
-    }
-    let features: Option<Retained<AnyObject>> = msg_send![class, _features];
-    let Some(features) = features else {
-        return;
-    };
-    let count: usize = msg_send![&*features, count];
-    for index in 0..count {
-        let feature: Retained<AnyObject> = msg_send![&*features, objectAtIndex: index];
-        let key: Option<Retained<NSString>> = msg_send![&*feature, key];
-        if key.is_some_and(|key| key.to_string() == FLAG) {
-            let _: () = msg_send![&*preferences, _setEnabled: false, forFeature: &*feature];
-            return;
-        }
-    }
+/// Chromium's profile, which holds the page's localStorage: saved reviews,
+/// explanations, history. CEF keeps it under the user's cache folder unless told
+/// otherwise, where cleanup tools and backups both treat it as disposable.
+fn chromium_profile(identifier: &str) -> std::path::PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(identifier)
+        .join("cef")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    let profile = chromium_profile(&context.config().identifier);
     tauri::Builder::default()
+        .runtime(tauri_runtime_cef::Cef::default().root_cache_path(profile))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentRuns::default())
@@ -104,19 +77,6 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_zoom(DEFAULT_ZOOM)?;
-                // A two-finger swipe walks the page's history, as in Safari.
-                // The page keeps history in step with its screens (see
-                // `src/lib/screenHistory.ts`), so this is back to the list.
-                #[cfg(target_os = "macos")]
-                window.with_webview(|webview| {
-                    // SAFETY: on macOS the handle is the window's live WKWebView,
-                    // and `with_webview` runs this on the main thread.
-                    unsafe {
-                        let view = &*webview.inner().cast::<objc2_web_kit::WKWebView>();
-                        view.setAllowsBackForwardNavigationGestures(true);
-                        render_at_display_rate(view);
-                    }
-                })?;
             }
             Ok(())
         })
@@ -146,7 +106,7 @@ pub fn run() {
             commands::cancel_agent_run,
             commands::abandon_agent_runs,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {

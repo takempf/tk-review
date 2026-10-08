@@ -12,8 +12,7 @@ function entryView(state: unknown): AppView | null {
 
 /**
  * Keeps the webview's history in step with the screen, so the trackpad's
- * back/forward swipe (enabled natively in `src-tauri/src/lib.rs`) moves between
- * the pull-request list and the review.
+ * back/forward swipe moves between the pull-request list and the review.
  *
  * History holds at most two entries: the list, and the review in front of it.
  * Entering the review pushes; leaving it from inside the app goes back, so a
