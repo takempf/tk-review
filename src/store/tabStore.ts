@@ -80,10 +80,17 @@ export interface StoredReview {
   threads: Record<string, ReviewComment[]>;
   /** The reviews by the same engine that this one replaced, oldest first. */
   earlier?: ReviewStamp[];
+  /**
+   * The most recent of `earlier` in full, oldest first, kept to read under the
+   * commits they reviewed. Each is stored without its own `earlier` and `past`.
+   */
+  past?: StoredReview[];
 }
 
-/** Earlier reviews are kept only as stamps, which cost little; still, the history ends somewhere. */
+/** Earlier reviews are kept as stamps, which cost little; still, the history ends somewhere. */
 const EARLIER_LIMIT = 20;
+/** Fewer are kept in full: a review with its threads runs to kilobytes, and localStorage is shared. */
+const PAST_LIMIT = 10;
 
 export function stampOf(stored: StoredReview): ReviewStamp {
   return {
@@ -95,10 +102,17 @@ export function stampOf(stored: StoredReview): ReviewStamp {
   };
 }
 
-/** What a review replacing `previous` carries forward: every review before it, as stamps. */
-function earlierThan(previous: StoredReview | undefined): ReviewStamp[] | undefined {
-  if (!previous) return undefined;
-  return [...(previous.earlier ?? []), stampOf(previous)].slice(-EARLIER_LIMIT);
+/**
+ * What a review replacing `previous` carries forward: every review before it
+ * as stamps, and the latest few in full.
+ */
+function historyBefore(previous: StoredReview | undefined): Pick<StoredReview, "earlier" | "past"> {
+  if (!previous) return {};
+  const { earlier, past, ...record } = previous;
+  return {
+    earlier: [...(earlier ?? []), stampOf(previous)].slice(-EARLIER_LIMIT),
+    past: [...(past ?? []), record].slice(-PAST_LIMIT),
+  };
 }
 
 /**
@@ -113,6 +127,32 @@ export function reviewsNewestFirst(reviews: ReviewsByEngine): StoredReview[] {
   return Object.values(reviews)
     .filter((stored): stored is StoredReview => stored != null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/**
+ * A review as the panel lists it. `live` marks each engine's review on
+ * record, the only one that takes questions and posts; the rest are the
+ * reviews it replaced, kept to read.
+ */
+export interface ListedReview {
+  source: StoredReview;
+  live: boolean;
+  /** Names the review among all of them, for search targets: the engine alone for a live one. */
+  key: string;
+}
+
+/** Every stored review, replaced ones included, the most recent first. */
+export function reviewHistory(reviews: ReviewsByEngine): ListedReview[] {
+  return reviewsNewestFirst(reviews)
+    .flatMap((stored) => [
+      { source: stored, live: true, key: stored.engine },
+      ...(stored.past ?? []).map((source) => ({
+        source,
+        live: false,
+        key: `${source.engine}@${source.createdAt}`,
+      })),
+    ])
+    .sort((a, b) => b.source.createdAt.localeCompare(a.source.createdAt));
 }
 
 /**
@@ -471,7 +511,7 @@ export function keepsTab(state: TabState): boolean {
  * working tree, the commit under it — the newest listed, or the merge base
  * when nothing is, which is then HEAD itself.
  */
-function reviewedHead(state: Pick<TabState, "summary" | "commits">): string | null {
+export function reviewedHead(state: Pick<TabState, "summary" | "commits">): string | null {
   const { summary, commits } = state;
   if (!summary) return null;
   if (summary.compareHead) return summary.compareHead;
@@ -1026,7 +1066,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             head,
             createdAt: new Date().toISOString(),
             threads: {},
-            earlier: earlierThan(current[reviewEngine]),
+            ...historyBefore(current[reviewEngine]),
           };
           const next = { ...current, [reviewEngine]: stored };
           writeReviews(storageRoot(repo), base, scope, next);
@@ -1167,7 +1207,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             head,
             createdAt: new Date().toISOString(),
             threads,
-            earlier: earlierThan(current[reviewEngine] ?? prior),
+            ...historyBefore(current[reviewEngine] ?? prior),
           };
           const next = { ...current, [reviewEngine]: stored };
           writeReviews(storageRoot(repo), base, scope, next);

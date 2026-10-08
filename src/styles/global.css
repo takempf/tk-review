@@ -71,6 +71,11 @@
      lifts visibly off any of the surfaces. */
   --bg-hover: color-mix(in oklab, var(--tk-bg), var(--tk-fg) 8%);
   --bg-selected: color-mix(in oklab, var(--tk-accent) 16%, var(--tk-bg));
+  /* Sticky headers over a scrolling list: the chrome, a little see-through,
+     with what scrolls under it blurred. Set `backdrop-filter` (and its
+     -webkit- twin) to `--frosted-blur` alongside the background. */
+  --bg-frosted: color-mix(in oklab, var(--tk-bg) 85%, transparent);
+  --frosted-blur: blur(4px);
   --border: var(--tk-border-subtle);
   --border-strong: var(--tk-border);
   --text: var(--tk-fg);

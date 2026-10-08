@@ -164,7 +164,9 @@ test("search reveals a folded AI finding and highlights its text", async ({ page
   await page
     .getByText("Error mapping could reuse the shared kind table.", { exact: true })
     .waitFor();
-  const findings = page.getByRole("button", { name: /^Findings/ });
+  const findings = page
+    .locator("[data-review-commit]")
+    .getByRole("button", { name: /^Claude Code/ });
   await findings.click();
   await expect(findings).toHaveAttribute("aria-expanded", "false");
   await page.keyboard.press("Meta+f");

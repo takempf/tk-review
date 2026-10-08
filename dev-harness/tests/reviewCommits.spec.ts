@@ -80,8 +80,9 @@ test("each reviewed commit keeps its summaries, findings, resolutions and conclu
   );
 
   await page.screenshot({ path: testInfo.outputPath("reviews-by-commit.png") });
-  const findings = previous.getByRole("button", { name: /^Findings/ });
+  const findings = previous.getByRole("button", { name: /^Claude Code/ });
   await findings.click();
+  await expect(findings).toHaveAttribute("aria-expanded", "false");
   await page.keyboard.press("Meta+f");
   const search = page.getByRole("dialog", { name: "Find in this view" });
   const input = search.getByRole("combobox", { name: "Search text" });
@@ -92,7 +93,7 @@ test("each reviewed commit keeps its summaries, findings, resolutions and conclu
   await expect(previous.getByText("claude finding", { exact: true })).toBeInViewport();
 });
 
-test("engines reviewing the same commit share sections and use the latest conclusion", async ({
+test("engines reviewing the same commit each get a review of their own, the newest first", async ({
   page,
 }) => {
   await openReviews(page, {
@@ -101,13 +102,83 @@ test("engines reviewing the same commit share sections and use the latest conclu
   });
   const group = page.locator("[data-review-commit]");
   await expect(group).toHaveCount(1);
-  await expect(group.getByText("codex finding", { exact: true })).toBeVisible();
-  await expect(group.getByText("claude finding", { exact: true })).toBeVisible();
-  await expect(group.getByRole("button", { name: "Reviews 2", exact: true })).toBeVisible();
-  await expect(group.getByRole("textbox", { name: "Review conclusion" })).toHaveCount(1);
-  await expect(group.getByRole("textbox", { name: "Review conclusion" })).toHaveValue(
+  const cards = group.locator("[data-reveal-frame]");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.first().getByText("codex finding", { exact: true })).toBeVisible();
+  await expect(cards.first().getByRole("textbox", { name: "Review conclusion" })).toHaveValue(
     "codex conclusion",
   );
+  await expect(cards.last().getByText("claude finding", { exact: true })).toBeVisible();
+  await expect(cards.last().getByRole("textbox", { name: "Review conclusion" })).toHaveValue(
+    "claude conclusion",
+  );
+  await expect(cards.first().getByText("claude finding", { exact: true })).toHaveCount(0);
+});
+
+test("a review a re-review replaced stays under its commit, folded and read-only", async ({
+  page,
+}) => {
+  const earlier = review("claude", older.sha);
+  earlier.createdAt = "2026-10-04T12:00:00Z";
+  earlier.review.findings = [{ ...fixture(REVIEW.findings[0]), title: "earlier finding" }];
+  earlier.threads = {
+    review: [
+      { author: "user", text: "Asked about the earlier review", at: "2026-10-04T12:05:00Z" },
+    ],
+  };
+  const current = review("claude", newest.sha);
+  current.past = [earlier];
+  await openReviews(page, { claude: current });
+
+  const groups = page.locator("[data-review-commit]");
+  await expect(groups).toHaveCount(2);
+  await expect(groups.first()).toHaveAttribute("data-review-commit", newest.sha);
+  await expect(groups.first().getByRole("button", { name: /^Claude Code/ })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  const previous = groups.last();
+  await expect(previous).toHaveAttribute("data-review-commit", older.sha);
+  const toggle = previous.getByRole("button", { name: /^Claude Code/ });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(previous.getByText("earlier finding", { exact: true })).toBeHidden();
+
+  await toggle.click();
+  await expect(previous.getByText("earlier finding", { exact: true })).toBeVisible();
+  await expect(previous.getByText("Asked about the earlier review", { exact: true })).toBeVisible();
+  await expect(previous.getByRole("button", { name: /^(Ask about this|Discuss)$/ })).toHaveCount(0);
+  await expect(previous.getByRole("button", { name: "Send to PR" })).toHaveCount(0);
+  await expect(previous.getByRole("textbox", { name: "Review conclusion" })).toHaveCount(0);
+});
+
+test("the commit the next review reads holds its button until it has a review, which a re-review keeps", async ({
+  page,
+}, testInfo) => {
+  await openReviews(page, {});
+  const group = page.locator("[data-review-commit]");
+  await expect(group).toHaveCount(1);
+  await expect(group).toHaveAttribute("data-review-commit", newest.sha);
+  await expect(group.getByText("No reviews", { exact: true })).toBeVisible();
+  await expect(group.getByTitle(/Choose the agent/)).toBeVisible();
+  await expect(page.getByTitle(/^The next review reads/)).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("next-commit-controls.png") });
+  await group.getByRole("button", { name: "Review", exact: true }).click();
+  const cards = group.locator("[data-reveal-frame]");
+  await expect(cards).toHaveCount(1);
+  await expect(group).toHaveCount(1);
+
+  // Reviewed, the commit is its review; the controls go back above the list.
+  await expect(group.getByTitle(/Choose the agent/)).toHaveCount(0);
+  await expect(page.getByTitle(/^The next review reads/)).toContainText(newest.sha.slice(0, 7));
+  await page.getByRole("button", { name: "Re-review", exact: true }).click();
+  await expect(cards).toHaveCount(2);
+  await expect(cards.first().getByRole("button", { name: /re-review/ })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  const replaced = cards.last().getByRole("button", { name: /findings$/ });
+  await expect(replaced).toHaveAttribute("aria-expanded", "false");
+  await expect(cards.last().getByRole("textbox", { name: "Review conclusion" })).toHaveCount(0);
 });
 
 test("unknown commits stay separate from recorded commits that are no longer listed", async ({
@@ -118,9 +189,58 @@ test("unknown commits stay separate from recorded commits that are no longer lis
   delete legacy.head;
   await openReviews(page, { codex: review("codex", removed), claude: legacy });
   const groups = page.locator("[data-review-commit]");
-  await expect(groups).toHaveCount(2);
-  await expect(groups.first().getByRole("heading", { name: "deadbee" })).toBeVisible();
+  // Below the commit the next review reads, which has none yet.
+  await expect(groups).toHaveCount(3);
+  await expect(groups.first()).toHaveAttribute("data-review-commit", newest.sha);
+  await expect(groups.first().getByRole("button", { name: /^(Re-)?review$/i })).toBeVisible();
+  await expect(groups.nth(1).getByRole("heading", { name: "deadbee" })).toBeVisible();
   await expect(groups.last().getByRole("heading", { name: "Commit not recorded" })).toBeVisible();
-  await expect(groups.first().getByText("codex finding", { exact: true })).toBeVisible();
+  await expect(groups.nth(1).getByText("codex finding", { exact: true })).toBeVisible();
   await expect(groups.last().getByText("claude finding", { exact: true })).toBeVisible();
+});
+
+test("a commit's bar stays above its reviews as they scroll, and folds them away", async ({
+  page,
+}, testInfo) => {
+  const long = review("claude", newest.sha);
+  long.review.findings = Array.from({ length: 12 }, (_, index) => ({
+    ...fixture(REVIEW.findings[0]),
+    title: `finding ${index + 1}`,
+  }));
+  await openReviews(page, { claude: long, codex: review("codex", older.sha) });
+  const body = page.getByRole("region", { name: "AI reviews" });
+  const groups = page.locator("[data-review-commit]");
+  const bar = groups.first().locator("header");
+  const heading = groups.first().locator("[data-reveal-frame] > [data-reveal]").first();
+  await expect(groups.first().getByText("finding 12", { exact: true })).toBeAttached();
+
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight / 3;
+  });
+  const top = (await body.boundingBox())?.y ?? Number.NaN;
+  await expect.poll(async () => (await bar.boundingBox())?.y).toBeCloseTo(top, 0);
+  const barHeight = (await bar.boundingBox())?.height ?? Number.NaN;
+  await expect.poll(async () => (await heading.boundingBox())?.y).toBeCloseTo(top + barHeight, 0);
+  await page.screenshot({ path: testInfo.outputPath("sticky-commit-bar.png") });
+
+  // The next commit's bar pushes it off, and sticks in its place.
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect
+    .poll(async () => (await groups.last().locator("header").boundingBox())?.y)
+    .toBeCloseTo(top, 0);
+  await expect.poll(async () => (await bar.boundingBox())?.y ?? 0).toBeLessThan(top);
+
+  await body.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  const toggle = bar.getByRole("button", { name: new RegExp(`^${newest.sha.slice(0, 7)}`) });
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(groups.first().getByText("finding 1", { exact: true })).toBeHidden();
+  await expect(groups.last().getByText("codex finding", { exact: true })).toBeVisible();
+  await toggle.click();
+  await expect(groups.first().getByText("finding 1", { exact: true })).toBeVisible();
 });

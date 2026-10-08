@@ -7,8 +7,7 @@ import {
   findingThreadKey,
   REVIEW_THREAD_KEY,
   resolutionThreadKey,
-  reviewsNewestFirst,
-  sourcedKey,
+  reviewHistory,
   useTab,
   useTabStore,
 } from "../../store/tabStore";
@@ -113,61 +112,64 @@ export function ReviewSearchIndex() {
         });
       }
     }
-    for (const source of reviewsNewestFirst(reviews)) {
+    for (const { source, live, key: review } of reviewHistory(reviews)) {
       const agent = ENGINE_LABELS[source.engine];
-      const summaryId = sourcedKey(source.engine, REVIEW_THREAD_KEY);
+      const kind = live ? "Review" : "Earlier review";
       docs.push({
-        id: `review:${summaryId}`,
+        id: `review:${review}:${REVIEW_THREAD_KEY}`,
         scope: "conversations",
         title: `${agent} review`,
         text: source.review.summary,
-        detail: "Review summary",
+        detail: `${kind} summary`,
         tab: "ai",
-        target: `review:${summaryId}`,
+        target: `review:${review}:${REVIEW_THREAD_KEY}`,
       });
-      docs.push({
-        id: `conclusion:${source.engine}`,
-        scope: "conversations",
-        title: `${agent} conclusion`,
-        text: source.review.conclusion ?? "",
-        detail: "Review conclusion",
-        tab: "ai",
-        target: `conclusion:${source.engine}`,
-      });
-      for (const finding of source.review.findings) {
-        const key = sourcedKey(source.engine, findingThreadKey(finding));
+      if (live) {
         docs.push({
-          id: `review:${key}`,
+          id: `conclusion:${source.engine}`,
+          scope: "conversations",
+          title: `${agent} conclusion`,
+          text: source.review.conclusion ?? "",
+          detail: "Review conclusion",
+          tab: "ai",
+          target: `conclusion:${source.engine}`,
+        });
+      }
+      for (const finding of source.review.findings) {
+        const target = `review:${review}:${findingThreadKey(finding)}`;
+        docs.push({
+          id: target,
           scope: "conversations",
           title: finding.title,
           text: `${finding.title}\n${finding.body}`,
           detail: `${agent} · ${finding.path}`,
           tab: "ai",
-          target: `review:${key}`,
+          target,
         });
       }
       for (const resolution of source.resolutions ?? []) {
-        const key = sourcedKey(source.engine, resolutionThreadKey(resolution.finding));
+        const target = `review:${review}:${resolutionThreadKey(resolution.finding)}`;
         docs.push({
-          id: `review:${key}`,
+          id: target,
           scope: "conversations",
           title: resolution.finding.title,
           text: `${resolution.finding.title}\n${resolution.finding.body}\n${resolution.note}`,
-          detail: `${agent} · previous finding`,
+          detail: `${agent} · earlier finding`,
           tab: "ai",
-          target: `review:${key}`,
+          target,
         });
       }
       for (const [key, comments] of Object.entries(source.threads)) {
         comments.forEach((comment, index) => {
+          const target = `thread:${review}:${key}:${index}`;
           docs.push({
-            id: `thread:${source.engine}:${key}:${index}`,
+            id: target,
             scope: "conversations",
             title: comment.author === "user" ? "You" : agent,
             text: comment.text,
-            detail: "Review conversation",
+            detail: `${kind} conversation`,
             tab: "ai",
-            target: `thread:${source.engine}:${key}:${index}`,
+            target,
           });
         });
       }

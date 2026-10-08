@@ -54,9 +54,9 @@
   z-index: 1;
   padding-top: calc(var(--tk-space-2) + var(--overlap));
   padding-bottom: var(--tk-space-2);
-  background: color-mix(in oklab, var(--tk-bg) 85%, transparent);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  background: var(--bg-frosted);
+  -webkit-backdrop-filter: var(--frosted-blur);
+  backdrop-filter: var(--frosted-blur);
   border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
 }
 

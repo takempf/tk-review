@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   Button,
+  cx,
   Icon,
   type IconName,
   Popover,
@@ -26,6 +27,7 @@ import {
   type ReviewEngine,
   type ReviewFinding,
   type ReviewVerdict,
+  type SubmittedReview,
 } from "../../ipc/git";
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
@@ -53,11 +55,13 @@ import {
   type AgentRunKind,
   CONCLUSION_POST_KEY,
   findingThreadKey,
+  type ListedReview,
   postTargetKey,
   REVIEW_THREAD_KEY,
   type ResolvedFinding,
   resolutionThreadKey,
-  reviewsNewestFirst,
+  reviewedHead,
+  reviewHistory,
   reviewsWorkingTree,
   type StoredExplanation,
   type StoredReview,
@@ -501,6 +505,7 @@ function NewPrComment({
           <>
             <p className={css.commentDestination}>{draft.location.note}</p>
             <CommentEditor
+              variant="scenery"
               key={`${active}:${tick}`}
               value={draft.body}
               onChange={edit}
@@ -621,75 +626,61 @@ function Provenance({
 }
 
 /**
- * Which review an item came from: the panel shows every engine's review at
- * once, so each finding, verdict and conclusion carries its engine and model.
- * The effort and time, which the review's own heading gives in full, are in
- * the tooltip.
+ * Whether a folding block is open: `defaultOpen` at first, then the reader's
+ * call. A search landing inside it opens it, as does a new `openTick`, without
+ * remounting what it holds.
  */
-function SourceTag({ source }: { source: StoredReview }) {
-  const detail = [
-    ENGINE_LABELS[source.engine] ?? source.engine,
-    useModelLabel(source.engine, source.model),
-    source.effort ? `${source.effort} effort` : null,
-    absoluteTime(source.createdAt),
-  ].filter(Boolean);
-  return (
-    <Model
-      engine={source.engine}
-      model={source.model}
-      title={detail.join(" · ")}
-      className={css.sourceTag}
-    />
-  );
-}
-
-/**
- * A titled block of the AI review column. Collapsible, because the column
- * stacks several long things and the one you want is often the last: folding
- * the explanation away is how you reach the findings under it. Folded content
- * stays mounted, so a half-written question survives.
- */
-function Section({
-  title,
-  count,
-  tag,
-  reveal = false,
-  defaultOpen = true,
+function useFoldOpen(
+  ref: RefObject<HTMLElement | null>,
+  defaultOpen: boolean,
   openTick = 0,
-  searchId,
-  children,
-}: {
-  title: string;
-  count?: number;
-  /** Set after the title, like the count. */
-  tag?: ReactNode;
-  /** Part of a run's result, so it takes part in `useRevealInOrder`. */
-  reveal?: boolean;
-  defaultOpen?: boolean;
-  /** A new request opens a folded section without remounting its contents. */
-  openTick?: number;
-  searchId?: string;
-  children: ReactNode;
-}) {
-  const section = useRef<HTMLElement>(null);
+): [boolean, (open: boolean) => void] {
   const { reveal: searchReveal } = useSearch();
   const [open, setOpen] = useState(defaultOpen);
   useLayoutEffect(() => {
     if (!searchReveal?.document.target) return;
     const target = searchReveal.document.target;
     if (
-      section.current?.dataset.searchId === target ||
-      [...(section.current?.querySelectorAll<HTMLElement>("[data-search-id]") ?? [])].some(
+      ref.current?.dataset.searchId === target ||
+      [...(ref.current?.querySelectorAll<HTMLElement>("[data-search-id]") ?? [])].some(
         (node) => node.dataset.searchId === target,
       )
     )
       setOpen(true);
-  }, [searchReveal]);
+  }, [ref, searchReveal]);
   const [openedTick, setOpenedTick] = useState(openTick);
   if (openTick !== openedTick) {
     setOpenedTick(openTick);
     setOpen(true);
   }
+  return [open, setOpen];
+}
+
+/**
+ * A titled block of the explanation. Collapsible, because the column stacks
+ * several long things and the one you want is often the last: folding the
+ * walkthrough away is how you reach the file notes under it. Folded content
+ * stays mounted.
+ */
+function Section({
+  title,
+  count,
+  reveal = false,
+  openTick = 0,
+  searchId,
+  children,
+}: {
+  title: string;
+  count?: number;
+  /** Part of a run's result, so it takes part in `useRevealInOrder`. */
+  reveal?: boolean;
+  /** A new request opens a folded section without remounting its contents. */
+  openTick?: number;
+  searchId?: string;
+  children: ReactNode;
+}) {
+  const section = useRef<HTMLElement>(null);
+  const [open, setOpen] = useFoldOpen(section, true, openTick);
   return (
     <section
       ref={section}
@@ -708,7 +699,6 @@ function Section({
         <Icon name={open ? "chevron-down" : "chevron-right"} />
         {title}
         {count != null ? <span className={css.sectionCount}>{count}</span> : null}
-        {tag}
       </button>
       <div className={css.sectionBody} hidden={!open} data-reveal={reveal || undefined}>
         {children}
@@ -807,29 +797,36 @@ function Explanation({ stored }: { stored: StoredExplanation }) {
  * Until there is something to show, the whole thread is one quiet "Ask" in the
  * item's action row, next to whatever `actions` the item brings: an input
  * under every finding is a column of empty boxes. Clicking it opens the input
- * focused, above the row; leaving it empty folds it away again.
+ * focused, above the row; leaving it empty folds it away again. A replaced
+ * review's threads are kept to read, without the input.
  */
 function Thread({
+  listed,
   threadKey,
-  comments,
-  engine,
   placeholder,
   askLabel,
   actions,
 }: {
+  listed: ListedReview;
   threadKey: string;
-  comments: ReviewComment[];
-  engine: ReviewEngine;
   placeholder: string;
   askLabel: string;
   actions?: ReactNode;
 }) {
+  const { source, live, key: review } = listed;
+  const { engine } = source;
   const [draft, setDraft] = useState("");
   const [asking, setAsking] = useState(false);
   const replyingTo = useTab((state) => state.replyingTo);
   const addComment = useTab((state) => state.addComment);
+  // The live review's threads change as they're answered, so they're read
+  // from the store rather than from the review as the panel last drew it.
+  const liveComments = useTab((state) =>
+    live ? state.reviews[engine]?.threads[threadKey] : undefined,
+  );
+  const comments = (live ? liveComments : source.threads[threadKey]) ?? EMPTY_THREAD;
 
-  const pending = replyingTo === sourcedKey(engine, threadKey);
+  const pending = live && replyingTo === sourcedKey(engine, threadKey);
   const busy = replyingTo !== null;
   const canSend = !busy && draft.trim() !== "";
   const agent = ENGINE_LABELS[engine] ?? engine;
@@ -851,7 +848,7 @@ function Thread({
           {comments.map((comment, index) => (
             <div
               key={`${comment.at}:${comment.author}`}
-              data-search-id={`thread:${engine}:${threadKey}:${index}`}
+              data-search-id={`thread:${review}:${threadKey}:${index}`}
               tabIndex={-1}
               className={comment.author === "user" ? css.commentUser : css.commentAgent}
             >
@@ -874,45 +871,50 @@ function Thread({
           ) : null}
         </div>
       ) : null}
-      <div className={css.itemActions}>
-        <Details
-          open={asking}
-          onOpenChange={setAsking}
-          disabled={busy}
-          trigger={
-            <>
-              <Icon name="comment" /> {askLabel}
-            </>
-          }
-        >
-          <form
-            className={css.commentForm}
-            onSubmit={(event) => {
-              event.preventDefault();
-              send();
-            }}
+      {live ? (
+        <div className={css.itemActions}>
+          <Details
+            open={asking}
+            onOpenChange={setAsking}
+            disabled={busy}
+            trigger={
+              <>
+                <Icon name="comment" /> {askLabel}
+              </>
+            }
           >
-            <CommentEditor
-              value={draft}
-              onChange={setDraft}
-              onSubmit={send}
-              canSubmit={canSend}
-              ariaLabel="AI reply"
-              placeholder={placeholder}
-              disabled={busy}
-            />
-            <div className={css.composerActions}>
-              <Button variant="primary" size="sm" type="submit" disabled={!canSend}>
-                <Icon name="send" /> Send
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setAsking(false)} disabled={busy}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        </Details>
-        {actions}
-      </div>
+            <form
+              className={css.commentForm}
+              onSubmit={(event) => {
+                event.preventDefault();
+                send();
+              }}
+            >
+              <CommentEditor
+                variant="scenery"
+                value={draft}
+                onChange={setDraft}
+                onSubmit={send}
+                canSubmit={canSend}
+                ariaLabel="AI reply"
+                placeholder={placeholder}
+                disabled={busy}
+              />
+              <div className={css.composerActions}>
+                <Button variant="primary" size="sm" type="submit" disabled={!canSend}>
+                  <Icon name="send" /> Send
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setAsking(false)} disabled={busy}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </Details>
+          {actions}
+        </div>
+      ) : actions ? (
+        <div className={css.itemActions}>{actions}</div>
+      ) : null}
     </>
   );
 }
@@ -999,6 +1001,15 @@ function PostedThread({
   );
 }
 
+/** Where an item was posted on GitHub. */
+function PostedLink({ url }: { url: string }) {
+  return (
+    <a className={css.postedLink} href={url} target="_blank" rel="noreferrer">
+      Posted to PR <Icon name="external" />
+    </a>
+  );
+}
+
 /** A deliberate, editable hand-off from an AI finding to a GitHub comment. */
 function PrCommentComposer({
   engine,
@@ -1071,11 +1082,7 @@ function PrCommentComposer({
 
   return (
     <div className={css.prComposer}>
-      {postedUrl ? (
-        <a className={css.postedLink} href={postedUrl} target="_blank" rel="noreferrer">
-          Posted to PR <Icon name="external" />
-        </a>
-      ) : null}
+      {postedUrl ? <PostedLink url={postedUrl} /> : null}
       {postedUrl && thread ? (
         <PostedThread pr={pr} thread={thread} postedUrl={postedUrl} settled={settled} />
       ) : null}
@@ -1090,6 +1097,7 @@ function PrCommentComposer({
         }
       >
         <CommentEditor
+          variant="scenery"
           value={body}
           onChange={setBody}
           onSubmit={post}
@@ -1097,7 +1105,6 @@ function PrCommentComposer({
           disabled={busy}
           ariaLabel="Pull request comment"
         />
-        <p className={css.composerNote}>{location.note}</p>
         {confirming ? (
           <p className={css.composerWarning}>
             This PR is {pr.isDraft ? "a draft" : pr.state}. Post anyway?
@@ -1249,8 +1256,35 @@ function usePriorPlacement(
 const SETTLED = new Set(["addressed", "obsolete"]);
 
 /**
+ * A finding's title, after its severity or verdict as an icon in its tone
+ * (the word is the icon's tooltip): how much it matters, or whether it was
+ * dealt with, before a word is read. The copy button sits at the far end.
+ */
+function FindingTitle({
+  icon,
+  label,
+  title,
+  copy,
+}: {
+  icon: IconName;
+  label: string;
+  title: string;
+  copy: ReactNode;
+}) {
+  return (
+    <div className={`${css.itemHead} ${css.titleHead}`}>
+      <div className={css.findingHeading}>
+        <FindingMark icon={icon} label={label} />
+        <p className={css.findingTitle}>{title}</p>
+      </div>
+      {copy}
+    </div>
+  );
+}
+
+/**
  * One prior finding with the re-review's verdict on it. The card mirrors a
- * finding's, but the band is the verdict rather than the severity — what the
+ * finding's, but the mark is the verdict rather than the severity — what the
  * reader needs here is "is this done?", not how bad it was the first time.
  * Its comment thread carries over from the finding it judges, under a key of
  * its own so a look-alike new finding cannot inherit it. One still open can
@@ -1258,21 +1292,20 @@ const SETTLED = new Set(["addressed", "obsolete"]);
  */
 function Resolution({
   resolution,
-  source,
+  listed,
   patch,
   pr,
 }: {
   resolution: ResolvedFinding;
-  source: StoredReview;
+  listed: ListedReview;
   patch: string | null;
   pr: PrContext | null;
 }) {
+  const { source, live, key: review } = listed;
   const { finding, status, note } = resolution;
   const threadKey = resolutionThreadKey(finding);
-  const comments = useTab(
-    (state) => state.reviews[source.engine]?.threads[threadKey] ?? EMPTY_THREAD,
-  );
-  const postable = pr != null && (!SETTLED.has(status.toLowerCase()) || finding.postedUrl != null);
+  const postable =
+    live && pr != null && (!SETTLED.has(status.toLowerCase()) || finding.postedUrl != null);
   // The review it came from is the last of the earlier ones.
   const readAt = source.earlier?.at(-1)?.head ?? null;
   const placement = usePriorPlacement(finding, readAt, postable ? pr : null);
@@ -1281,132 +1314,126 @@ function Resolution({
     <li
       className={`${css.finding} ${resolutionClass(status)}`}
       data-reveal
-      data-search-id={`review:${sourcedKey(source.engine, threadKey)}`}
+      data-search-id={`review:${review}:${threadKey}`}
       tabIndex={-1}
     >
-      <FindingMark icon={resolutionIcon(status)} label={status} />
-      <div className={css.findingBody}>
-        <div className={css.findingTop}>
-          <FindingLocation path={finding.path} lines={findingLines(finding)} />
-          <SourceTag source={source} />
-        </div>
-        <div className={`${css.itemHead} ${css.titleHead}`}>
-          <p className={css.findingTitle}>{finding.title}</p>
-          <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
-        </div>
-        {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
-        <Thread
-          threadKey={threadKey}
-          comments={comments}
-          engine={source.engine}
-          placeholder="Ask about this verdict…"
-          askLabel="Ask about this"
-          actions={
-            pr && postable ? (
-              <PrCommentComposer
-                engine={source.engine}
-                finding={finding}
-                patch={patch}
-                pr={pr}
-                postedUrl={finding.postedUrl}
-                prior={placement ?? "pending"}
-                settled={SETTLED.has(status.toLowerCase())}
-              />
-            ) : null
-          }
-        />
+      <div className={css.findingTop}>
+        <FindingLocation path={finding.path} lines={findingLines(finding)} />
+        <span className={css.findingNote}>
+          Earlier finding · <span className={css.findingStatus}>{status}</span>
+        </span>
       </div>
+      <FindingTitle
+        icon={resolutionIcon(status)}
+        label={status}
+        title={finding.title}
+        copy={
+          <CopyButton text={findingMarkdown(finding, status, note ?? "")} label="Copy verdict" />
+        }
+      />
+      {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
+      <Thread
+        listed={listed}
+        threadKey={threadKey}
+        placeholder="Ask about this verdict…"
+        askLabel="Ask about this"
+        actions={
+          pr && postable ? (
+            <PrCommentComposer
+              engine={source.engine}
+              finding={finding}
+              patch={patch}
+              pr={pr}
+              postedUrl={finding.postedUrl}
+              prior={placement ?? "pending"}
+              settled={SETTLED.has(status.toLowerCase())}
+            />
+          ) : !live && finding.postedUrl ? (
+            <PostedLink url={finding.postedUrl} />
+          ) : null
+        }
+      />
     </li>
   );
 }
 
 function Finding({
   finding,
-  source,
+  listed,
   patch,
   pr,
 }: {
   finding: ReviewFinding;
   /** The review that raised it. */
-  source: StoredReview;
+  listed: ListedReview;
   patch: string | null;
   pr: PrContext | null;
 }) {
+  const { source, live, key: review } = listed;
   const threadKey = findingThreadKey(finding);
-  const comments = useTab(
-    (state) => state.reviews[source.engine]?.threads[threadKey] ?? EMPTY_THREAD,
-  );
 
   return (
     <li
       className={`${css.finding} ${severityClass(finding.severity)}`}
       data-reveal
-      data-search-id={`review:${sourcedKey(source.engine, threadKey)}`}
+      data-search-id={`review:${review}:${threadKey}`}
       tabIndex={-1}
     >
-      <FindingMark icon={severityIcon(finding.severity)} label={finding.severity} />
-      <div className={css.findingBody}>
-        <div className={css.findingTop}>
-          <FindingLocation path={finding.path} lines={findingLines(finding)} />
-          <SourceTag source={source} />
-        </div>
-        <div className={`${css.itemHead} ${css.titleHead}`}>
-          <p className={css.findingTitle}>{finding.title}</p>
+      <FindingLocation path={finding.path} lines={findingLines(finding)} />
+      <FindingTitle
+        icon={severityIcon(finding.severity)}
+        label={finding.severity}
+        title={finding.title}
+        copy={
           <CopyButton
             text={findingMarkdown(finding, finding.severity, finding.body)}
             label="Copy finding"
           />
-        </div>
-        <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
-        <Thread
-          threadKey={threadKey}
-          comments={comments}
-          engine={source.engine}
-          placeholder="Ask about this finding…"
-          askLabel="Ask about this"
-          actions={
-            pr ? (
-              <PrCommentComposer
-                engine={source.engine}
-                finding={finding}
-                patch={patch}
-                pr={pr}
-                postedUrl={finding.postedUrl}
-              />
-            ) : null
-          }
-        />
-      </div>
+        }
+      />
+      <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
+      <Thread
+        listed={listed}
+        threadKey={threadKey}
+        placeholder="Ask about this finding…"
+        askLabel="Ask about this"
+        actions={
+          live && pr ? (
+            <PrCommentComposer
+              engine={source.engine}
+              finding={finding}
+              patch={patch}
+              pr={pr}
+              postedUrl={finding.postedUrl}
+            />
+          ) : !live && finding.postedUrl ? (
+            <PostedLink url={finding.postedUrl} />
+          ) : null
+        }
+      />
     </li>
   );
 }
 
-/** One engine's review as a whole: who wrote it and when, what it said, and its discussion. */
+/** A review's summary, with the discussion of the review as a whole. */
 function ReviewSummary({
-  source,
+  listed,
   patch,
   pr,
 }: {
-  source: StoredReview;
+  listed: ListedReview;
   patch: string | null;
   pr: PrContext | null;
 }) {
+  const { source, live, key: review } = listed;
+  const { postedUrl } = source.review;
   return (
     <li
       className={css.summary}
       data-reveal
-      data-search-id={`review:${sourcedKey(source.engine, REVIEW_THREAD_KEY)}`}
+      data-search-id={`review:${review}:${REVIEW_THREAD_KEY}`}
       tabIndex={-1}
     >
-      <div className={css.itemHead}>
-        <Provenance
-          engine={source.engine}
-          model={source.model}
-          effort={source.effort}
-          createdAt={source.createdAt}
-        />
-        <CopyButton text={source.review.summary} label="Copy summary" />
-      </div>
       {source.review.cutShort ? (
         <p className={css.cutShort}>
           <Icon name="warning" />
@@ -1418,21 +1445,22 @@ function ReviewSummary({
       ) : null}
       <GitHubMarkdown markdown={source.review.summary} className={css.agentMarkdown} />
       <Thread
+        listed={listed}
         threadKey={REVIEW_THREAD_KEY}
-        comments={source.threads[REVIEW_THREAD_KEY] ?? []}
-        engine={source.engine}
         placeholder="Discuss the review as a whole…"
         askLabel="Discuss"
         actions={
-          pr ? (
+          live && pr ? (
             <PrCommentComposer
               engine={source.engine}
               finding={null}
               patch={patch}
               pr={pr}
               reviewBody={source.review.summary}
-              postedUrl={source.review.postedUrl}
+              postedUrl={postedUrl}
             />
+          ) : !live && postedUrl ? (
+            <PostedLink url={postedUrl} />
           ) : null
         }
       />
@@ -1441,9 +1469,7 @@ function ReviewSummary({
 }
 
 /**
- * Diff order, so the panel reads top-to-bottom alongside the surface. Every
- * engine's items interleave; the sort is stable, so where two land on the same
- * line the newer review's comes first.
+ * Diff order, so a review reads top-to-bottom alongside the surface.
  */
 function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] {
   return [...items].sort((a, b) => {
@@ -1458,8 +1484,8 @@ function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] 
  * its draft of the review body. Both are the reader's to change before
  * submitting, and the agent's pick keeps a "suggested" mark so an override
  * stays visible. Without a PR there is nowhere to submit, but the verdict still
- * says where the change stands. With several engines' reviews on record, the
- * most recent one's conclusion for each commit is the one offered.
+ * says where the change stands. Only a live review has one to submit; a
+ * replaced one keeps the link to what was submitted from it.
  *
  * GitHub won't take an approval or a request for changes on your own pull
  * request, so on one of those the review can only go in as a comment, and the
@@ -1496,12 +1522,13 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
   }
 
   return (
-    <Section
-      title="Conclusion"
-      searchId={`conclusion:${source.engine}`}
-      tag={<SourceTag source={source} />}
-      reveal
+    <li
+      className={css.conclusion}
+      data-reveal
+      data-search-id={`conclusion:${source.engine}`}
+      tabIndex={-1}
     >
+      <p className={css.subheading}>Conclusion</p>
       {own ? null : (
         <RadioGroup
           className={css.verdicts}
@@ -1558,16 +1585,21 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
             )}
           </Button>
         ) : null}
-        {submitted ? (
-          <a className={css.postedLink} href={submitted.url} target="_blank" rel="noreferrer">
-            {VERDICTS.find((item) => item.value === submitted.verdict)?.done ?? "Submitted"} on
-            GitHub <Icon name="external" />
-          </a>
-        ) : null}
+        {submitted ? <SubmittedLink submitted={submitted} /> : null}
         {/* Without a PR there is nowhere to submit, so this is the way out. */}
         <CopyButton className={css.actionsEnd} text={body} label="Copy conclusion" />
       </div>
-    </Section>
+    </li>
+  );
+}
+
+/** The review submitted to GitHub from a conclusion. */
+function SubmittedLink({ submitted }: { submitted: SubmittedReview }) {
+  return (
+    <a className={css.postedLink} href={submitted.url} target="_blank" rel="noreferrer">
+      {VERDICTS.find((item) => item.value === submitted.verdict)?.done ?? "Submitted"} on GitHub{" "}
+      <Icon name="external" />
+    </a>
   );
 }
 
@@ -1748,12 +1780,56 @@ function RunLoader({
 }
 
 /**
+ * The commit the next review reads, and so the one it's listed under: what
+ * the compare ref points at, or under uncommitted work, the commit beneath it.
+ */
+function NextReviewCommit() {
+  const head = useTab(reviewedHead);
+  const subject = useTab(
+    (state) => state.commits?.commits.find((commit) => commit.sha === head)?.subject,
+  );
+  const worktree = useTab(reviewsWorkingTree);
+  if (!head) return null;
+  const short = head.slice(0, 7);
+  return (
+    <span
+      className={css.nextCommit}
+      title={`The next review reads ${short}${subject ? ` (${subject})` : ""}${
+        worktree ? " with the uncommitted changes on it" : ""
+      }, and is listed under it.`}
+    >
+      on <Icon name="branch" />
+      <span className={css.nextCommitHash}>{short}</span>
+      {worktree ? " + uncommitted" : null}
+    </span>
+  );
+}
+
+/**
+ * Whether the run controls sit in the section of the commit the next review
+ * reads, rather than above the list and in the tab bar: they do until any
+ * engine has reviewed that commit.
+ */
+function controlsInHead(state: TabState): boolean {
+  const head = reviewedHead(state);
+  return head != null && !reviewHistory(state.reviews).some(({ source }) => source.head === head);
+}
+
+/**
  * The agent, model and effort the next review or explanation runs with. Both
  * tabs share them, and a run in flight keeps whatever it started with, so they
- * can change at any time. `rules` adds the repository's review rules, which
- * reviews follow and explanations don't.
+ * can change at any time. `review` adds what only reviews have: the commit
+ * the next one is listed under, and the repository's review rules. In that
+ * commit's own section (`inCommit`), its bar names the commit, and the button
+ * that runs the review joins the row.
  */
-function AgentSettings({ rules = false }: { rules?: boolean }) {
+function AgentSettings({
+  review = false,
+  inCommit = false,
+}: {
+  review?: boolean;
+  inCommit?: boolean;
+}) {
   const root = useTab((state) => state.repo.root);
   const reviewEngine = useAppStore((state) => state.reviewEngine);
   const reviewModel = useAppStore((state) => state.reviewModel);
@@ -1765,7 +1841,7 @@ function AgentSettings({ rules = false }: { rules?: boolean }) {
   const modelName = useModelLabel(reviewEngine, reviewModel);
 
   return (
-    <div className={css.controls}>
+    <div className={inCommit ? css.commitControls : css.controls}>
       <Popover.Root>
         <Popover.Trigger
           render={<Button variant="ghost" size="sm" className={css.settingsTrigger} />}
@@ -1783,6 +1859,7 @@ function AgentSettings({ rules = false }: { rules?: boolean }) {
           </span>
           <Icon name="chevron-down" />
         </Popover.Trigger>
+        {review && !inCommit ? <NextReviewCommit /> : null}
         <Popover.Popup align="start" className={css.settingsPopup}>
           <Popover.Title className={css.settingsTitle}>Agent</Popover.Title>
           <div className={css.settingsField}>
@@ -1839,7 +1916,14 @@ function AgentSettings({ rules = false }: { rules?: boolean }) {
           </p>
         </Popover.Popup>
       </Popover.Root>
-      {rules ? <RepoRulesButton root={root} /> : null}
+      {inCommit ? (
+        <span className={css.controlsEnd}>
+          <RepoRulesButton root={root} />
+          <ReviewButton />
+        </span>
+      ) : review ? (
+        <RepoRulesButton root={root} />
+      ) : null}
     </div>
   );
 }
@@ -1912,109 +1996,172 @@ function ExplainButton() {
   );
 }
 
-/** Reviews of one commit, with their findings and conclusion kept together. */
-function CommitReviews({
-  head,
-  sources,
+const plural = (count: number, noun: string) =>
+  `${count === 0 ? "No" : count} ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * One review, folding away under a heading that says who wrote it and when:
+ * its summary, its findings, its verdicts on the findings of the review before
+ * it, and the conclusion. A replaced review is kept to read, and starts
+ * folded; folded content stays mounted, so a half-written question survives.
+ */
+function ReviewCard({
+  listed,
   patch,
   pr,
 }: {
-  head: string | null;
-  sources: StoredReview[];
+  listed: ListedReview;
   patch: string | null;
   pr: PrContext | null;
 }) {
-  const commit = useTab((state) => state.commits?.commits.find((item) => item.sha === head));
-  const worktree = useTab(reviewsWorkingTree);
-  const latest = sources[0];
+  const { source, live } = listed;
+  const section = useRef<HTMLElement>(null);
+  const [open, setOpen] = useFoldOpen(section, live);
   const findings = useMemo(
-    () =>
-      inDiffOrder(
-        sources.flatMap((source) => source.review.findings.map((finding) => ({ finding, source }))),
-        (item) => item.finding,
-      ),
-    [sources],
+    () => inDiffOrder(source.review.findings, (finding) => finding),
+    [source],
   );
   const resolutions = useMemo(
-    () =>
-      inDiffOrder(
-        sources.flatMap((source) =>
-          (source.resolutions ?? []).map((resolution) => ({ resolution, source })),
-        ),
-        (item) => item.resolution.finding,
-      ),
-    [sources],
+    () => inDiffOrder(source.resolutions ?? [], (resolution) => resolution.finding),
+    [source],
   );
-  // "New" only reads right when every review in this group is a follow-up.
-  const followUps = sources.length > 0 && sources.every((source) => source.resolutions?.length);
-  if (!latest) return null;
+  const reReview = source.resolutions != null;
+  const { submitted } = source.review;
+  // When first, as it's what tells reviews apart; the line is cut from its end.
+  const meta = [
+    shortTime(source.createdAt),
+    reReview ? "re-review" : null,
+    source.effort ? `${source.effort} effort` : null,
+  ].filter(Boolean);
+
+  return (
+    <section ref={section} className={css.review} data-reveal-frame data-live={live || undefined}>
+      <div className={css.reviewHeading} data-reveal>
+        <button
+          type="button"
+          className={css.reviewToggle}
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          title={absoluteTime(source.createdAt)}
+        >
+          <Icon name={open ? "chevron-down" : "chevron-right"} />
+          <Model engine={source.engine} model={source.model} className={css.reviewModel} />
+          <span className={css.reviewMeta}>{meta.join(" · ")}</span>
+          <span className={css.reviewCount}>
+            {reReview
+              ? `${findings.length} new · ${resolutions.length} earlier`
+              : plural(findings.length, "finding")}
+          </span>
+        </button>
+        <CopyButton text={source.review.summary} label="Copy summary" />
+      </div>
+      <div className={css.reviewBody} hidden={!open}>
+        <ul className={css.findings}>
+          <ReviewSummary listed={listed} patch={patch} pr={pr} />
+          {findings.length === 0 ? (
+            <li className={css.status} data-reveal>
+              {reReview
+                ? "No new findings beyond the previous review."
+                : "No findings — the diff came back clean."}
+            </li>
+          ) : (
+            findings.map((finding) => (
+              <Finding
+                key={findingThreadKey(finding)}
+                finding={finding}
+                listed={listed}
+                patch={patch}
+                pr={pr}
+              />
+            ))
+          )}
+          {resolutions.map((resolution) => (
+            <Resolution
+              key={resolutionThreadKey(resolution.finding)}
+              resolution={resolution}
+              listed={listed}
+              patch={patch}
+              pr={pr}
+            />
+          ))}
+          {live ? (
+            <Conclusion source={source} pr={pr} />
+          ) : submitted ? (
+            <li data-reveal>
+              <SubmittedLink submitted={submitted} />
+            </li>
+          ) : null}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The reviews of one commit, the most recent first, each folding on its own,
+ * under a bar that folds them all. The bar sticks to the top while they scroll
+ * under it, so a finding read halfway down still says which commit it's about.
+ * `children` go above the reviews: the commit the next review reads holds the
+ * run there.
+ */
+function CommitReviews({
+  head,
+  reviews,
+  patch,
+  pr,
+  children,
+}: {
+  head: string | null;
+  reviews: ListedReview[];
+  patch: string | null;
+  pr: PrContext | null;
+  children?: ReactNode;
+}) {
+  const commit = useTab((state) => state.commits?.commits.find((item) => item.sha === head));
+  const worktree = useTab(reviewsWorkingTree);
+  const section = useRef<HTMLElement>(null);
+  const [open, setOpen] = useFoldOpen(section, true);
 
   return (
     <section
+      ref={section}
       className={css.commitReviews}
       aria-label={head ? `Reviews of commit ${head}` : "Reviews without a recorded commit"}
       data-review-commit={head ?? "unknown"}
     >
-      <header className={css.commitHeading} data-reveal>
-        <div className={css.commitByline}>
-          <Icon name="branch" />
-          <h3 className={css.commitHash} title={head ?? undefined}>
-            {head ? head.slice(0, 7) : "Commit not recorded"}
-          </h3>
-          {head ? <CopyButton text={head} label="Copy reviewed commit hash" /> : null}
-        </div>
-        {commit ? <p className={css.commitSubject}>{commit.subject}</p> : null}
-        {worktree ? <p className={css.commitNote}>Includes uncommitted changes</p> : null}
+      <header className={css.commitBar} data-reveal>
+        <h3 className={css.commitTitle}>
+          <button
+            type="button"
+            className={css.commitToggle}
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+            title={head ? [head, commit?.subject].filter(Boolean).join("\n") : undefined}
+          >
+            <Icon name={open ? "chevron-down" : "chevron-right"} />
+            <span className={css.commitHash}>
+              {head ? head.slice(0, 7) : "Commit not recorded"}
+            </span>
+            {commit ? <span className={css.commitSubject}>{commit.subject}</span> : null}
+            {worktree ? <span className={css.commitNote}>+ uncommitted</span> : null}
+          </button>
+        </h3>
+        <span className={css.commitCount}>{plural(reviews.length, "review")}</span>
+        {head ? <CopyButton text={head} label="Copy reviewed commit hash" /> : null}
       </header>
-      <Section
-        title={sources.length > 1 ? "Reviews" : "Review"}
-        count={sources.length > 1 ? sources.length : undefined}
-        reveal
-      >
-        <ul className={css.findings}>
-          {sources.map((source) => (
-            <ReviewSummary key={source.engine} source={source} patch={patch} pr={pr} />
-          ))}
-        </ul>
-      </Section>
-      {resolutions.length > 0 ? (
-        <Section title="Previous findings" count={resolutions.length} reveal>
-          <ul className={css.findings}>
-            {resolutions.map(({ resolution, source }) => (
-              <Resolution
-                key={sourcedKey(source.engine, resolutionThreadKey(resolution.finding))}
-                resolution={resolution}
-                source={source}
-                patch={patch}
-                pr={pr}
-              />
-            ))}
-          </ul>
-        </Section>
-      ) : null}
-      <Section title={followUps ? "New findings" : "Findings"} count={findings.length} reveal>
-        {findings.length === 0 ? (
-          <p className={css.status}>
-            {followUps
-              ? "No new findings beyond the previous review."
-              : "No findings — the diff came back clean."}
-          </p>
-        ) : (
-          <ul className={css.findings}>
-            {findings.map(({ finding, source }) => (
-              <Finding
-                key={sourcedKey(source.engine, findingThreadKey(finding))}
-                finding={finding}
-                source={source}
-                patch={patch}
-                pr={pr}
-              />
-            ))}
-          </ul>
-        )}
-      </Section>
-      {/* A fresh review resets the draft and its preselected verdict. */}
-      <Conclusion key={`${latest.engine}:${latest.createdAt}`} source={latest} pr={pr} />
+      <div className={css.commitBody} hidden={!open}>
+        {children}
+        {reviews.map((listed) => (
+          // Live and replaced apart, so a review a re-review replaced starts
+          // folded rather than keeping the open state it had while live.
+          <ReviewCard
+            key={`${listed.live ? "live" : "past"}:${listed.key}:${listed.source.createdAt}`}
+            listed={listed}
+            patch={patch}
+            pr={pr}
+          />
+        ))}
+      </div>
     </section>
   );
 }
@@ -2041,61 +2188,78 @@ function ReviewTab() {
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
+  const head = useTab(reviewedHead);
+  const inHead = useTab(controlsInHead);
 
   const groups = useMemo(() => {
-    const byCommit = new Map<string | null, StoredReview[]>();
-    // Keep groups and the reviews within them newest first.
-    for (const source of reviewsNewestFirst(shown)) {
-      const head = source.head ?? null;
-      const group = byCommit.get(head) ?? [];
-      group.push(source);
-      byCommit.set(head, group);
+    const byCommit = new Map<string | null, ListedReview[]>();
+    // The commit the next review reads comes first, reviewed yet or not, as
+    // it's where the run lands. Then the rest, and the reviews within each,
+    // newest first.
+    if (head) byCommit.set(head, []);
+    for (const listed of reviewHistory(shown)) {
+      const commit = listed.source.head ?? null;
+      const group = byCommit.get(commit) ?? [];
+      group.push(listed);
+      byCommit.set(commit, group);
     }
     return [...byCommit];
-  }, [shown]);
+  }, [head, shown]);
+  const reviewCount = groups.reduce((count, [, reviews]) => count + reviews.length, 0);
+
+  const run = (
+    <>
+      {reviewError ? (
+        <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
+      ) : null}
+      {running || handingOver ? (
+        <RunLoader
+          kind="review"
+          running={running}
+          handingOver={handingOver}
+          runId={runId}
+          caption={label}
+          onLeft={shapesLeft}
+        />
+      ) : null}
+      <Fold
+        open={reviewCount === 0 && !running && !handingOver && !reviewError}
+        className={css.notice}
+      >
+        <p className={css.status}>
+          Nothing runs until you press Review. Every engine's findings land here, kept per
+          comparison for when you come back.
+        </p>
+      </Fold>
+    </>
+  );
 
   return (
     <>
-      <AgentSettings rules />
+      {inHead ? null : <AgentSettings review />}
       {/* While a finished run hands over, the review it replaces fades out. */}
       <ScrollArea
         label="AI reviews"
         viewportRef={bodyRef}
-        viewportClassName={handingOver ? `${css.body} ${css.replacing}` : css.body}
+        viewportClassName={cx(css.body, css.reviewScroll, handingOver && css.replacing)}
       >
-        {reviewError ? (
-          <ErrorNotice error={reviewError} onDismiss={dismissReviewError} className={css.error} />
-        ) : null}
-
-        {running || handingOver ? (
-          <RunLoader
-            kind="review"
-            running={running}
-            handingOver={handingOver}
-            runId={runId}
-            caption={label}
-            onLeft={shapesLeft}
-          />
-        ) : null}
-
-        {groups.map(([head, sources]) => (
+        {head ? null : run}
+        {groups.map(([commit, reviews]) => (
           <CommitReviews
-            key={head ?? "unknown"}
-            head={head}
-            sources={sources}
+            key={commit ?? "unknown"}
+            head={commit}
+            reviews={reviews}
             patch={patch}
             pr={pr}
-          />
+          >
+            {commit === head ? (
+              <>
+                {inHead ? <AgentSettings review inCommit /> : null}
+                {run}
+              </>
+            ) : null}
+          </CommitReviews>
         ))}
-        <Fold
-          open={groups.length === 0 && !running && !handingOver && !reviewError}
-          className={css.notice}
-        >
-          <p className={css.status}>
-            Nothing runs until you press Review. Every engine's findings land here, kept per
-            comparison for when you come back.
-          </p>
-        </Fold>
       </ScrollArea>
     </>
   );
@@ -2172,6 +2336,7 @@ export function ReviewPanel() {
   const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
   const reviewing = useTab((state) => state.reviewing || state.reReviewing);
   const explaining = useTab((state) => state.explaining);
+  const reviewInHead = useTab(controlsInHead);
   // Every open tab has a panel of its own, so a PR opens on its PR tab and
   // keeps whichever tab the reader picks after that.
   const [tab, setTab] = useState<PanelTab>("pr");
@@ -2233,7 +2398,9 @@ export function ReviewPanel() {
           {activeTab === "pr" ? (
             <PrRefreshButton />
           ) : activeTab === "ai" ? (
-            <ReviewButton />
+            reviewInHead ? null : (
+              <ReviewButton />
+            )
           ) : (
             <ExplainButton />
           )}

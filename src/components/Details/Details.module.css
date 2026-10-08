@@ -12,6 +12,12 @@
   background: transparent;
   border-color: transparent;
   border-radius: var(--radius);
+  transition: border-color var(--tk-duration-3) var(--tk-ease-fade);
+}
+
+/* Pointed at, the edge and the scenery come in faintly; open, fully. */
+.frame[data-lit] {
+  border-color: var(--border);
 }
 
 .frame[data-open] {
@@ -29,6 +35,13 @@
   white-space: nowrap;
 }
 
+/* The scenery and the frame's edge are the hover here; the ghost button's own
+   fill would cover the one and its edge would double the other. */
+.trigger:hover:not([data-disabled]) {
+  background: transparent;
+  border-color: transparent;
+}
+
 .content {
   display: flex;
   flex-direction: column;
@@ -39,7 +52,36 @@
   padding-top: var(--space-1);
 }
 
+/*
+ * Mounted under the pointer, it fills the closed frame. Opening sizes it
+ * inline to the expanded bounds (see Details.tsx), which then outranks the
+ * right and bottom insets, and it keeps that size while the frame shrinks
+ * around it and it fades.
+ */
 .scenery {
-  right: auto;
-  bottom: auto;
+  opacity: 0;
+  transition: opacity var(--tk-duration-3) var(--tk-ease-fade);
+}
+
+.frame[data-lit] .scenery {
+  opacity: 0.5;
+}
+
+.frame[data-open] .scenery {
+  opacity: 1;
+}
+
+/* It mounts as it is called for, so it fades in from nothing. */
+@starting-style {
+  .frame[data-lit] .scenery,
+  .frame[data-open] .scenery {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame,
+  .scenery {
+    transition: none;
+  }
 }

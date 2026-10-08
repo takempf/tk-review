@@ -25,6 +25,33 @@ export function Details({
   const wasOpen = useRef(open);
   const [mounted, setMounted] = useState(open);
   if (open && !mounted) setMounted(true);
+  // Pointed at, or focused from the keyboard, the closed trigger shows the
+  // scenery faintly: a preview of the panel it opens into.
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const lit = !disabled && (hovered || focused);
+  // The scenery stays mounted until it has faded out, after both have ended.
+  const [scenery, setScenery] = useState(open);
+  const sceneryWanted = open || lit;
+  if (sceneryWanted && !scenery) setScenery(true);
+
+  useLayoutEffect(() => {
+    if (sceneryWanted || !scenery) return;
+    // Asking for the animations settles the style first, so the fade that the
+    // attribute change just started is among them. With none, it goes now.
+    const fades = frame.current?.querySelector(".tk-scenery")?.getAnimations() ?? [];
+    let cancelled = false;
+    void Promise.all(fades.map((fade) => fade.finished)).then(
+      () => {
+        if (!cancelled) setScenery(false);
+      },
+      // Interrupted by a return of the pointer, which keeps it.
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [sceneryWanted, scenery]);
 
   useLayoutEffect(() => {
     const container = slot.current;
@@ -126,8 +153,13 @@ export function Details({
 
   return (
     <div ref={slot} className={css.slot}>
-      <Panel ref={frame} className={css.frame} data-open={open || undefined}>
-        {mounted ? <SceneryWindow className={css.scenery} /> : null}
+      <Panel
+        ref={frame}
+        className={css.frame}
+        data-open={open || undefined}
+        data-lit={lit || undefined}
+      >
+        {scenery ? <SceneryWindow className={css.scenery} /> : null}
         <div ref={inner} className={css.inner}>
           <Button
             ref={button}
@@ -137,6 +169,10 @@ export function Details({
             aria-controls={id}
             disabled={disabled}
             onClick={() => onOpenChange(!open)}
+            onPointerEnter={() => setHovered(true)}
+            onPointerLeave={() => setHovered(false)}
+            onFocus={(event) => setFocused(event.currentTarget.matches(":focus-visible"))}
+            onBlur={() => setFocused(false)}
             className={css.trigger}
           >
             {trigger}

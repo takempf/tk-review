@@ -2,6 +2,8 @@
  * not cards. One inset for all of them, so their text shares a left edge. */
 .panel {
   --panel-inset: var(--space-5);
+  /* The review tab's commit bars, and the review headings stuck under them. */
+  --commit-bar-height: 2.25rem;
 
   display: flex;
   flex-direction: column;
@@ -440,7 +442,6 @@ button.anchorLines:hover {
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  justify-content: space-between;
   min-width: 0;
   /* The trigger is a ghost button, whose own padding makes up the rest of the
      inset, so its icon lines up with the text below. The right edge matches
@@ -453,6 +454,25 @@ button.anchorLines:hover {
 .settingsTrigger {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* Reads on from the settings: "Claude Code · Opus · high effort on ⑂ d340c74".
+   It pushes the Rules button to the row's far end. */
+.nextCommit {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1);
+  align-items: center;
+  margin-right: auto;
+  font-size: var(--tk-text-sm);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.nextCommitHash {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 .settingsSummary {
@@ -509,51 +529,199 @@ button.anchorLines:hover {
   overflow-y: auto;
 }
 
-/* A commit owns a complete set of review sections. Its stronger heading
-   separates revisions while the finer rules separate sections within one. */
-.commitReviews + .commitReviews,
-.notice + .commitReviews {
-  border-top: 1px solid var(--border);
+/* Reviews scroll under the commit bar and their own heading, both stuck to
+   the top; whatever is brought into view lands below the two. */
+.reviewScroll {
+  scroll-padding-top: calc(2 * var(--commit-bar-height));
 }
 
-.commitHeading {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--panel-inset);
-  background: var(--bg-sunken);
-  border-bottom: 1px solid var(--border);
-}
-
-.commitByline {
+/* A commit heads the reviews that read it, on a dark bar the width of the
+   panel that folds them all. It sticks to the top while they scroll under it,
+   until the next commit's bar pushes it off. */
+.commitBar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  min-width: 0;
+  height: var(--commit-bar-height);
+  /* The copy button's own padding makes up the right inset, as in the tab bar. */
+  padding: 0 var(--space-3) 0 var(--panel-inset);
+  font-size: 12px;
+  color: var(--text-faint);
+  background: color-mix(in oklab, var(--bg-sunken) 60%, var(--bg));
+}
+
+.commitTitle {
+  display: flex;
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+}
+
+/* Chevron, hash and subject: the whole bar but its count and copy button. */
+.commitToggle {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+
+  & > svg {
+    flex: none;
+  }
+}
+
+.commitToggle:hover {
   color: var(--text-dim);
 }
 
 .commitHash {
-  margin: 0;
+  flex: none;
   font-family: var(--font-mono);
-  font-size: var(--tk-text-sm);
+  font-size: 12px;
   font-weight: 600;
   color: var(--text);
 }
 
 .commitSubject {
-  margin: 0;
-  font-size: var(--tk-text-sm);
-  overflow-wrap: anywhere;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.commitNote {
-  margin: 0;
-  font-size: var(--tk-text-xs);
-  color: var(--text-faint);
+.commitNote,
+.commitCount {
+  flex: none;
+  white-space: nowrap;
+}
+
+.commitBody[hidden] {
+  display: none;
+}
+
+/* The commit the next review reads holds the settings and the button that
+   runs it, under its bar and above where the review lands. */
+.commitControls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--panel-inset) - var(--space-3));
+}
+
+.controlsEnd {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  margin-left: auto;
 }
 
 .section {
   padding: var(--space-4) var(--panel-inset) var(--panel-inset);
+}
+
+/* One review: a heading that folds it, then its posts. Open, it ends with the
+   section's deeper inset; folded, the heading sits evenly in its row. */
+.review {
+  padding: var(--space-2) var(--panel-inset);
+}
+
+.review + .review,
+.notice + .review {
+  border-top: 1px solid var(--border);
+}
+
+/* Stuck under the commit bar while its review scrolls, so a finding halfway
+   down still says which review it's from. Frosted like the PR table's header,
+   and the width of the panel, so what passes under blurs edge to edge. */
+.reviewHeading {
+  position: sticky;
+  top: var(--commit-bar-height);
+  z-index: 1;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  margin-inline: calc(-1 * var(--panel-inset));
+  padding: var(--space-1) var(--panel-inset);
+  background: var(--bg-frosted);
+  -webkit-backdrop-filter: var(--frosted-blur);
+  backdrop-filter: var(--frosted-blur);
+}
+
+/* Who wrote it and when, then how much it found at the far end. */
+.reviewToggle {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  font-size: var(--tk-text-sm);
+  color: var(--text-faint);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.reviewToggle:hover {
+  color: var(--text-dim);
+}
+
+/* The agent is the last thing to give way: the time and effort, whose basis
+   is nothing, go first. */
+.reviewModel {
+  flex: 0 1 auto;
+  font-weight: 600;
+}
+
+.reviewMeta {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewCount {
+  flex: none;
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.reviewBody {
+  margin-top: var(--space-2);
+  padding-bottom: calc(var(--panel-inset) - var(--space-2));
+}
+
+.reviewBody[hidden] {
+  display: none;
+}
+
+/* The draft to submit, under a label: a form, unlike the posts above it. */
+.conclusion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 /* Loading and empty states: text in the column, without a section heading. */
@@ -785,72 +953,73 @@ button.anchorLines:hover {
   margin: var(--space-3) var(--panel-inset) 0;
 }
 
+/* A review's summary, findings and conclusion, ruled apart as the PR tab's
+   posts are: their paragraphs are already a line apart, so the rule is what
+   tells the next finding from the next paragraph. */
 .findings {
   display: flex;
   flex-direction: column;
+  gap: var(--space-5);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-/* Its mark, and the finding beside it. The mark hangs in the section's
-   inset, the way a list's markers do. */
-.finding {
-  display: flex;
-  gap: var(--space-2);
-  min-width: 0;
-  margin-left: calc(var(--space-2) - var(--panel-inset));
-}
-
-.findingBody {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-/* One engine's review as a whole, spaced like the section it used to be the
-   body of. Several stack like findings do. */
-.summary {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.summary + .summary {
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
+.findings > * + * {
+  padding-top: var(--space-5);
   border-top: 1px solid var(--border);
 }
 
-/* Each finding's mark says where it starts, so findings need only the space. */
-.finding + .finding {
-  margin-top: var(--space-5);
+.finding,
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-/* The severity, as an icon in its colour level with the finding's first
-   line (the word is its tooltip): how much the finding matters, before a word
-   is read. */
+.summary {
+  gap: var(--space-3);
+}
+
+/* The mark, then the title beside it. */
+.findingHeading {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+/* The severity or verdict, as an icon in its colour, centred on the title's
+   first line however far the title wraps. */
 .mark {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
   width: 16px;
-  height: 16px;
+  height: calc(var(--tk-text-md) * var(--tk-leading-reading));
   font-size: 14px;
   color: var(--tone);
 }
 
-/* The finding's file, and the review it came from at the far end. */
+/* An earlier finding's file, and what became of it at the far end. */
 .findingTop {
   display: flex;
   gap: var(--space-2);
   align-items: center;
   justify-content: space-between;
   min-width: 0;
+}
+
+.findingNote {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.findingStatus {
+  color: var(--tone);
 }
 
 /* Each severity is a tone, set on the finding: its mark and its title are
@@ -909,32 +1078,6 @@ button.anchorLines:hover {
 .findingLocation {
   display: flex;
   min-width: 0;
-}
-
-/* Which engine and model an item came from, boxed as a tag where it sits
-   among other text. Set in its own case, so a section heading's capitals don't
-   reach it. */
-.sourceTag {
-  flex: none;
-  max-width: 50%;
-  padding: 0 var(--space-1);
-  font-size: 11px;
-  font-weight: 400;
-  line-height: 16px;
-  text-transform: none;
-  letter-spacing: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.sectionHeading .sourceTag {
-  margin-left: var(--space-1);
-}
-
-/* Beside the path, the source goes unboxed: the row's far end sets it apart. */
-.findingTop .sourceTag {
-  padding: 0;
-  border: 0;
 }
 
 /* Clipped at the start, not the end. A path is identified by its tail — the

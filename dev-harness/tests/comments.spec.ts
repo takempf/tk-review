@@ -24,9 +24,9 @@ test("conversation comment previews Markdown, preserves the draft, and posts onc
   await page.getByRole("button", { name: "Add comment", exact: true }).click();
   await expect(page.getByRole("button", { name: "Comment", exact: true })).toBeDisabled();
   await editor(page).fill("**A useful comment**\n\nSecond paragraph.");
-  await page.getByRole("tab", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.locator("strong").filter({ hasText: "A useful comment" })).toBeVisible();
-  await page.getByRole("tab", { name: "Write", exact: true }).click();
+  await page.getByRole("button", { name: "Write", exact: true }).click();
   await editor(page).press("Enter");
   await expect.poll(() => requests(page)).toHaveLength(0);
   await page.getByRole("tab", { name: /Explain/ }).click();
@@ -169,8 +169,8 @@ test("scenery pauses through resizing, resumes and releases interrupted transiti
   // Preview can resize the same frame, and must pause scenery as well.
   await editor(page).fill(Array.from({ length: 20 }, (_, i) => `Paragraph ${i}.`).join("\n\n"));
   await page
-    .getByRole("tab", { name: "Preview", exact: true })
-    .evaluate((tab) => (tab as HTMLElement).click());
+    .getByRole("button", { name: "Preview", exact: true })
+    .evaluate((toggle) => (toggle as HTMLElement).click());
   await expect.poll(held, { intervals: [10] }).toBe(true);
   await expect.poll(held).toBe(false);
 
@@ -188,6 +188,35 @@ test("scenery pauses through resizing, resumes and releases interrupted transiti
   await trigger.evaluate((button) => (button as HTMLButtonElement).click());
   await page.getByRole("tab", { name: /Explain/ }).click();
   await expect.poll(held).toBe(false);
+});
+
+test("the scenery fades in under the pointer, fully once open, and out once closed", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openPr(page);
+  const trigger = page.getByRole("button", { name: "Add comment", exact: true });
+  const scenery = trigger.locator("xpath=../..").locator(".tk-scenery");
+  const opacity = () => scenery.evaluate((element) => Number(getComputedStyle(element).opacity));
+  await expect(scenery).toHaveCount(0);
+  // Slowed, so the fade is still under way when it is first sampled.
+  await trigger
+    .locator("xpath=../..")
+    .evaluate((frame) => (frame as HTMLElement).style.setProperty("--tk-duration-3", "1.5s"));
+
+  await trigger.hover();
+  await expect(scenery).toHaveCount(1);
+  expect(await opacity()).toBeLessThan(0.5);
+  await expect.poll(opacity).toBe(0.5);
+
+  await trigger.click();
+  await expect.poll(opacity).toBe(1);
+  await expect(editor(page).locator("xpath=../..")).toHaveAttribute("data-variant", "scenery");
+
+  // Cancel leaves the pointer off the trigger, so the scenery goes with the panel.
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(scenery).toHaveCount(0);
 });
 
 test("file comments open the PR panel from another tab and keep separate drafts", async ({
@@ -325,20 +354,20 @@ test("AI replies, finding posts and review conclusions share Write and Preview",
   await expect(conclusion).toBeVisible();
   const conclusionEditor = conclusion.locator("xpath=../..");
   await conclusion.fill("**Shared conclusion editor**");
-  await conclusionEditor.getByRole("tab", { name: "Preview", exact: true }).click();
+  await conclusionEditor.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(conclusionEditor.locator("strong")).toHaveText("Shared conclusion editor");
   await page.getByRole("button", { name: "Send to PR", exact: true }).first().click();
   const findingEditor = page
     .getByRole("textbox", { name: "Pull request comment", exact: true, includeHidden: true })
     .locator("xpath=../..");
   await editor(page).fill("**Shared finding editor**");
-  await findingEditor.getByRole("tab", { name: "Preview", exact: true }).click();
+  await findingEditor.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(findingEditor.locator("strong")).toHaveText("Shared finding editor");
   await page.getByRole("button", { name: "Discuss", exact: true }).click();
   const aiReply = page.getByRole("textbox", { name: "AI reply", exact: true, includeHidden: true });
   const replyEditor = aiReply.locator("xpath=../..");
   await aiReply.fill("**Shared AI reply editor**");
-  await replyEditor.getByRole("tab", { name: "Preview", exact: true }).click();
+  await replyEditor.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(replyEditor.locator("strong")).toHaveText("Shared AI reply editor");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("button", { name: "Discuss", exact: true })).toHaveAttribute(
