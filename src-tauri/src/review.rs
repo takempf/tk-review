@@ -19,14 +19,18 @@ use crate::github::{review_comment_id, PrComment, PrContext};
 use crate::rules::RepoRules;
 use crate::runs::{AgentRun, Stop, QUIET_LIMIT, RUN_LIMIT};
 
-/// Fewest agentic turns a claude run gets: enough to read around a small diff.
-const MIN_TURNS: usize = 30;
+/// Fewest agentic turns a claude run gets. A small diff can still reach far:
+/// e2e helpers that finish jobs (5 files) took a run 32 turns, about seven
+/// minutes, tracing the job pipeline they drive before it ran out. The limit
+/// is a cap, not a target, so runs that need fewer still stop sooner.
+const MIN_TURNS: usize = 60;
 
 /// Most agentic turns a claude run gets, however large the diff. The run's
 /// time limit (`RUN_LIMIT`) is the real backstop against a runaway session,
 /// and a run stopped by it leaves nothing, where one stopped here can still
-/// answer from what it read. So this stays well short of what an hour holds.
-const MAX_TURNS: usize = 100;
+/// answer from what it read. So this stays well short of what an hour holds:
+/// at the 13 seconds or so that run's turns took, about half of it.
+const MAX_TURNS: usize = 150;
 
 /// Agentic turns for a claude run over `patch`. A flat limit that suits a
 /// small change starves a large one, where most of the turns go on reading
