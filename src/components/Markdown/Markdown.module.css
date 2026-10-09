@@ -53,10 +53,6 @@
   overflow-wrap: anywhere;
 }
 
-.markdown a {
-  color: var(--accent);
-}
-
 /* Inline, as on GitHub, where the design system's reset makes images blocks:
    bots put avatars and status badges on the line beside their text. Centred on
    that line, not sat on its baseline: a baseline leaves room under the image

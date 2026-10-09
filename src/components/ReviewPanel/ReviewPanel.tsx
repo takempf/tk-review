@@ -316,14 +316,14 @@ function AnchorLabel({ path, anchor }: { path: string; anchor: CommentAnchor }) 
       {inDiff && !outdated ? (
         <button
           type="button"
-          className={css.anchorLines}
+          className={css.anchorJump}
           onClick={() => selectFile(path, lines)}
           title={`Jump to ${path}${lines ? `, ${describeLines(lines)}` : ""}`}
         >
           {text}
         </button>
       ) : (
-        <span className={css.anchorLines}>{text}</span>
+        <span>{text}</span>
       )}
       {outdated ? <span className={css.anchorNote}>outdated</span> : null}
     </div>

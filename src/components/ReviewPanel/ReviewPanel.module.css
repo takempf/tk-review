@@ -146,19 +146,11 @@
   line-height: var(--tk-leading-tight);
 }
 
-/* The underline is always there, in a transparent colour, so hovering can fade
-   it in: whether a line is drawn at all cannot transition. */
+/* Its look is every link's (global.css). */
 .prLink {
   display: inline-flex;
   gap: var(--space-1);
   align-items: center;
-  color: var(--accent);
-  text-decoration-line: underline;
-  text-decoration-color: transparent;
-}
-
-.prLink:hover {
-  text-decoration-color: currentColor;
 }
 
 .prSkeleton {
@@ -268,14 +260,11 @@
 }
 
 .inlinePath {
-  padding: 0;
+  composes: link codeLink from global;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--accent);
   text-align: left;
   overflow-wrap: anywhere;
-  background: none;
-  border: none;
 }
 
 /* The file's rail runs down the left, from the first mark to the end of the
@@ -363,26 +352,9 @@
   background: var(--text-faint);
 }
 
-.anchorLines {
-  padding: 0;
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: none;
-}
-
-button.anchorLines {
-  cursor: pointer;
-  text-decoration-line: underline;
-  text-decoration-color: transparent;
-  transition-property: color, text-decoration-color;
-  transition-duration: var(--tk-duration-2);
-  transition-timing-function: var(--tk-ease-out);
-}
-
-button.anchorLines:hover {
-  color: var(--accent);
-  text-decoration-color: currentColor;
+/* Lines still in the diff jump there; outdated ones are plain text. */
+.anchorJump {
+  composes: link codeLink from global;
 }
 
 .anchorNote {
@@ -879,14 +851,6 @@ button.anchorLines:hover {
   gap: var(--space-1);
   align-items: center;
   font-size: var(--tk-text-sm);
-  color: var(--accent);
-  /* Faded in on hover, like `.prLink`'s. */
-  text-decoration-line: underline;
-  text-decoration-color: transparent;
-}
-
-.postedLink:hover {
-  text-decoration-color: currentColor;
 }
 
 .composerNote,
@@ -1097,35 +1061,22 @@ button.anchorLines:hover {
 }
 
 .findingPath {
-  padding: 0;
+  composes: link codeLink from global;
   /* Right within an rtl box, which is where the un-clipped end of the path
      sits. A button's centred default would put the ellipsis back on the right. */
   text-align: right;
-  cursor: pointer;
-  background: none;
-  border: none;
-  /* A button, so the global link transition does not reach it. */
-  text-decoration-line: underline;
-  text-decoration-color: transparent;
-  transition-property: color, text-decoration-color;
-  transition-duration: var(--tk-duration-2);
-  transition-timing-function: var(--tk-ease-out);
 }
 
-.findingPath:hover {
-  color: var(--accent);
-  text-decoration-color: currentColor;
-}
-
-/* The file list's split: folders dim, the file name at full strength. */
+/* The file list's split: folders dim, the file name at full strength. It
+   follows the link's colour on the link's timing, which changes on hover. */
 .pathName {
   color: var(--text);
-  transition: color var(--tk-duration-2) var(--tk-ease-out);
+  transition: inherit;
 }
 
 /* Named rather than inherited: inheriting would first snap it to the path's
    dim starting colour, then follow that up to the accent. */
-.findingPath:hover .pathName {
+.findingPath:is(:hover, :focus-visible) .pathName {
   color: var(--accent);
 }
 

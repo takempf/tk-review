@@ -74,7 +74,7 @@
   /* Sticky headers over a scrolling list: the chrome, a little see-through,
      with what scrolls under it blurred. Set `backdrop-filter` (and its
      -webkit- twin) to `--frosted-blur` alongside the background. */
-  --bg-frosted: color-mix(in oklab, var(--tk-bg) 85%, transparent);
+  --bg-frosted: color-mix(in oklab, var(--tk-bg) 94%, transparent);
   --frosted-blur: blur(4px);
   --border: var(--tk-border-subtle);
   --border-strong: var(--tk-border);
@@ -244,13 +244,57 @@ body {
 }
 
 /*
- * Links ease into their hover colour and underline rather than snapping, on the
- * theme's own ease-out and the duration its text buttons use for the same job.
+ * Links, one look everywhere: the text in the colour around it, underlined in
+ * the accent and set a little clear of the descenders; pointing at one turns
+ * its text the underline's colour. A button that jumps somewhere takes the same
+ * look from `.link` (`composes: link from global` in a module).
+ *
+ * The resting look sits in `:where()`, so a component's own colour for its link
+ * (a dim path, say) wins over it; hovering outranks that colour in turn.
+ *
+ * The colour comes in quickly on an ease-out cubic (the theme's expo ease-out
+ * all but snaps at this length) and goes back more slowly on an ease-in-out, so
+ * sweeping the pointer down a list leaves a short trail rather than a flicker.
  */
-a {
-  transition-property: color, text-decoration-color;
+:where(a, .link) {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  /* Set, not the font's: Geist and Geist Mono would draw different weights. */
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.35em;
+  transition: color var(--tk-duration-3) var(--tk-ease-in-out);
+}
+
+:where(.link) {
+  padding: 0;
+  font: inherit;
+  background: none;
+  border: 0;
+}
+
+:is(a, .link):is(:hover, :focus-visible) {
+  color: var(--accent);
   transition-duration: var(--tk-duration-2);
-  transition-timing-function: var(--tk-ease-out);
+  transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+/*
+ * A link to a place in the code (a path, its lines) on top of `.link`
+ * (`composes: link codeLink from global`). Being a location already says it
+ * goes somewhere, and an accent rule under a whole path outshouts the title
+ * beside it, so its underline rests dotted in the faint text colour and takes
+ * the accent only with the text.
+ */
+:where(.codeLink) {
+  text-decoration-style: dotted;
+  text-decoration-color: var(--text-faint);
+  text-underline-offset: 0.3em;
+  transition-property: color, text-decoration-color;
+}
+
+.codeLink:is(:hover, :focus-visible) {
+  text-decoration-color: var(--accent);
 }
 
 ::highlight(review-search) {
