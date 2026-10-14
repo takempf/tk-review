@@ -10,21 +10,27 @@ Use the answers throughout, and when the repository's rules are stricter than th
 Locks on existing tables. This is where most of the damage comes from:
 - Name the lock each statement on an existing table takes. Most `ALTER TABLE` forms, `DROP`/`CREATE TRIGGER`, dropping columns or tables, and adding a constraint without `NOT VALID` take an exclusive lock.
 - A statement waiting for that lock blocks every query that arrives after it. An `ALTER` that takes milliseconds can stall all traffic on the table for as long as the slowest query or idle transaction already holding it. Any strong lock on a table that serves traffic needs a `SET LOCAL lock_timeout` of a few seconds, so the migration fails fast instead, unless the runner already sets one.
-- Adding a `CHECK`, `FOREIGN KEY`, or `UNIQUE` constraint to an existing table scans it under that lock. Add it `NOT VALID`, and `VALIDATE CONSTRAINT` in a separate migration. When the runner wraps each file in one transaction, validating in the same file holds the lock through the scan anyway.
-- A constraint written inline in `ADD COLUMN` (`ADD COLUMN x int CHECK (...)` or `REFERENCES ...`) forces the same scan, and linters tend to miss it.
+- Adding a `CHECK` or `FOREIGN KEY` constraint to an existing table scans it under that lock. Add it `NOT VALID`, and `VALIDATE CONSTRAINT` in a separate migration. When the runner wraps each file in one transaction, validating in the same file holds the lock through the scan anyway.
+- `UNIQUE` and `PRIMARY KEY` constraints can't be `NOT VALID`. Build the index with `CREATE UNIQUE INDEX CONCURRENTLY` first, then `ADD CONSTRAINT ... USING INDEX`. A primary key also needs its columns proven `NOT NULL` first.
+- A `CHECK` written inline in `ADD COLUMN` (`ADD COLUMN x int CHECK (...)`) forces the same scan, and linters tend to miss it.
+- A foreign key locks the table it points at, not only the one it's on. `REFERENCES` takes a `SHARE ROW EXCLUSIVE` lock on the referenced table, which blocks its writes, even from a brand-new table. Dropping a foreign key, whether as a constraint, a column, or a whole table, takes `ACCESS EXCLUSIVE` on the referenced table. Do slow cleanup before that DDL, not after it.
 - Dropping and re-adding a `CHECK` to change its allowed values rescans the table every time.
-- `SET NOT NULL` on an existing column scans the table under the lock. Validate a `NOT VALID` `CHECK (col IS NOT NULL)` first, in its own migration.
+- `SET NOT NULL` on an existing column scans the table under the lock. Validate a `NOT VALID` `CHECK (col IS NOT NULL)` first, in its own migration. Drop that check in a later statement: `SET NOT NULL, DROP CONSTRAINT` in one `ALTER` drops the proof first and scans anyway.
 - Changing a column's type, or adding one with a volatile default, rewrites the whole table.
 - To change only what a trigger does, `CREATE OR REPLACE FUNCTION` on its function rather than dropping and re-creating the trigger.
-- Each migration should touch as few busy tables as possible. A transaction that locks several of them can deadlock against application transactions that lock them in a different order. Triggers set that order too: when a write to a child table updates its parent through a trigger, lock the child first.
+- Each migration should touch as few busy tables as possible, ideally one, locked last. A transaction that locks several of them can deadlock against application transactions that lock them in a different order. Triggers set that order too: when a write to a child table updates its parent through a trigger, lock the child first.
+- `lock_timeout` limits each lock wait, not the whole file. A file that locks three busy tables gets three chances to hit it, and holds the first lock while it waits for the next.
 
 Data changes inside the migration:
 - For every `UPDATE`, `DELETE`, or `INSERT ... SELECT`, ask how many rows it touches in production. It holds its row locks until the migration's transaction ends, so a large one belongs in a batched backfill outside the deploy.
 - Adding a column, backfilling it, and setting it `NOT NULL` in one file holds the strongest of those locks for the whole backfill. Put the backfill in a file of its own, made safe to re-run (`WHERE col IS NULL`).
 - Batching in a loop doesn't release anything when the loop runs inside one migration file, because the whole file is one transaction.
+- A backfill needs a `SET LOCAL statement_timeout` too, so a slower production run fails instead of holding its row locks indefinitely.
+- An `UPDATE` followed by any statement that takes a stronger lock on the same table, in one transaction, deadlocks with the writers queued behind the rows it updated.
 - Row triggers fire for a migration's writes exactly as for a user's: `updated_at` columns, timestamps that propagate to parent rows, notifications, audit rows, storage reference tracking. List the triggers on every table the migration writes to, and say for each whether it should fire. An `UPDATE` with no `WHERE` that skips rows already in their target state rewrites, and re-triggers, every row.
 - Functions that read the current user from the session get nothing inside a migration. A trigger that stamps "last edited by" will write a null, or fail.
 - Turning off triggers for a backfill with `session_replication_role = 'replica'` turns off foreign key enforcement too.
+- A new trigger that locks or updates another row, such as a parent's counter or a rollup, makes every writer wait behind whoever already holds that row. Under load that serializes the table's writes, and a worker that holds the row for long times out the users behind it.
 
 Indexes:
 - An index on an existing table that serves traffic needs `CREATE INDEX CONCURRENTLY`, which cannot run inside a transaction. Follow the repository's convention for that, typically a file holding only that statement.
@@ -38,7 +44,9 @@ Code running against the new schema. During a deploy, the code from the previous
 - Dropping or renaming a column, table, function, or enum value that the previous release uses breaks it mid-rollout. Remove every use first, and drop it in a later release. A rename is an add, a backfill, a switch, and then a drop.
 - Tightening breaks old code that still writes the old way too: a new `NOT NULL` or `CHECK`, a column made `GENERATED ALWAYS`, a revoked grant.
 - Code in this same change that needs the new schema fails wherever it starts before the migration has finished, or after it has failed. Check whether workers and scheduled jobs wait for migrations.
-- Rolling back a release reverts the code but not the migration. Check that the previous release still works against this schema.
+- Rolling back a release reverts the code but not the migration. Check that every release production might roll back to, not only the one before, still works against this schema.
+- Loosening can break old code too, once something writes the new shape. A new enum value, a `DROP NOT NULL`, or a widened `CHECK` is safe until the first row uses it, and then an older release that reads that row may reject it: an API layer generated from the old schema fails on an enum value it doesn't know or a null in a field it declared non-null. Say when the code that writes the new shape can ship.
+- Adding a column breaks functions declared `RETURNS <table>` or `RETURNS SETOF <table>` whose bodies list the columns they return, and a runner that re-validates functions after migrating then fails the deploy after the column has already committed.
 - A migration only runs where it hasn't run yet. An edit to one that already ran on any database is silently skipped there, and so is a reverted migration re-landed under the same name with new content.
 - During the rollout, a new `CHECK` or enum must still accept what the previous release writes.
 
@@ -82,7 +90,7 @@ History:
 - A committed schema dump should change only by what the migration does. Anything else is drift from someone's local database.
 
 Recovery:
-- If it fails halfway in production, can it simply be run again?
+- If it fails halfway in production, can it simply be run again? A lock timeout fails the same way on every retry while the blocker is still there, so automatic retries don't recover it.
 - After a concurrent index build, the PR should say how to confirm it is valid (`SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`).
 - A data migration can assert the row counts it expects, so a wrong assumption fails the migration instead of quietly changing too little or too much.
 - Does it include the undo SQL, or rollback note, the repository asks for?
