@@ -94,10 +94,24 @@
   }
 }
 
-/* Marks the tab's part in a screen change, for the fold in global.css. Above
-   the rule `morph()` names parts with, so the class adds to its own. */
+/* Marks the tab's parts in a screen change, for global.css to scale its
+   background and fade what is on it. Above the rule `morph()` names parts
+   with, so the class adds to its own. */
 .list > .tab[data-tk-morph] {
   view-transition-class: tk-morph tk-review-tab;
+}
+
+.tab > .content[data-tk-morph] {
+  view-transition-class: tk-morph tk-review-tab-content;
+}
+
+/* Everything on the tab, in a box of its own to be captured apart from it. */
+.content {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  align-self: stretch;
+  min-width: 0;
 }
 
 .show {

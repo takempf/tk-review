@@ -27,10 +27,11 @@ import css from "./screenTransition.module.css";
 const SCREEN_SCOPE = "screen";
 
 /**
- * The parts that move between screens: a tab's, and the list's "Pull requests"
- * heading, which becomes the review's way back to it (`id` "home").
+ * The parts that move between screens: a tab's (its background, and the
+ * contents on it), and the list's "Pull requests" heading, which becomes the
+ * review's way back to it (`id` "home").
  */
-type ScreenPart = "number" | "title" | "tab" | "heading";
+type ScreenPart = "number" | "title" | "tab" | "content" | "heading";
 
 /**
  * FNV-1a: a short, stable name for a repository path, which can't go into a
@@ -289,10 +290,10 @@ export function ScreenMorph({
     <Morph
       name={`screen-${id}-${part}`}
       scope={SCREEN_SCOPE}
-      // Text glides at its true size, so nothing needs to scale. The tab
-      // itself is a box, sliding over as the tabs around it come and go, and
-      // the list's heading scales down into the back button's label.
-      fit={part === "tab" || part === "heading" ? "box" : "text"}
+      // Text glides at its true size, so nothing needs to scale. The tab and
+      // its contents are boxes, sliding over as the tabs around them come and
+      // go, and the list's heading scales down into the back button's label.
+      fit={part === "number" || part === "title" ? "text" : "box"}
       active={active}
     >
       {children}

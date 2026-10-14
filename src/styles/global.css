@@ -191,16 +191,56 @@ body {
   animation-timing-function: var(--spring-snappy);
 }
 
-/* A tab that closes folds away from its right edge as the tabs after it slide
-   over into its place. On their spring, so its edge keeps pace with theirs and
-   nothing overlaps. It fades on its own, slow-starting curve: the spring is
-   most of the way there in a third of its time, and fading on it would lose
-   the tab before the fold had got anywhere. Its number and title fold with it
-   (`screenChange.folding` in the app store). */
+/* A tab comes and goes as its background scales up from and down into its
+   bottom-left corner, on the spring the tabs around it slide on: its right
+   edge keeps pace with theirs, so nothing overlaps. What is on it is captured
+   apart (TabBar's `content` part), and fades rather than scales. */
+:root:active-view-transition-type(screen)::view-transition-new(.tk-review-tab):only-child {
+  transform-origin: left bottom;
+  animation: tab-grow var(--spring-snappy-duration) var(--spring-snappy) both;
+}
+
 :root:active-view-transition-type(screen)::view-transition-old(.tk-review-tab):only-child {
+  transform-origin: left bottom;
+  animation: tab-shrink var(--spring-snappy-duration) var(--spring-snappy) both;
+}
+
+/* A tab that stays shows its background as it is now, sliding to its place:
+   crossfaded, the same fill at both ends would dim midway. */
+:root:active-view-transition-type(screen)::view-transition-old(.tk-review-tab):not(:only-child) {
+  animation: none;
+  opacity: 0;
+}
+
+:root:active-view-transition-type(screen)::view-transition-new(.tk-review-tab):not(:only-child) {
+  animation: none;
+}
+
+@keyframes tab-grow {
+  from {
+    transform: scale(0);
+  }
+}
+
+@keyframes tab-shrink {
+  to {
+    transform: scale(0);
+  }
+}
+
+/* A new tab's contents fade in once its background is most of the way there,
+   so nothing shows outside it. */
+:root:active-view-transition-type(screen)::view-transition-new(.tk-review-tab-content):only-child {
+  animation: tab-content-in var(--tk-duration-2) var(--tk-ease-fade) var(--tk-duration-1) both;
+}
+
+/* A closing tab's contents fold away from its right edge with the tabs
+   sliding over it, and fade as they go. Their number and title fold with them
+   (`screenChange.folding` in the app store). */
+:root:active-view-transition-type(screen)::view-transition-old(.tk-review-tab-content):only-child {
   animation:
     tab-fold var(--spring-snappy-duration) var(--spring-snappy) both,
-    tab-fade var(--spring-snappy-duration) ease-in both;
+    tab-content-out var(--tk-duration-2) var(--tk-ease-fade) both;
 }
 
 /* Both ends stated: from `none`, a clip can't interpolate and would snap. */
@@ -214,7 +254,13 @@ body {
   }
 }
 
-@keyframes tab-fade {
+@keyframes tab-content-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes tab-content-out {
   to {
     opacity: 0;
   }

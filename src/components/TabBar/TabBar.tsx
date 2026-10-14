@@ -49,36 +49,42 @@ function Tab({
           onClose();
         }}
       >
-        <button
-          type="button"
-          className={css.show}
-          onClick={onShow}
-          title={name}
-          aria-current={active ? "page" : undefined}
-        >
-          <TabStatus store={tab.store} />
-          <span className={css.label}>
-            {pr ? (
-              <ScreenMorph id={tab.morphKey} part="number" active={carried}>
-                <span className={css.number}>#{pr.number}</span>
-              </ScreenMorph>
-            ) : (
-              <Icon name="branch" className={css.branch} />
-            )}
-            <ScreenMorph id={tab.morphKey} part="title" active={carried}>
-              <span className={css.title}>{title}</span>
-            </ScreenMorph>
-          </span>
-        </button>
-        <button
-          type="button"
-          className={css.close}
-          onClick={onClose}
-          aria-label={`Close ${name}`}
-          title="Close tab"
-        >
-          <Icon name="close" />
-        </button>
+        {/* A part of its own, so the tab's snapshot is its background alone,
+            which scales as the tab comes and goes while this fades. */}
+        <ScreenMorph id={tab.morphKey} part="content" active={shifting}>
+          <div className={css.content}>
+            <button
+              type="button"
+              className={css.show}
+              onClick={onShow}
+              title={name}
+              aria-current={active ? "page" : undefined}
+            >
+              <TabStatus store={tab.store} />
+              <span className={css.label}>
+                {pr ? (
+                  <ScreenMorph id={tab.morphKey} part="number" active={carried}>
+                    <span className={css.number}>#{pr.number}</span>
+                  </ScreenMorph>
+                ) : (
+                  <Icon name="branch" className={css.branch} />
+                )}
+                <ScreenMorph id={tab.morphKey} part="title" active={carried}>
+                  <span className={css.title}>{title}</span>
+                </ScreenMorph>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={css.close}
+              onClick={onClose}
+              aria-label={`Close ${name}`}
+              title="Close tab"
+            >
+              <Icon name="close" />
+            </button>
+          </div>
+        </ScreenMorph>
       </li>
     </ScreenMorph>
   );
