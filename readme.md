@@ -79,7 +79,8 @@ src-tauri/src/
   github.rs             pull requests through the gh CLI: list, open, refresh, post
   review.rs             the agent CLI layer (claude, codex): prompt, spawn, parsing
   voice.md              how the explanations should sound (see Agent explanation)
-  migration_review.md   what the migration reviewer checks (see Agent review)
+  specialists.rs        the specialist reviewers: which files each picks, and what it's told
+  specialists/          each specialist's checklist (see Agent review)
   rules.rs              the review rules kept per repository on this machine
   runs.rs               agent runs in flight, so they can be cancelled and timed out
   models.rs             model suggestions, read from each CLI's own cache
@@ -136,26 +137,54 @@ from that file's `model` and `effortLevel`. Codex
 runs in its read-only sandbox, with no network, and reads `AGENTS.md` on its
 own.
 
-A diff that changes database migrations (anything under a `migrations`,
-`migration`, or `migrate` directory) gets a specialist's review as well. A
-Claude review is given a `migration-reviewer` subagent through `--agents`,
-read-only, carrying the migrations' diffs and the checklist in
-[`migration_review.md`](src-tauri/src/migration_review.md): locks on busy
-tables, data changes that fire triggers, index builds that fail halfway, code
-running against the new schema mid-deploy, and the rest of what has gone wrong
-with real migrations. It also looks up each touched table's history — earlier
-migrations on it in `git log`, and incidents in Linear and Slack — and cites
-what bears on a finding. The main reviewer is told to launch it first, checks
-what it reports, and merges the findings that hold into its own. The run's
-event stream shows whether it did, and a run that answers without launching it
-is resumed once and told to. Codex takes no subagent definitions, so a Codex
-review gets the same checklist in its own prompt.
+Parts of a diff also get a specialist's review. Each specialist owns one way
+changes go wrong in production, picks the files in its area by where they live
+and what their changed lines mention, and carries a checklist in
+[`specialists/`](src-tauri/src/specialists) of how changes there have failed in
+practice:
+
+| Specialist | Launches when a diff changes |
+| --- | --- |
+| Migrations | files under a `migrations`, `migration`, or `migrate` directory |
+| Security | source code outside tests and migrations |
+| Backend runtime | server code dealing with transactions, pools, queues, retries, timeouts, storage, or outside services |
+| GraphQL | GraphQL schemas, documents, resolvers, or client code using a GraphQL client |
+| Rollout | contracts between things that deploy apart: migrations, API schemas, job payloads, stored client state, routes |
+| Frontend platform | markup, styles, components, bundler or browser config, or scripts using browser APIs |
+| React | `.tsx`/`.jsx` files, hooks, or scripts using React or its state libraries |
+| Graphics | shaders, or code using three.js, react-three-fiber, WebGL, textures, or canvases |
+| Billing | code dealing with billing, payments, credits, refunds, quotas, or usage |
+| Analytics | code that emits or defines analytics or tracking events |
+| Maintainability | source code or tests |
+
+Files marked `linguist-generated` in the repository's `.gitattributes` are left
+out, except a generated GraphQL schema, which still shows the API a change adds,
+and a schema dump such as `schema.sql` goes only to the migration reviewer.
+A Claude review is given every specialist that picked something as a
+read-only subagent through `--agents`, each carrying its checklist, the
+repository's rules for it, and the diffs of its own files (past 192 KB, the
+rest are listed by path for it to read). Before judging, a specialist reads
+the repository's own rules for its area — `CLAUDE.md`, `AGENTS.md`, and
+skills under `.claude/skills` — and looks up history on what it reviews in
+`git log`, Linear, and Slack, citing what bears on a finding. Each reports
+problems with the concrete failure and what the finding rests on.
+
+The main reviewer, the lead, is told to launch them all at once in its first
+response, reviews the whole diff itself, checks what each reports against the
+code, and merges the findings that hold into its own. Every finding then
+names who raised it in `reviewers`, pinned by the answer's JSON schema to the
+lead and the specialists that ran, and the app shows them on the finding:
+"Lead · Migrations". The run's event stream shows which specialists it
+launched, and a run that answers without some of them is resumed once and
+told to launch the rest. Codex takes no subagent definitions, so a Codex
+review gets the same checklists in its own prompt, and its findings name
+nobody.
 
 The **Rules** button beside the agent settings holds rules for the repository
-that every review and re-review follows: review rules for the main reviewer,
-and migration rules for the migration reviewer. They're for what is specific
-or private to one codebase, like which tables are large or which triggers fire
-on an update, so they're kept on this computer in
+that every review and re-review follows, one set per reviewer: the lead's go
+into every review, and each specialist's only to that specialist. They're for
+what is specific or private to one codebase, like which tables are large or
+which triggers fire on an update, so they're kept on this computer in
 `~/Library/Application Support/com.tkempf.tk-review/repo-rules.json` rather
 than in the app or the repository. They're keyed by the GitHub repository, so
 every clone and worktree of it shares them.

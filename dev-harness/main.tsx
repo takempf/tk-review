@@ -8,7 +8,14 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { sceneryHeld } from "tk-design-system/scenery/hold";
-import type { GitError, PrContext, PrThread, RepoRules, RepoRulesEntry } from "../src/ipc/git";
+import type {
+  GitError,
+  PrContext,
+  PrThread,
+  RepoRules,
+  RepoRulesEntry,
+  RuleSlot,
+} from "../src/ipc/git";
 import { Root } from "../src/Root";
 import { storageRoot } from "../src/store/account";
 import "../src/styles/global.css";
@@ -192,11 +199,46 @@ let repoRules: RepoRules = {
   migrations: "Every lock on `orders` needs `SET LOCAL lock_timeout`: it is the busiest table.",
 };
 
+/** The reviewers that take rules, as the backend lists them (`specialists::rule_slots`). */
+const RULE_SLOTS: RuleSlot[] = (
+  [
+    [
+      "review",
+      "Lead",
+      "Reads the whole diff on every review and re-review, launches the specialists, and merges what they find.",
+    ],
+    [
+      "migrations",
+      "Migrations",
+      "Reviews database migrations. A Claude review launches it when a diff changes files under a `migrations`, `migration`, or `migrate` directory.",
+    ],
+    [
+      "security",
+      "Security",
+      "Reviews code for who can do what. A Claude review launches it when a diff changes source code outside tests and migrations.",
+    ],
+    ["runtime", "Backend runtime", "Reviews server code under load and failure."],
+    ["graphql", "GraphQL", "Reviews GraphQL schemas, resolvers, and client operations."],
+    ["rollout", "Rollout", "Reviews what happens while a change rolls out, and on rollback."],
+    [
+      "frontend",
+      "Frontend platform",
+      "Reviews browser code across browsers, devices, and assistive technology.",
+    ],
+    ["react", "React", "Reviews React code for render loops, effects, and stale state."],
+    ["graphics", "Graphics", "Reviews WebGL, three.js, shader, and canvas code."],
+    ["billing", "Billing", "Reviews code that charges, refunds, or enforces limits."],
+    ["analytics", "Analytics", "Reviews analytics and tracking events."],
+    ["maintainability", "Maintainability", "Reviews what will cost the next developer."],
+  ] as const
+).map(([key, label, about]) => ({ key, label, about, placeholder: `e.g. A rule for ${label}.` }));
+
 function rulesEntry(): RepoRulesEntry {
   return {
     repo: "github.com/acme/widgets",
     rules: structuredClone(repoRules),
     file: "~/Library/Application Support/com.tkempf.tk-review/repo-rules.json",
+    reviewers: RULE_SLOTS,
   };
 }
 

@@ -15,24 +15,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::GitError;
 use crate::github;
+use crate::specialists::{self, RuleSlot};
 
-/// The rules for one repository. Either part may be empty.
+/// The rules for one repository. Any of them may be empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RepoRules {
     /// Added to every review and re-review of the repository.
     pub review: String,
-    /// Handed to the migration reviewer when a diff changes migrations.
-    pub migrations: String,
+    /// Handed to each specialist reviewer the review launches, keyed by the
+    /// specialist's key (`migrations`, `security`, …). Kept beside `review` in
+    /// the file rather than nested, so rules saved before there was more than
+    /// one specialist read as they were written.
+    #[serde(flatten)]
+    pub specialists: BTreeMap<String, String>,
 }
 
 impl RepoRules {
+    /// The rules for the specialist keyed `key`; empty when there are none.
+    pub fn specialist(&self, key: &str) -> &str {
+        self.specialists.get(key).map_or("", String::as_str)
+    }
+
     fn is_empty(&self) -> bool {
-        self.review.trim().is_empty() && self.migrations.trim().is_empty()
+        self.review.trim().is_empty()
+            && self
+                .specialists
+                .values()
+                .all(|rules| rules.trim().is_empty())
     }
 }
 
-/// A repository's rules, with where they are kept, for the settings dialog.
+/// A repository's rules, with where they are kept and who they are for, for
+/// the settings dialog.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoRulesEntry {
@@ -41,6 +56,19 @@ pub struct RepoRulesEntry {
     pub rules: RepoRules,
     /// The file every repository's rules are kept in.
     pub file: String,
+    /// Every reviewer that takes rules, the lead first.
+    pub reviewers: Vec<RuleSlot>,
+}
+
+impl RepoRulesEntry {
+    fn new(repo: String, rules: RepoRules, file: &Path) -> Self {
+        Self {
+            repo,
+            rules,
+            file: file.display().to_string(),
+            reviewers: specialists::rule_slots(),
+        }
+    }
 }
 
 /// The key a checkout's rules are kept under: the GitHub repository its
@@ -80,18 +108,18 @@ fn unreadable(file: &Path, err: impl std::fmt::Display) -> GitError {
 pub fn load(file: &Path, root: &Path) -> Result<RepoRulesEntry, GitError> {
     let repo = repo_key(root);
     let rules = read_all(file)?.remove(&repo).unwrap_or_default();
-    Ok(RepoRulesEntry {
-        repo,
-        rules,
-        file: file.display().to_string(),
-    })
+    Ok(RepoRulesEntry::new(repo, rules, file))
 }
 
 /// Replaces the rules kept for the checkout at `root`, leaving every other
 /// repository's alone. Empty rules remove the repository's entry.
-pub fn save(file: &Path, root: &Path, rules: RepoRules) -> Result<RepoRulesEntry, GitError> {
+pub fn save(file: &Path, root: &Path, mut rules: RepoRules) -> Result<RepoRulesEntry, GitError> {
     let repo = repo_key(root);
     let mut all = read_all(file)?;
+    // A specialist with nothing to say needs no line in the file.
+    rules
+        .specialists
+        .retain(|_, specialist| !specialist.trim().is_empty());
     if rules.is_empty() {
         all.remove(&repo);
     } else {
@@ -115,11 +143,7 @@ pub fn save(file: &Path, root: &Path, rules: RepoRules) -> Result<RepoRulesEntry
     std::fs::write(&staged, json).map_err(failed)?;
     std::fs::rename(&staged, file).map_err(failed)?;
 
-    Ok(RepoRulesEntry {
-        repo,
-        rules,
-        file: file.display().to_string(),
-    })
+    Ok(RepoRulesEntry::new(repo, rules, file))
 }
 
 #[cfg(test)]
@@ -157,10 +181,44 @@ mod tests {
 
         let rules = RepoRules {
             review: "Money is in cents.".into(),
-            migrations: "Orders is a big table.".into(),
+            specialists: [("migrations".to_owned(), "Orders is a big table.".to_owned())].into(),
         };
         save(&file, &repo, rules.clone()).expect("save");
-        assert_eq!(load(&file, &clone).expect("load").rules, rules);
+        let entry = load(&file, &clone).expect("load");
+        assert_eq!(entry.rules, rules);
+        assert_eq!(entry.reviewers[0].key, "review");
+    }
+
+    #[test]
+    fn specialists_rules_sit_beside_the_review_rules_and_blanks_are_dropped() {
+        let (dir, repo) = checkout("git@github.com:acme/widgets.git");
+        let file = dir.path().join("repo-rules.json");
+        // As rules were saved when the migration reviewer was the only one.
+        std::fs::write(
+            &file,
+            r#"{"github.com/acme/widgets": {"review": "Cents.", "migrations": "Orders is big."}}"#,
+        )
+        .expect("write");
+        let mut rules = load(&file, &repo).expect("load").rules;
+        assert_eq!(rules.review, "Cents.");
+        assert_eq!(rules.specialist("migrations"), "Orders is big.");
+        assert_eq!(rules.specialist("security"), "");
+
+        rules
+            .specialists
+            .insert("security".into(), "Check membership.".into());
+        rules.specialists.insert("react".into(), "  \n".into());
+        save(&file, &repo, rules).expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("file")).expect("json");
+        assert_eq!(
+            saved["github.com/acme/widgets"],
+            serde_json::json!({
+                "review": "Cents.",
+                "migrations": "Orders is big.",
+                "security": "Check membership.",
+            })
+        );
     }
 
     #[test]
@@ -170,7 +228,7 @@ mod tests {
         let file = dir.path().join("repo-rules.json");
         let rules = |text: &str| RepoRules {
             review: text.into(),
-            migrations: String::new(),
+            ..RepoRules::default()
         };
 
         save(&file, &repo, rules("widgets")).expect("save");

@@ -328,6 +328,8 @@ export const REVIEW: ReviewResult = {
       severity: "critical",
       title: "New non-null column has no default or backfill.",
       body: "merge_base is `not null` but existing rows get no value, so this migration fails on any non-empty database. Add a default, or backfill before tightening the constraint.",
+      // Raised by the lead and a specialist both, as a review with a panel says.
+      reviewers: ["Lead", "Migrations"],
     },
     {
       path: "src/components/DiffViewer/DiffViewer.tsx",
@@ -337,6 +339,7 @@ export const REVIEW: ReviewResult = {
       severity: "warning",
       title: "Effect cleanup races the in-flight fetch.",
       body: "`cancelled` is checked after the promise resolves, but the store subscription set up above is never torn down when the file changes mid-fetch.",
+      reviewers: ["React"],
     },
     {
       path: "src/ipc/git.ts",
@@ -344,6 +347,7 @@ export const REVIEW: ReviewResult = {
       severity: "suggestion",
       title: "Error mapping could reuse the shared kind table.",
       body: "The new wrapper re-declares error strings that `errorMessage` already owns; importing the shared map keeps the copy from drifting.",
+      reviewers: ["Lead", "Maintainability"],
     },
     {
       path: "src/lib/fileChange.ts",
@@ -351,6 +355,7 @@ export const REVIEW: ReviewResult = {
       severity: "nit",
       title: "Comment describes the old return type.",
       body: "The docblock still says the helper returns a tuple; it now returns an object.",
+      reviewers: ["Maintainability"],
     },
   ],
 };
@@ -395,6 +400,7 @@ export const RE_REVIEW: ReReviewResult = {
       severity: "warning",
       title: "Backfill scans the whole table without an index.",
       body: "The new UPDATE added to satisfy the NOT NULL constraint runs before the index exists, so on a large reviews table the migration holds a long lock. Create the index first, or batch the update.",
+      reviewers: ["Migrations"],
     },
   ],
 };

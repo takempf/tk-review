@@ -545,7 +545,7 @@ pub fn diff_branches(
 /// One batched `check-attr` for the whole review rather than one per file. A
 /// failure here only costs the generated markers, so it degrades to "none" rather
 /// than failing the diff.
-fn generated_paths(root: &Path, rev: Option<&str>, paths: &[String]) -> HashSet<String> {
+pub fn generated_paths(root: &Path, rev: Option<&str>, paths: &[String]) -> HashSet<String> {
     if paths.is_empty() {
         return HashSet::new();
     }

@@ -104,6 +104,12 @@ export interface ReviewFinding {
   severity: string;
   title: string;
   body: string;
+  /**
+   * Who raised it, when specialists reviewed alongside the lead reviewer:
+   * `Lead`, `Migrations`, `Security`, and so on, lead first. Absent when no
+   * specialist took part, and on reviews from before they did.
+   */
+  reviewers?: string[];
   /** GitHub URL after this finding was sent to the PR. */
   postedUrl?: string;
   /** ISO timestamp for the most recent post. */
@@ -418,21 +424,36 @@ export function toAppError(value: unknown, title: string | null = null): AppErro
   return { title, message: lead.join("\n"), detail: message };
 }
 
-/** Review rules kept for one repository on this machine; either part may be empty. */
+/**
+ * Review rules kept for one repository on this machine, any of them empty:
+ * the lead reviewer's under `review`, and each specialist's under its key
+ * (`migrations`, `security`, …), one of the `RuleSlot` keys.
+ */
 export interface RepoRules {
   /** Added to every review and re-review of the repository. */
   review: string;
-  /** Handed to the migration reviewer when a diff changes migrations. */
-  migrations: string;
+  [specialist: string]: string;
 }
 
-/** A repository's rules, with what they are keyed by and where they are kept. */
+/** A reviewer that takes rules, as the backend lists them. */
+export interface RuleSlot {
+  /** Its key in `RepoRules`: `review` for the lead reviewer. */
+  key: string;
+  label: string;
+  /** What it reviews, and when a review launches it. */
+  about: string;
+  placeholder: string;
+}
+
+/** A repository's rules, with what they are keyed by, where they are kept, and who they are for. */
 export interface RepoRulesEntry {
   /** `github.com/owner/repo`, so every clone shares them; a path without a GitHub remote. */
   repo: string;
   rules: RepoRules;
   /** The file every repository's rules are kept in. */
   file: string;
+  /** Every reviewer that takes rules, the lead first. */
+  reviewers: RuleSlot[];
 }
 
 export const gitApi = {

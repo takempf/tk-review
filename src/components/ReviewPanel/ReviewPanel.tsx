@@ -1357,6 +1357,19 @@ function Resolution({
   );
 }
 
+/**
+ * Who raised a finding, when specialists reviewed beside the lead reviewer:
+ * the lead, and every specialist whose report it came from.
+ */
+function FindingReviewers({ reviewers }: { reviewers: string[] }) {
+  return (
+    <span className={css.findingNote} title="Who raised this finding">
+      <span className={css.offscreen}>Raised by </span>
+      {reviewers.join(" · ")}
+    </span>
+  );
+}
+
 function Finding({
   finding,
   listed,
@@ -1371,6 +1384,7 @@ function Finding({
 }) {
   const { source, live, key: review } = listed;
   const threadKey = findingThreadKey(finding);
+  const location = <FindingLocation path={finding.path} lines={findingLines(finding)} />;
 
   return (
     <li
@@ -1379,7 +1393,14 @@ function Finding({
       data-search-id={`review:${review}:${threadKey}`}
       tabIndex={-1}
     >
-      <FindingLocation path={finding.path} lines={findingLines(finding)} />
+      {finding.reviewers?.length ? (
+        <div className={css.findingTop}>
+          {location}
+          <FindingReviewers reviewers={finding.reviewers} />
+        </div>
+      ) : (
+        location
+      )}
       <FindingTitle
         icon={severityIcon(finding.severity)}
         label={finding.severity}

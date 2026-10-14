@@ -967,7 +967,7 @@
   color: var(--tone);
 }
 
-/* An earlier finding's file, and what became of it at the far end. */
+/* A finding's file, and at the far end what became of it, or who raised it. */
 .findingTop {
   display: flex;
   gap: var(--space-2);
@@ -984,6 +984,17 @@
 
 .findingStatus {
   color: var(--tone);
+}
+
+/* Read out, not shown: the words that make a terse visible label make sense
+   to a screen reader. */
+.offscreen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* Each severity is a tone, set on the finding: its mark and its title are

@@ -18,6 +18,7 @@ use crate::git;
 use crate::github::{review_comment_id, PrComment, PrContext};
 use crate::rules::RepoRules;
 use crate::runs::{AgentRun, Stop, QUIET_LIMIT, RUN_LIMIT};
+use crate::specialists::{self, Panel};
 
 /// Fewest agentic turns a claude run gets. A small diff can still reach far:
 /// e2e helpers that finish jobs (5 files) took a run 32 turns, about seven
@@ -221,7 +222,7 @@ Your prose may be posted as a GitHub pull request comment, where GitHub turns ce
 
 /// The JSON prompts' addendum to `WRITING_GUIDANCE`: Markdown lives inside
 /// string values, and titles stay plain because the app shows them as labels.
-const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values, with newlines escaped as `\\n` as JSON requires. Titles are plain text: no Markdown in a `title`, and ideally no more than ten words.";
+const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values. Titles are plain text: no Markdown in a `title`, and ideally no more than ten words.";
 
 /// How the review and re-review prompts anchor a finding: one line, a span of
 /// lines, or the whole file.
@@ -257,6 +258,12 @@ pub struct ReviewFinding {
     pub severity: String,
     pub title: String,
     pub body: String,
+    /// Who raised it, when specialists reviewed alongside the lead: the names
+    /// the app shows, such as `Lead` or `Migrations`. The model names them by
+    /// their subagent, and `specialists::credit_reviewers` turns those into
+    /// these. Empty when no specialist took part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewers: Vec<String>,
     /// GitHub's permalink once the finding was sent to the PR. The app keeps
     /// it; the model never writes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,16 +353,27 @@ pub fn review_diff(
     let mut prompt = build_prompt(compare, &patch, pr_context);
     add_repo_instructions(&mut prompt, &patch, root, engine);
     add_review_rules(&mut prompt, &patch, &rules.review);
-    let specialist = add_migration_review(&mut prompt, engine, &patch, &rules.migrations);
+    let generated = git::generated_paths(root, compare, &specialists::changed_paths(&patch));
+    let panel = specialists::add_specialist_reviews(
+        &mut prompt,
+        engine,
+        &patch,
+        compare,
+        &generated,
+        rules,
+    );
     let answer = if engine == "claude" {
+        let schema = panel
+            .as_ref()
+            .map(|panel| specialists::with_reviewers(REVIEW_SCHEMA, panel));
         claude_result_text(
             root,
             &prompt,
             model,
             effort,
             turn_budget(&patch),
-            specialist.as_ref(),
-            Some(REVIEW_SCHEMA),
+            panel.as_ref(),
+            Some(schema.as_deref().unwrap_or(REVIEW_SCHEMA)),
             run,
         )?
     } else {
@@ -373,6 +391,7 @@ pub fn review_diff(
     for finding in &mut result.findings {
         finding.tidy_span();
     }
+    specialists::credit_reviewers(&mut result.findings, panel.as_ref());
     Ok(result)
 }
 
@@ -451,16 +470,27 @@ pub fn re_review_diff(
         build_re_review_prompt(compare, prior_summary, prior_findings, &patch, pr_context);
     add_repo_instructions(&mut prompt, &patch, root, engine);
     add_review_rules(&mut prompt, &patch, &rules.review);
-    let specialist = add_migration_review(&mut prompt, engine, &patch, &rules.migrations);
+    let generated = git::generated_paths(root, compare, &specialists::changed_paths(&patch));
+    let panel = specialists::add_specialist_reviews(
+        &mut prompt,
+        engine,
+        &patch,
+        compare,
+        &generated,
+        rules,
+    );
     let answer = if engine == "claude" {
+        let schema = panel
+            .as_ref()
+            .map(|panel| specialists::with_reviewers(RE_REVIEW_SCHEMA, panel));
         claude_result_text(
             root,
             &prompt,
             model,
             effort,
             turn_budget(&patch),
-            specialist.as_ref(),
-            Some(RE_REVIEW_SCHEMA),
+            panel.as_ref(),
+            Some(schema.as_deref().unwrap_or(RE_REVIEW_SCHEMA)),
             run,
         )?
     } else {
@@ -478,6 +508,7 @@ pub fn re_review_diff(
     for finding in &mut result.findings {
         finding.tidy_span();
     }
+    specialists::credit_reviewers(&mut result.findings, panel.as_ref());
     Ok(result)
 }
 
@@ -930,7 +961,7 @@ The diff:
 /// instructions live, leaving the exact diff ending intact. Located from the
 /// end rather than by searching, since a PR description or the patch itself
 /// can contain the words that introduce the diff.
-fn insert_before_diff(prompt: &mut String, patch: &str, text: &str) {
+pub(crate) fn insert_before_diff(prompt: &mut String, patch: &str, text: &str) {
     let ending = format!("The diff:\n\n{patch}");
     if prompt.ends_with(&ending) {
         prompt.insert_str(prompt.len() - ending.len(), text);
@@ -985,176 +1016,6 @@ fn add_review_rules(prompt: &mut String, patch: &str, rules: &str) {
         patch,
         &format!("The person running this review keeps these rules for this repository. Hold the diff to them as you would to the repository's own conventions, and where they conflict with general advice, they win:\n\n{rules}\n\n"),
     );
-}
-
-/// The migration checklist, followed by the repository's own migration rules
-/// when the person running the review keeps any.
-fn migration_guidance(rules: &str) -> String {
-    let guidance = MIGRATION_GUIDANCE.trim_end();
-    let rules = rules.trim();
-    if rules.is_empty() {
-        return guidance.to_owned();
-    }
-    format!("{guidance}\n\nThis repository's own migration rules, kept by the person running the review. Where they are more specific than the checklist above, they win:\n\n{rules}")
-}
-
-/// What to check in a database migration, drawn from the migrations that have
-/// gone wrong in practice. Kept in its own file because it is long, and shared
-/// by the claude subagent and the codex prompt.
-const MIGRATION_GUIDANCE: &str = include_str!("migration_review.md");
-
-/// The subagent a claude review hands a diff's migrations to.
-const MIGRATION_REVIEWER: &str = "migration-reviewer";
-
-/// Agentic turns the migration reviewer gets: enough to read around the
-/// migrations and look up their tables' history. Its own, not the main run's:
-/// a subagent's turns don't count against the session's `--max-turns`.
-const MIGRATION_REVIEWER_TURNS: usize = 50;
-
-/// The per-file sections of a patch that change database migrations, as
-/// `(path, section)`. A migration is anything under a `migrations`,
-/// `migration`, or `migrate` directory: where Umzug, Knex, Prisma, Django,
-/// Flyway, Alembic, and Rails (`db/migrate`) keep them.
-fn migration_sections(patch: &str) -> Vec<(String, &str)> {
-    let mut starts: Vec<usize> = patch
-        .match_indices("diff --git ")
-        .map(|(at, _)| at)
-        .collect();
-    // Only the ones that open a line: a migration's own text could contain it.
-    starts.retain(|&at| at == 0 || patch.as_bytes()[at - 1] == b'\n');
-    starts.push(patch.len());
-    starts
-        .windows(2)
-        .map(|bounds| &patch[bounds[0]..bounds[1]])
-        .filter_map(|section| {
-            let path = section_path(section)?;
-            path.split('/')
-                .rev()
-                .skip(1)
-                .any(|dir| matches!(dir, "migrations" | "migration" | "migrate"))
-                .then_some((path, section))
-        })
-        .collect()
-}
-
-/// The path one file's section of a patch is about: its compare-side path, or
-/// for a deletion, the path it was deleted from. Read from the header only,
-/// since a removed SQL comment is a hunk line that starts `---` too.
-fn section_path(section: &str) -> Option<String> {
-    let mut path = None;
-    for line in section.lines().skip(1) {
-        if line.starts_with("@@") {
-            break;
-        }
-        let named = line
-            .strip_prefix("+++ ")
-            .filter(|rest| *rest != "/dev/null")
-            .and_then(|rest| rest.trim_matches('"').strip_prefix("b/"))
-            .or_else(|| line.strip_prefix("rename to "))
-            .or_else(|| {
-                path.is_none()
-                    .then(|| {
-                        line.strip_prefix("--- ")?
-                            .trim_matches('"')
-                            .strip_prefix("a/")
-                    })
-                    .flatten()
-            });
-        if let Some(named) = named {
-            path = Some(named.to_owned());
-        }
-    }
-    path
-}
-
-/// A subagent a claude run is told to hand part of its work to, and is held
-/// to: a run that answers without launching it is asked again.
-struct Specialist {
-    /// The `subagent_type` it is launched as, and its key in `agents`.
-    name: &'static str,
-    /// Its definition, as `--agents` JSON.
-    agents: String,
-}
-
-/// Sets a review up to give the migrations a diff changes a specialist's
-/// review: claude is told to hand them to the `migration-reviewer` subagent,
-/// which is returned for the run to define and hold it to; codex, which takes
-/// no subagent definitions, gets the same checklist in its own prompt. `None`
-/// when the diff changes no migrations, or for codex.
-fn add_migration_review(
-    prompt: &mut String,
-    engine: &str,
-    patch: &str,
-    rules: &str,
-) -> Option<Specialist> {
-    let sections = migration_sections(patch);
-    if sections.is_empty() {
-        return None;
-    }
-    let guidance = migration_guidance(rules);
-    let files: String = sections
-        .iter()
-        .map(|(path, _)| format!("- `{path}`\n"))
-        .collect();
-    let stakes = "A bad migration fails in production rather than in tests: it locks a busy table and stalls the app, fails a deploy halfway, breaks the pods still running the old code, or loses data. So migrations get a specialist's review on top of yours.";
-
-    if engine != "claude" {
-        insert_before_diff(
-            prompt,
-            patch,
-            &format!("This diff changes database migrations:\n{files}\n{stakes} Review each one against the checklist below as well as everything else, and report what you find as ordinary findings on the migration's file and line.\n\n{guidance}\n\n"),
-        );
-        return None;
-    }
-
-    insert_before_diff(
-        prompt,
-        patch,
-        &format!(
-            r#"This diff changes database migrations:
-{files}
-{stakes}
-1. In your first response, launch the `{MIGRATION_REVIEWER}` subagent with the Agent tool, in the foreground, alongside your first reads. It already has the migrations' diffs. Tell it in a few sentences what the rest of this diff does with the tables and columns they touch: which code reads or writes them, and whether that code ships in this same change.
-2. Review the rest of the diff yourself as usual, including the code that reads and writes what the migrations change.
-3. Check each finding it reports against the code before you use it. Report the ones that hold as ordinary findings on the migration's file and line, merged with your own so each problem appears once, and drop the ones that don't.
-4. Weigh them in the verdict. A migration that can lock a busy table, fail a deploy, break running code, or lose data must be fixed before this merges.
-
-"#
-        ),
-    );
-    let diffs: String = sections.iter().map(|(_, section)| *section).collect();
-    let definition = serde_json::json!({
-        "description": "Reviews the database migrations in a diff for what fails in production: locks on busy tables, deploys that fail halfway, breakage for pods still running the old code, and data loss. Launch it whenever a diff changes migrations.",
-        "prompt": format!(
-            r#"You are a database specialist reviewing the migrations in a pull request, alongside the main reviewer who launched you. They will tell you what the rest of the change does with the tables these migrations touch. You are read-only: read and search the repository, never change it.
-
-Before judging, read the repository's own rules for migrations (try CLAUDE.md and AGENTS.md at the root and near the migrations directory), and a few of the newest migrations beside these, so you hold these to the repository's conventions. Search the codebase for every table and column they touch, so you know what the running code expects. The working tree may not match the diff's compare side, so the diffs below are the authority on what the migrations say. Make independent reads and searches in the same response rather than one per turn.
-
-Then look for history on each table these migrations touch, and stop as soon as you have enough. Spend a few turns on it at most:
-1. `git log --oneline -S '<table>' -- <the migrations directory>`, for earlier migrations on that table that were reverted, fixed, or followed by a fix.
-2. If Linear or Slack tools turn up through ToolSearch, search them for the table's name alongside words like migration, lock, outage, deadlock, or timeout.
-When a past incident bears on a problem you report, cite it with a link in that entry. Skip any source that's missing or refused.
-
-{guidance}
-
-Report back in plain text, one entry per problem, most serious first:
-- `path:line` or `path:start-end`, in new-file line numbers
-- severity: critical, warning, or suggestion
-- one sentence naming the problem, then why it matters in production and the fix
-
-Only report problems you can point to in the diff or the code. Say "No migration problems found." when there are none. End with one line on anything you could not check from the repository, such as how large a table is in production.
-
-The migrations' diffs:
-
-{diffs}"#,
-        ),
-        "model": "inherit",
-        "maxTurns": MIGRATION_REVIEWER_TURNS,
-    });
-    Some(Specialist {
-        name: MIGRATION_REVIEWER,
-        agents: serde_json::json!({ MIGRATION_REVIEWER: definition }).to_string(),
-    })
 }
 
 /// What became of a finding on the pull request, for the prompts that follow
@@ -1507,8 +1368,8 @@ const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: 
 /// the session is resumed once with its tools taken away and the model asked
 /// to answer from what it has.
 ///
-/// A `specialist` is defined for the run, and a run that answers without
-/// launching it is resumed once and told to.
+/// A `panel`'s specialists are defined for the run, and a run that answers
+/// without launching all of them is resumed once and told to launch the rest.
 ///
 /// When a `schema` is given, every one of these runs answers against it; see
 /// `push_schema`. Replies are plain text and pass `None`.
@@ -1519,17 +1380,17 @@ fn claude_result_text(
     model: Option<&str>,
     effort: Option<&str>,
     turns: usize,
-    specialist: Option<&Specialist>,
+    panel: Option<&Panel>,
     schema: Option<&str>,
     run: &AgentRun,
 ) -> Result<AgentText, GitError> {
     let defaults = ClaudeDefaults::read();
     let model = model.or(defaults.model.as_deref());
     let effort = effort.or(defaults.effort.as_deref());
-    // Through a file rather than argv: the definition carries the migrations'
-    // diffs, which can outgrow the argument-size limit.
-    let agents_file = specialist
-        .map(|specialist| TempFile::write("agents.json", &specialist.agents))
+    // Through a file rather than argv: the definitions carry diffs, which can
+    // outgrow the argument-size limit.
+    let agents_file = panel
+        .map(|panel| TempFile::write("agents.json", &panel.agents))
         .transpose()?;
     let agents_arg = agents_file
         .as_ref()
@@ -1555,21 +1416,21 @@ fn claude_result_text(
     let output = spawn_cli(root, "claude", &args, prompt, GitError::ClaudeNotFound, run)?;
     let stopped = match read_claude_output(&output) {
         ClaudeOutcome::Answer(text) => {
-            let (Some(specialist), Some(agents_arg)) = (specialist, &agents_arg) else {
+            let (Some(panel), Some(agents_arg)) = (panel, &agents_arg) else {
                 return Ok(AgentText::complete(text));
             };
-            if launched_subagent(&output, specialist.name) {
+            let launched = launched_subagents(&output);
+            let skipped: Vec<&str> = panel
+                .names
+                .iter()
+                .copied()
+                .filter(|name| !launched.iter().any(|launched| launched == name))
+                .collect();
+            if skipped.is_empty() {
                 return Ok(AgentText::complete(text));
             }
-            let insisted = insist_on_specialist(
-                root,
-                &output,
-                specialist.name,
-                agents_arg,
-                model,
-                effort,
-                schema,
-                run,
+            let insisted = insist_on_specialists(
+                root, &output, &skipped, agents_arg, model, effort, schema, run,
             )?;
             return Ok(AgentText::complete(insisted.unwrap_or(text)));
         }
@@ -1628,19 +1489,19 @@ fn claude_result_text(
     ))
 }
 
-/// Turns a run gets when it is resumed to launch a specialist it skipped:
-/// enough to launch it, check what it reports, and answer again.
-const SPECIALIST_RETRY_TURNS: &str = "12";
+/// Turns a run gets when it is resumed to launch specialists it skipped:
+/// enough to launch them together, check what they report, and answer again.
+const SPECIALIST_RETRY_TURNS: &str = "16";
 
-/// Resumes a run that answered without launching the specialist it was told
-/// to, and has it launch it now and answer again. `None` when that produces
-/// no answer, so the caller keeps the one it has: a review without the
-/// specialist beats no review.
+/// Resumes a run that answered without launching every specialist it was
+/// told to, and has it launch the ones it `skipped` now and answer again.
+/// `None` when that produces no answer, so the caller keeps the one it has: a
+/// review without some specialists beats no review.
 #[allow(clippy::too_many_arguments)]
-fn insist_on_specialist(
+fn insist_on_specialists(
     root: &Path,
     output: &Output,
-    name: &str,
+    skipped: &[&str],
     agents_arg: &str,
     model: Option<&str>,
     effort: Option<&str>,
@@ -1652,8 +1513,13 @@ fn insist_on_specialist(
     else {
         return Ok(None);
     };
+    let names = skipped
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let prompt = format!(
-        "You answered without launching the `{name}` subagent, which this review requires. Launch it now with the Agent tool, check what it reports against the code, and then give your final answer again, complete and in exactly the format the first message asked for, with the findings that hold merged in."
+        "You answered without launching these subagents, which this review requires: {names}. Launch them now with the Agent tool, all in one response, check what they report against the code, and then give your final answer again, complete and in exactly the format the first message asked for, with the findings that hold merged in and each finding's `reviewers` naming everyone who raised it."
     );
     let mut args = vec![
         "-p",
@@ -1687,24 +1553,24 @@ fn insist_on_specialist(
     }
 }
 
-/// Whether a claude run's event stream shows it launching the subagent
-/// `name`. The Agent tool is still called `Task` in older CLIs.
-fn launched_subagent(output: &Output, name: &str) -> bool {
+/// The subagents a claude run's event stream shows it launching, by their
+/// `subagent_type`. The Agent tool is still called `Task` in older CLIs.
+fn launched_subagents(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|event| event["type"] == "assistant")
-        .any(|event| {
+        .flat_map(|event| {
             event["message"]["content"]
                 .as_array()
-                .is_some_and(|blocks| {
-                    blocks.iter().any(|block| {
-                        block["type"] == "tool_use"
-                            && matches!(block["name"].as_str(), Some("Agent" | "Task"))
-                            && block["input"]["subagent_type"] == name
-                    })
-                })
+                .cloned()
+                .unwrap_or_default()
         })
+        .filter(|block| {
+            block["type"] == "tool_use" && matches!(block["name"].as_str(), Some("Agent" | "Task"))
+        })
+        .filter_map(|block| block["input"]["subagent_type"].as_str().map(str::to_owned))
+        .collect()
 }
 
 /// A file in the temp directory, removed when dropped.
@@ -2222,6 +2088,7 @@ mod tests {
             severity: "nit".into(),
             title: "t".into(),
             body: "b".into(),
+            reviewers: Vec::new(),
             posted_url: None,
         };
         let tidied = |mut finding: ReviewFinding| {
@@ -2286,6 +2153,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            reviewers: Vec::new(),
             posted_url: None,
         };
         for prompt in [
@@ -2434,6 +2302,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            reviewers: Vec::new(),
             posted_url: None,
         };
         let thread = vec![
@@ -2476,6 +2345,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            reviewers: Vec::new(),
             posted_url: None,
         };
         let json_prompts = [
@@ -2571,97 +2441,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_the_migrations_a_patch_changes_by_where_they_live() {
-        let patch = migration_patch();
-        let paths: Vec<String> = migration_sections(&patch)
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-        assert_eq!(
-            paths,
-            [
-                "apps/api/src/migrations/0002_add_owner.sql",
-                "db/migrate/0001_old.rb",
-                "migrations/b.sql",
-            ]
-        );
-        assert!(migration_sections(&patch_of(3)).is_empty());
-        // A file named like a migrations directory is not in one.
-        assert!(migration_sections("diff --git a/migrations b/migrations\n--- a/migrations\n+++ b/migrations\n@@ -1 +1 @@\n-a\n+b\n").is_empty());
-    }
-
-    /// The `--agents` definition the review hands claude, parsed.
-    fn reviewer_definition(specialist: &Specialist) -> serde_json::Value {
-        assert_eq!(specialist.name, MIGRATION_REVIEWER);
-        let agents: serde_json::Value =
-            serde_json::from_str(&specialist.agents).expect("agents JSON");
-        agents[MIGRATION_REVIEWER].clone()
-    }
-
-    #[test]
-    fn a_claude_review_of_migrations_hands_them_to_the_migration_reviewer() {
-        let patch = migration_patch();
-        let mut prompt = build_prompt(Some("feature"), &patch, Some(&sample_pr()));
-        let specialist =
-            add_migration_review(&mut prompt, "claude", &patch, "").expect("a specialist");
-
-        // The main reviewer is told to launch it, about which files, and to
-        // fold what it finds into its own findings.
-        assert!(
-            prompt.contains("launch the `migration-reviewer` subagent"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("- `apps/api/src/migrations/0002_add_owner.sql`"),
-            "{prompt}"
-        );
-        assert!(prompt.contains("Weigh them in the verdict"), "{prompt}");
-        assert!(!prompt.contains(MIGRATION_GUIDANCE.trim_end()), "{prompt}");
-        // Framing, so ahead of the diff and after the PR's own account.
-        assert!(prompt.ends_with(&format!("The diff:\n\n{patch}")));
-        assert!(
-            prompt.find("launch the").unwrap() > prompt.find("Avoid duplicate widgets").unwrap()
-        );
-
-        // The subagent carries the checklist and the migrations' diffs, but
-        // not the rest of the diff, and can only read.
-        let definition = reviewer_definition(&specialist);
-        let subagent_prompt = definition["prompt"].as_str().expect("prompt");
-        assert!(subagent_prompt.contains(MIGRATION_GUIDANCE.trim_end()));
-        assert!(subagent_prompt.contains("+ALTER TABLE drawing ADD COLUMN owner_id uuid;"));
-        assert!(subagent_prompt.contains("rename to migrations/b.sql"));
-        assert!(!subagent_prompt.contains("const owner"));
-        // It works with the run's own tools, which the run holds to reads.
-        assert!(definition["tools"].is_null());
-        assert_eq!(definition["maxTurns"], MIGRATION_REVIEWER_TURNS);
-        assert!(definition["description"]
-            .as_str()
-            .is_some_and(|text| !text.is_empty()));
-    }
-
-    #[test]
-    fn a_codex_review_of_migrations_gets_the_checklist_in_its_prompt() {
-        let patch = migration_patch();
-        let mut prompt = build_re_review_prompt(Some("feature"), "Summary.", &[], &patch, None);
-        assert!(add_migration_review(&mut prompt, "codex", &patch, "").is_none());
-        assert!(prompt.contains(MIGRATION_GUIDANCE.trim_end()), "{prompt}");
-        assert!(prompt.contains("- `db/migrate/0001_old.rb`"), "{prompt}");
-        assert!(!prompt.contains("subagent"), "{prompt}");
-        assert!(prompt.ends_with(&format!("The diff:\n\n{patch}")));
-    }
-
-    #[test]
-    fn a_review_without_migrations_is_left_alone() {
-        let patch = patch_of(2);
-        let mut prompt = build_prompt(None, &patch, None);
-        let before = prompt.clone();
-        for engine in ["claude", "codex"] {
-            assert!(add_migration_review(&mut prompt, engine, &patch, "").is_none());
-            assert_eq!(prompt, before);
-        }
-    }
-
-    #[test]
     fn the_repositorys_review_rules_frame_the_diff() {
         let patch = patch_of(1);
         let mut prompt = build_prompt(None, &patch, None);
@@ -2682,38 +2461,22 @@ mod tests {
     }
 
     #[test]
-    fn the_repositorys_migration_rules_follow_the_checklist_for_either_engine() {
-        let patch = migration_patch();
-        let rules = "The orders table is huge: always set a lock timeout.";
-
-        let mut prompt = build_prompt(None, &patch, None);
-        let specialist =
-            add_migration_review(&mut prompt, "claude", &patch, rules).expect("a specialist");
-        let definition = reviewer_definition(&specialist);
-        let subagent_prompt = definition["prompt"].as_str().expect("prompt");
-        let checklist = subagent_prompt
-            .find(MIGRATION_GUIDANCE.trim_end())
-            .expect("checklist");
-        assert!(subagent_prompt.find(rules).expect("rules") > checklist);
-        // The main reviewer's prompt stays short: the rules go to the specialist.
-        assert!(!prompt.contains(rules), "{prompt}");
-
-        let mut prompt = build_prompt(None, &patch, None);
-        add_migration_review(&mut prompt, "codex", &patch, rules);
-        assert!(prompt.contains(&migration_guidance(rules)), "{prompt}");
-
-        assert_eq!(migration_guidance(" "), MIGRATION_GUIDANCE.trim_end());
-    }
-
-    #[test]
     fn framing_lands_before_the_diff_even_when_the_pr_quotes_the_marker() {
         let mut pr = sample_pr();
         pr.body = "Before.\n\nThe diff:\n\nAfter.".into();
         let patch = migration_patch();
         let mut prompt = build_prompt(None, &patch, Some(&pr));
-        add_migration_review(&mut prompt, "claude", &patch, "");
+        let panel = specialists::add_specialist_reviews(
+            &mut prompt,
+            "claude",
+            &patch,
+            None,
+            &std::collections::HashSet::new(),
+            &RepoRules::default(),
+        );
+        assert!(panel.is_some());
         let note = prompt
-            .find("This diff changes database migrations")
+            .find("Parts of this diff get a specialist's review")
             .expect("note");
         assert!(note > prompt.find("After.").expect("PR body"), "{prompt}");
         assert!(prompt.ends_with(&format!("The diff:\n\n{patch}")));
@@ -2859,19 +2622,15 @@ mod tests {
             claude_output(&[events, &[envelope("{}")]].concat().join("\n"), true)
         };
 
-        assert!(launched_subagent(
-            &stream(&[launch("Agent", MIGRATION_REVIEWER)]),
-            MIGRATION_REVIEWER
-        ));
-        assert!(launched_subagent(
-            &stream(&[launch("Task", MIGRATION_REVIEWER)]),
-            MIGRATION_REVIEWER
-        ));
-        assert!(!launched_subagent(
-            &stream(&[launch("Agent", "Explore")]),
-            MIGRATION_REVIEWER
-        ));
-        assert!(!launched_subagent(&stream(&[]), MIGRATION_REVIEWER));
+        assert_eq!(
+            launched_subagents(&stream(&[
+                launch("Agent", "migration-reviewer"),
+                launch("Task", "security-reviewer"),
+                launch("Agent", "Explore"),
+            ])),
+            ["migration-reviewer", "security-reviewer", "Explore"]
+        );
+        assert!(launched_subagents(&stream(&[])).is_empty());
     }
 
     #[test]
@@ -2979,6 +2738,7 @@ mod tests {
                 severity: "warning".into(),
                 title: "Off-by-one in loop bound.".into(),
                 body: "The loop misses the last element.".into(),
+                reviewers: Vec::new(),
                 posted_url: None,
             },
             ReviewFinding {
@@ -2988,6 +2748,7 @@ mod tests {
                 severity: "nit".into(),
                 title: "Stale comment.".into(),
                 body: "The comment describes removed behavior.".into(),
+                reviewers: Vec::new(),
                 posted_url: None,
             },
         ];
@@ -3070,6 +2831,7 @@ mod tests {
             severity: "warning".into(),
             title: "Off-by-one in loop bound.".into(),
             body: "The loop misses the last element.".into(),
+            reviewers: Vec::new(),
             posted_url: posted_url.map(str::to_owned),
         };
         let prompt = build_re_review_prompt(
