@@ -23,14 +23,11 @@
   border: 1px solid var(--border);
 }
 
+/* It doesn't turn as the popover opens: the trigger is hidden then, being
+   the popup. */
 .chevron {
   flex: none;
   color: var(--text-dim);
-  transition: transform var(--tk-duration-2) var(--tk-ease-out);
-}
-
-[data-popup-open] > .chevron {
-  transform: rotate(180deg);
 }
 
 .popup {
@@ -42,8 +39,8 @@
   padding: 0;
 }
 
-/* The body scrolls, not the popup: the popup's frame is drawn behind it
-   (the design system's grow-from-trigger), and would scroll away with it.
+/* The body scrolls, not the popup: the design system's morph carries the
+   popup's frame to and from the trigger, and the frame has to stay put.
    The popover's own padding and gap move in here, so the content scrolls
    right to the frame's edge. */
 .body {

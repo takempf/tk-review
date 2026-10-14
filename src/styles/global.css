@@ -155,27 +155,19 @@ body {
 
 /*
  * Popups open and close quicker than the theme's morphs, which are paced for
- * things crossing the window: both the frame growing out of the trigger (on
- * the popup) and the label carried between them (a morph typed `open` or
- * `close`, so on the root).
+ * things crossing the window. A popup is carried to and from its trigger by a
+ * morph typed `open` or `close`, and the design system times every part of it
+ * (the frame, its fill and corners, the parts riding above it, their fades)
+ * from the root's `--tk-duration-morph`, so that is where it is set, for the
+ * length of the morph. A dialog does cross the window, out of a button into
+ * the middle of it, so it keeps the theme's pace.
  */
 :root {
   --popup-duration: 180ms;
 }
 
-.tk-popup {
+:root:active-view-transition-type(open, close):not(:has(.tk-dialog)) {
   --tk-duration-morph: var(--popup-duration);
-}
-
-:root:active-view-transition-type(open, close) {
-  &::view-transition-group(*) {
-    animation-duration: var(--popup-duration);
-  }
-
-  &::view-transition-old(*),
-  &::view-transition-new(*) {
-    animation-duration: calc(var(--popup-duration) * 0.6);
-  }
 }
 
 /*

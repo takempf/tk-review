@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("natural shared-container playback keeps scenery paused through both flights", async ({
+test("natural container playback keeps scenery paused through both flights", async ({
   page,
 }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -91,7 +91,7 @@ test("popup contents travel inside the container during natural playback", async
 }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/dev-harness/");
-  await page.addStyleTag({ content: ":root { --tk-duration-shared: 2000ms; }" });
+  await page.addStyleTag({ content: ":root { --tk-duration-morph: 2000ms; }" });
   const trigger = page.getByRole("button", { name: "Search this view", exact: true });
   const name = await trigger.evaluate((node) =>
     (node as HTMLElement).style.getPropertyValue("--tk-morph-name"),

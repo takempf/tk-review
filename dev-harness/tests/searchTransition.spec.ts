@@ -122,8 +122,9 @@ for (const zoom of [1, 0.8, 1.25]) {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await captureFlights(page);
     await page.goto("/dev-harness/");
+    // Slowed, on a symmetric curve so that half the time is half the way.
     await page.addStyleTag({
-      content: `:root { --tk-duration-shared: 1200ms; } body { zoom: ${zoom}; }`,
+      content: `:root { --tk-duration-morph: 1200ms; --tk-ease-morph: cubic-bezier(0.4, 0, 0.6, 1); } body { zoom: ${zoom}; }`,
     });
     const trigger = page.getByRole("button", {
       name: "Search this view",
@@ -131,7 +132,7 @@ for (const zoom of [1, 0.8, 1.25]) {
       includeHidden: true,
     });
     const source = await trigger.boundingBox();
-    const sourceIcon = await trigger.locator('[data-tk-shared-side="trigger"]').boundingBox();
+    const sourceIcon = await trigger.locator('[data-tk-morph="icon"]').boundingBox();
     const name = await trigger.evaluate((node) =>
       (node as HTMLElement).style.getPropertyValue("--tk-morph-name"),
     );
@@ -141,16 +142,15 @@ for (const zoom of [1, 0.8, 1.25]) {
     await ready(page, 0);
     const popup = page.getByRole("dialog", { name: "Find in this view" });
     const destination = await popup.boundingBox();
-    const destinationIcon = await popup.locator('[data-tk-shared-side="popup"]').boundingBox();
+    const destinationIcon = await popup.locator('[data-tk-morph="icon"]').boundingBox();
     if (!destination || !destinationIcon) throw new Error("Missing popup boxes");
-    await expect(popup).toHaveAttribute("data-tk-morph", "box");
+    await expect(popup).toHaveAttribute("data-tk-morph", "container");
     expect(
       await popup.evaluate((node) =>
         (node as HTMLElement).style.getPropertyValue("--tk-morph-name"),
       ),
     ).toBe(name);
     await expect(trigger).not.toHaveAttribute("data-tk-morph");
-    await expect(popup).not.toHaveAttribute("data-tk-grow");
     await expect(popup.locator(".tk-dialog-title, .tk-dialog-description")).toHaveCount(0);
     await expect(popup.getByRole("combobox", { name: "Search text" })).toBeFocused();
     const opening = [];

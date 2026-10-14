@@ -146,7 +146,7 @@ export function SearchButton({ id }: { id: string }) {
         render={<Button variant="ghost" size="sm" />}
         aria-label="Search this view"
       >
-        <Dialog.SharedElement name="search" side="trigger">
+        <Dialog.SharedElement name="search" side="trigger" fit="icon">
           <Icon name="search" />
         </Dialog.SharedElement>
         <Kbd>⌘F</Kbd>
@@ -254,7 +254,6 @@ export function SearchProvider({
     <SearchContext value={context}>
       {children}
       <Dialog.Root
-        transition="shared"
         actionsRef={dialogActions}
         triggerId={triggerId}
         onOpenChange={changeOpen}
@@ -271,7 +270,7 @@ export function SearchProvider({
           finalFocus={() => (navigating.current ? false : returnFocus.current)}
         >
           <Stack direction="row" align="center" gap={3}>
-            <Dialog.SharedElement name="search" side="popup">
+            <Dialog.SharedElement name="search" side="popup" fit="icon">
               <Icon name="search" className={css.searchIcon} />
             </Dialog.SharedElement>
             <Dialog.Content className={css.searchField}>
