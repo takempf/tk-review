@@ -489,24 +489,6 @@ export interface TabState {
 }
 
 /**
- * Whether a tab stays open once it is left: an agent is still at work in it,
- * or finished out of sight and hasn't been looked at since. Otherwise it has
- * done its job, and leaving it closes it.
- */
-export function keepsTab(state: TabState): boolean {
-  return (
-    Object.keys(state.agentRuns).length > 0 ||
-    state.reviewing ||
-    state.reReviewing ||
-    state.explaining ||
-    state.replyingTo != null ||
-    state.postingComment ||
-    Object.values(state.commentDrafts).some((draft) => draft.body.trim()) ||
-    state.unseen
-  );
-}
-
-/**
  * The commit a review of the comparison reads: the compare ref's, or for the
  * working tree, the commit under it — the newest listed, or the merge base
  * when nothing is, which is then HEAD itself.

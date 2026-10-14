@@ -13,7 +13,6 @@ import { claimUnscopedStorage } from "./account";
 import { forgetRepo, rememberRepo } from "./history";
 import {
   createTabStore,
-  keepsTab,
   type PrPreview,
   prComparison,
   type TabHandle,
@@ -77,19 +76,10 @@ interface AppState {
   loadingRepo: boolean;
   /** Shown on the home screen: a repository or pull request that failed to open. */
   error: AppError | null;
-  /**
-   * In the order they were opened. A tab lasts until it is closed, or left with
-   * nothing more to show (`keepsTab`).
-   */
+  /** In the order they were opened. A tab lasts until it is closed. */
   tabs: ReviewTab[];
   /** The tab the review shows — on screen, or waiting behind the list. */
   activeTabId: string | null;
-  /**
-   * The `morphKey` of a tab that closed on the way back to the list, while
-   * that change settles: its row on the list takes the number and title its
-   * tab gives up.
-   */
-  returning: string | null;
   /**
    * What moves in the screen change under way, set just before the change
    * captures the old screen, so only those parts are named for it. `null`
@@ -113,9 +103,9 @@ interface AppState {
   openRepo: (path: string) => Promise<void>;
   restoreLastRepo: () => Promise<void>;
   closeRepo: () => void;
-  /** Back to the pull-request list. The tab left closes unless `keepsTab`. */
+  /** Back to the pull-request list. */
   goHome: (options?: NavigateOptions) => void;
-  /** Into a tab's review, loading its diff if it hasn't been. The tab left closes unless `keepsTab`. */
+  /** Into a tab's review, loading its diff if it hasn't been. */
   showTab: (id: string, options?: NavigateOptions) => Promise<void>;
   /** Back into the tab last shown. False when there is none left to show. */
   showReview: (options?: NavigateOptions) => Promise<boolean>;
@@ -197,36 +187,17 @@ export const useAppStore = create<AppState>((set, get) => {
    * holds the new state.
    */
   function transition(patch: Partial<AppState>, { animate = true }: NavigateOptions = {}) {
-    const left = shownTab(get());
-    let retired: ReviewTab | null = null;
     const change = animate ? plannedChange(patch) : null;
     if (change) flushSync(() => set({ screenChange: change }));
     const update = () => {
       set(patch);
       // Looked at now: its status loses the "finished while away" dot in the
       // same frame its tab becomes the one on screen.
-      const shown = shownTab(get());
-      shown?.store.getState().markSeen();
-      // The tab just left, with nothing still coming, has done its job: it
-      // closes rather than wait in the tab bar.
-      if (!left || left.id === shown?.id || !get().tabs.includes(left)) return;
-      if (keepsTab(left.store.getState())) return;
-      retired = left;
-      closing.set(left.id, left);
-      rememberClosed(left);
-      const { tabs, activeTabId, view } = get();
-      set({
-        tabs: tabs.filter((tab) => tab !== left),
-        activeTabId: activeTabId === left.id ? null : activeTabId,
-        returning: view === "home" ? left.morphKey : null,
-      });
+      shownTab(get())?.store.getState().markSeen();
     };
     const settle = async () => {
       await (screenSettling() ?? Promise.resolve());
       if (change && get().screenChange === change) set({ screenChange: null });
-      if (!retired) return;
-      closing.delete(retired.id);
-      if (get().returning === retired.morphKey) set({ returning: null });
     };
     if (!animate) {
       update();
@@ -241,31 +212,22 @@ export const useAppStore = create<AppState>((set, get) => {
   /**
    * What moves in the screen change `patch` makes, or `null` when nothing does
    * and the screens only crossfade. A tab closes by being taken out of the
-   * list, or by being left with nothing to keep it (`keepsTab`); a PR opened
-   * from the list takes its number and title from its row, and one left for
-   * the list hands them back.
+   * list; a PR opened from the list takes its number and title from its row.
    */
   function plannedChange(patch: Partial<AppState>): ScreenChange | null {
     const before = get();
     const after = { ...before, ...patch };
-    const left = shownTab(before);
     const shown = shownTab(after);
     const removed = before.tabs.find((tab) => !after.tabs.includes(tab)) ?? null;
     const added = after.tabs.some((tab) => !before.tabs.includes(tab));
-    const retires =
-      left != null &&
-      left.id !== shown?.id &&
-      after.tabs.includes(left) &&
-      !keepsTab(left.store.getState());
-    const home = after.view === "home";
-    const heading = (before.view === "home") !== home;
-    if (!added && !removed && !retires && !heading) return null;
+    const heading = (before.view === "home") !== (after.view === "home");
+    if (!added && !removed && !heading) return null;
     const opened = before.view === "home" && shown != null && !before.tabs.includes(shown);
     return {
-      shifting: added || removed != null || retires,
+      shifting: added || removed != null,
       heading,
-      carrying: opened ? shown.morphKey : retires && home ? left.morphKey : null,
-      folding: removed?.id ?? (retires && !home ? left.id : null),
+      carrying: opened ? shown.morphKey : null,
+      folding: removed?.id ?? null,
     };
   }
 
@@ -397,7 +359,6 @@ export const useAppStore = create<AppState>((set, get) => {
     error: null,
     tabs: [],
     activeTabId: null,
-    returning: null,
     screenChange: null,
     layout: "split",
     fileNotes: readFileNotes(),

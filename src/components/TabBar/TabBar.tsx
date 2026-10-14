@@ -86,9 +86,8 @@ function Tab({
 
 /**
  * The title bar's second row: in a review, the way back to the list, and every
- * open tab, the one on screen marked as such. A tab stays while it is shown,
- * while an agent is at work in it, or once one finished out of sight; a tab
- * left with none of those closes (`keepsTab`).
+ * open tab, the one on screen marked as such. A tab stays until its close
+ * button (or a middle click) closes it.
  *
  * Each tab shows its number, title and status. Opening a PR carries its number
  * and title up from its row on the list into its tab. The back button's label
