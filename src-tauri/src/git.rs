@@ -290,12 +290,18 @@ static PR_REFS: Mutex<()> = Mutex::new(());
 /// The `pull/N/head` ref belongs to the base repository, including for fork
 /// PRs, which avoids needing to add an untrusted fork as a remote.
 ///
+/// `head` is the commit GitHub reports as the PR's head. GitHub moves
+/// `pull/N/head` on its own schedule, and after a force-push it can stay on the
+/// replaced commit for days; comments and reviews anchor to `head`, so when the
+/// ref disagrees, that commit is fetched by name instead.
+///
 /// `keep` names the other PRs whose refs are still in use — those open in
 /// tabs — so fetching this one doesn't pull their diffs out from under them.
 pub fn fetch_pr_head(
     root: &Path,
     remote: &str,
     number: u64,
+    head: &str,
     base_ref: &str,
     keep: &[u64],
 ) -> Result<(String, String), GitError> {
@@ -310,14 +316,21 @@ pub fn fetch_pr_head(
     let pull_refspec = format!("+pull/{number}/head:{compare_ref}");
     let base_refspec = format!("+refs/heads/{base_ref}:refs/remotes/{remote}/{base_ref}");
     run_git(root, &["fetch", remote, &pull_refspec, &base_refspec])?;
-    let head_sha = run_git_text(
-        root,
-        &[
-            "rev-parse",
-            "--verify",
-            &format!("{compare_ref}^{{commit}}"),
-        ],
-    )?;
+    let fetched_commit = || {
+        run_git_text(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{compare_ref}^{{commit}}"),
+            ],
+        )
+    };
+    let mut head_sha = fetched_commit()?;
+    if !head.is_empty() && head_sha != head {
+        run_git(root, &["fetch", remote, &format!("+{head}:{compare_ref}")])?;
+        head_sha = fetched_commit()?;
+    }
     if head_sha.is_empty() {
         return Err(GitError::Command(
             "GitHub did not return a pull-request head commit.".into(),
@@ -1755,10 +1768,48 @@ mod tests {
         repo.git(&["push", "origin", "HEAD:refs/pull/7/head"]);
 
         let (compare_ref, head) =
-            fetch_pr_head(repo.path(), "origin", 7, "main", &[]).expect("fetch PR");
+            fetch_pr_head(repo.path(), "origin", 7, &expected, "main", &[]).expect("fetch PR");
         assert_eq!(compare_ref, "tk-review/pr/7");
         assert_eq!(head, expected);
         assert_eq!(repo.git(&["rev-parse", "tk-review/pr/7"]), expected);
+    }
+
+    #[test]
+    fn fetches_the_reported_head_when_the_pull_ref_is_stale() {
+        let repo = TestRepo::new();
+        repo.write("shared.txt", "base\n");
+        repo.commit("base");
+
+        let remote = tempfile::tempdir().expect("remote dir");
+        let remote_path = remote.path().display().to_string();
+        let output = Command::new("git")
+            .args(["init", "--bare", &remote_path])
+            .output()
+            .expect("init bare remote");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        repo.git(&["remote", "add", "origin", &remote_path]);
+        repo.git(&["push", "origin", "main"]);
+
+        // The author amends and force-pushes, and GitHub's `pull/7/head` stays
+        // on the commit the amend replaced.
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.write("feature.txt", "first draft\n");
+        repo.commit("feature");
+        repo.git(&["push", "origin", "HEAD:refs/pull/7/head"]);
+        repo.write("feature.txt", "amended\n");
+        repo.git(&["add", "feature.txt"]);
+        repo.git(&["commit", "-q", "--amend", "--no-edit"]);
+        let amended = repo.git(&["rev-parse", "HEAD"]);
+        repo.git(&["push", "-f", "origin", "feature"]);
+
+        let (_, head) =
+            fetch_pr_head(repo.path(), "origin", 7, &amended, "main", &[]).expect("fetch PR");
+        assert_eq!(head, amended);
+        assert_eq!(repo.git(&["rev-parse", "tk-review/pr/7"]), amended);
     }
 
     #[test]
@@ -1780,20 +1831,22 @@ mod tests {
         );
         repo.git(&["remote", "add", "origin", &remote_path]);
         repo.git(&["push", "origin", "main"]);
+        let mut heads = HashMap::new();
         for number in [7, 8, 9] {
             repo.git(&["checkout", "-q", "-B", &format!("pr-{number}"), "main"]);
             repo.write(&format!("pr-{number}.txt"), "review me\n");
             repo.commit(&format!("pr {number}"));
             repo.git(&["push", "origin", &format!("HEAD:refs/pull/{number}/head")]);
+            heads.insert(number, repo.git(&["rev-parse", "HEAD"]));
         }
 
-        fetch_pr_head(repo.path(), "origin", 7, "main", &[]).expect("fetch 7");
-        fetch_pr_head(repo.path(), "origin", 8, "main", &[7]).expect("fetch 8");
+        fetch_pr_head(repo.path(), "origin", 7, &heads[&7], "main", &[]).expect("fetch 7");
+        fetch_pr_head(repo.path(), "origin", 8, &heads[&8], "main", &[7]).expect("fetch 8");
         let refs = repo.git(&["for-each-ref", "--format=%(refname)", "refs/tk-review/pr"]);
         assert_eq!(refs, "refs/tk-review/pr/7\nrefs/tk-review/pr/8");
 
         // 7's tab closed: fetching 9 lets its ref go.
-        fetch_pr_head(repo.path(), "origin", 9, "main", &[8]).expect("fetch 9");
+        fetch_pr_head(repo.path(), "origin", 9, &heads[&9], "main", &[8]).expect("fetch 9");
         let refs = repo.git(&["for-each-ref", "--format=%(refname)", "refs/tk-review/pr"]);
         assert_eq!(refs, "refs/tk-review/pr/8\nrefs/tk-review/pr/9");
     }

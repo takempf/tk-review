@@ -513,6 +513,7 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
         root,
         &base_remote,
         reference.number,
+        &pr.head_ref_oid,
         &pr.base_ref_name,
         keep,
     )?;
