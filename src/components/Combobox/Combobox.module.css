@@ -28,8 +28,10 @@
   border-color: var(--tk-border-strong);
 }
 
-.inputGroup:focus-within {
-  border-color: var(--tk-focus-color);
+/* The design system's one focus ring, round the whole field while typing. */
+.inputGroup:has(.input:focus-visible) {
+  outline: var(--tk-focus-width) solid var(--tk-focus-color);
+  outline-offset: var(--tk-focus-offset);
 }
 
 .input {
