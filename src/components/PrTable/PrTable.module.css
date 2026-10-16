@@ -152,6 +152,15 @@
   border-color: color-mix(in oklab, var(--label) 50%, transparent);
 }
 
+/* Waiting on a reviewer, so it asks for attention, in the theme's pink: the
+   coral orange is the section labels', and red is changes requested. Set the
+   way the design system's own tones are. */
+.awaiting {
+  color: var(--tk-pink);
+  background: color-mix(in oklab, var(--tk-pink) 14%, var(--tk-surface));
+  border-color: color-mix(in oklab, var(--tk-pink) 50%, transparent);
+}
+
 /* Titles are what the list is read by: set well above the table's text. */
 .titleCell {
   display: flex;

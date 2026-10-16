@@ -191,7 +191,7 @@ function StatusCell({ pr }: { pr: PrSummary | null }) {
     case "changesRequested":
       return <Badge tone="danger">{label}</Badge>;
     case "reviewRequired":
-      return <span className={css.muted}>{label}</span>;
+      return <Badge className={css.awaiting}>{label}</Badge>;
     case "noReview":
       return <Empty />;
   }
