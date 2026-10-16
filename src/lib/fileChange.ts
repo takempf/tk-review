@@ -1,14 +1,14 @@
 import type { ChangeStatus, FileChange } from "../ipc/git";
 
-export const STATUS_META: Record<ChangeStatus, { letter: string; label: string }> = {
-  added: { letter: "A", label: "Added" },
-  modified: { letter: "M", label: "Modified" },
-  deleted: { letter: "D", label: "Deleted" },
-  renamed: { letter: "R", label: "Renamed" },
-  copied: { letter: "C", label: "Copied" },
-  typeChanged: { letter: "T", label: "Type changed" },
-  unmerged: { letter: "U", label: "Unmerged" },
-  unknown: { letter: "?", label: "Unknown" },
+export const STATUS_META: Record<ChangeStatus, { label: string }> = {
+  added: { label: "Added" },
+  modified: { label: "Modified" },
+  deleted: { label: "Deleted" },
+  renamed: { label: "Renamed" },
+  copied: { label: "Copied" },
+  typeChanged: { label: "Type changed" },
+  unmerged: { label: "Unmerged" },
+  unknown: { label: "Unknown" },
 };
 
 /** Splits a path so the directory can be dimmed and the filename emphasised. */

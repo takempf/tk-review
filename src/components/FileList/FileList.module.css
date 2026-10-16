@@ -131,46 +131,6 @@
   border: none;
 }
 
-.badge {
-  flex: none;
-  width: 16px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-  border-radius: 3px;
-}
-
-.badgeAdded {
-  composes: badge;
-  color: var(--added);
-  background: var(--added-bg);
-}
-
-.badgeModified {
-  composes: badge;
-  color: var(--modified);
-  background: var(--modified-bg);
-}
-
-.badgeDeleted {
-  composes: badge;
-  color: var(--deleted);
-  background: var(--deleted-bg);
-}
-
-.badgeRenamed {
-  composes: badge;
-  color: var(--renamed);
-  background: var(--renamed-bg);
-}
-
-.badgeOther {
-  composes: badge;
-  color: var(--text-dim);
-  background: var(--bg-sunken);
-}
-
 .dir {
   display: flex;
   gap: var(--space-1);
@@ -223,6 +183,13 @@
   color: var(--text-faint);
 }
 
+.icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+}
+
+/* The name takes the colour of what the diff did to the file. */
 .name {
   flex: 1;
   min-width: 0;
@@ -232,9 +199,28 @@
   white-space: nowrap;
 }
 
-.nameViewed {
-  composes: name;
+.name[data-viewed] {
   opacity: 0.5;
+}
+
+.nameAdded {
+  composes: name;
+  color: var(--added);
+}
+
+.nameModified {
+  composes: name;
+  color: var(--modified);
+}
+
+.nameDeleted {
+  composes: name;
+  color: var(--deleted);
+}
+
+.nameRenamed {
+  composes: name;
+  color: var(--renamed);
 }
 
 .generated {

@@ -2,23 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { Checkbox } from "tk-design-system";
 import type { ChangeStatus, FileChange } from "../../ipc/git";
 import type { TreeNode } from "../../lib/fileChange";
-import { buildFileTree, describeChange, STATUS_META, splitPath } from "../../lib/fileChange";
+import { buildFileTree, describeChange, splitPath } from "../../lib/fileChange";
 import { useTab } from "../../store/tabStore";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
+import { FileIcon } from "./FileIcon";
 import css from "./FileList.module.css";
 
 // `satisfies` keeps every status accounted for while allowing the class values,
 // which CSS-module typings widen to `string | undefined`, to infer.
-const BADGE_CLASS = {
-  added: css.badgeAdded,
-  modified: css.badgeModified,
-  deleted: css.badgeDeleted,
-  renamed: css.badgeRenamed,
-  copied: css.badgeRenamed,
-  typeChanged: css.badgeOther,
-  unmerged: css.badgeOther,
-  unknown: css.badgeOther,
+const NAME_CLASS = {
+  added: css.nameAdded,
+  modified: css.nameModified,
+  deleted: css.nameDeleted,
+  renamed: css.nameRenamed,
+  copied: css.nameRenamed,
+  typeChanged: css.name,
+  unmerged: css.name,
+  unknown: css.name,
 } satisfies Record<ChangeStatus, string | undefined>;
 
 /** Each level steps in far enough to read as nesting without eating the row. */
@@ -59,10 +60,10 @@ function Row({ file, depth, selected, viewed, onSelect, onToggleViewed }: RowPro
         onClick={onSelect}
         title={`${file.path}\n${describeChange(file)}`}
       >
-        <span className={BADGE_CLASS[file.status]} aria-hidden="true">
-          {STATUS_META[file.status].letter}
+        <FileIcon name={name} className={css.icon} />
+        <span className={NAME_CLASS[file.status]} data-viewed={viewed || undefined}>
+          {name}
         </span>
-        <span className={viewed ? css.nameViewed : css.name}>{name}</span>
         {file.isGenerated ? (
           <span className={css.generated} title="Marked linguist-generated in .gitattributes">
             gen
