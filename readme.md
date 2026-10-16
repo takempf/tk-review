@@ -39,6 +39,8 @@ pnpm check      # biome lint and format, with fixes
 
 From `src-tauri/`: `cargo test` (some tests build real repos in a temp dir), `cargo clippy --all-targets`, and `cargo fmt`. If `cargo` is missing after a Homebrew rustup install, its shims aren't on your PATH: `fish_add_path -U /opt/homebrew/opt/rustup/bin`.
 
+To see how much reviews agree from run to run, `cargo run --release --example review_bench -- run --repo <path> --pr <url> --runs 3 --out <dir>` reviews one diff several times, exactly as the app does, and writes a report of the findings each run shared, with a column to mark which were worth fixing. `--from <dir>/run-N.json` makes each run a re-review following up on that one (add `--whole` for the whole diff), and the report adds its verdicts and how many new findings fell outside what changed. `report <dir>...` prints it again, or side by side for a before and after. Each run costs what a review costs.
+
 The harness stubs the Rust side with Tauri's `mockIPC`, so UI work doesn't need a native rebuild. Query parameters act out edge cases: `?prs=200` for a long PR list, and `?fail=review` (or `turns`, `check`, `explain`, `post`, `list`, `refresh`) for each failure.
 
 ## Comparisons
@@ -158,6 +160,8 @@ src-tauri/src/
   models.rs             model suggestions, read from each CLI's cache
   commands.rs           the Tauri commands
   error.rs              GitError, with a stable `kind` for the frontend
+src-tauri/examples/
+  review_bench.rs       runs a review several times and reports how far the runs agree
 ```
 
 ## Notes

@@ -32,3 +32,9 @@ tauri-plugin-opener = "3.0.0-alpha.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Runs a review several times and reports how far the runs agree. Its own
+# tests run with `cargo test`.
+[[example]]
+name = "review_bench"
+test = true

@@ -536,6 +536,33 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
     })
 }
 
+/// A PR's description and discussion, read without fetching anything or
+/// touching the app's PR refs, for tools that read a PR whose commits are
+/// already local, such as the review bench. `compare_ref` is the PR's head
+/// commit.
+pub fn read_pr_context(root: &Path, url: &str) -> Result<PrContext, GitError> {
+    let reference = parse_pr_ref(url)?;
+    let pr = read_pr(&reference)?;
+    let base_remote = find_remote(root, &reference)?;
+    let (comments, threads) = read_discussion(&reference)?;
+    Ok(PrContext {
+        url: pr.url,
+        number: pr.number,
+        title: pr.title,
+        body: pr.body,
+        author: pr.author.login,
+        state: pr.state.to_ascii_lowercase(),
+        is_draft: pr.is_draft,
+        base_ref: pr.base_ref_name,
+        base_remote,
+        head_ref: pr.head_ref_name,
+        head_sha: pr.head_ref_oid.clone(),
+        compare_ref: pr.head_ref_oid,
+        comments,
+        threads,
+    })
+}
+
 /// How many pull requests a page of a list holds: GitHub's most per request.
 /// The list asks for the next page as it is scrolled to the end.
 const PR_PAGE_SIZE: u32 = 100;
