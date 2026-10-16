@@ -135,7 +135,8 @@ export function ReviewSearchIndex() {
           target: `conclusion:${source.engine}`,
         });
       }
-      for (const finding of source.review.findings) {
+      // A dismissed finding folds away with no card to land on.
+      for (const finding of source.review.findings.filter((item) => !item.dismissed)) {
         const target = `review:${review}:${findingThreadKey(finding)}`;
         docs.push({
           id: target,
@@ -147,7 +148,9 @@ export function ReviewSearchIndex() {
           target,
         });
       }
-      for (const resolution of source.resolutions ?? []) {
+      for (const resolution of (source.resolutions ?? []).filter(
+        (item) => !item.finding.dismissed,
+      )) {
         const target = `review:${review}:${resolutionThreadKey(resolution.finding)}`;
         docs.push({
           id: target,

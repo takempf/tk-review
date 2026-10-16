@@ -102,7 +102,16 @@ export interface ReviewFinding {
   endLine?: number | null;
   /** critical | warning | suggestion | nit — written by the model, so treat as a label. */
   severity: string;
+  /** The consequence, for whoever hits it. */
   title: string;
+  /**
+   * How it goes wrong. Absent on findings from before reviews wrote theirs in
+   * parts, whose `body` says it all.
+   */
+  failure?: string;
+  /** What to change; absent as `failure` is. */
+  fix?: string;
+  /** The whole finding as one piece of Markdown, `failure` and `fix` put together, to post or copy. */
   body: string;
   /**
    * Who raised it, when specialists reviewed alongside the lead reviewer:
@@ -114,6 +123,24 @@ export interface ReviewFinding {
   postedUrl?: string;
   /** ISO timestamp for the most recent post. */
   postedAt?: string;
+  /** Set when the person reviewing dismissed it; ours, never the model's. */
+  dismissed?: Dismissal;
+  /**
+   * The commit its lines are numbered on, once it was carried past the review
+   * that raised it; absent while it's in that review.
+   */
+  readAt?: string | null;
+}
+
+/** Why the person reviewing took a finding off the table. */
+export type DismissalKind = "wontFix" | "notAProblem";
+
+export interface Dismissal {
+  kind: DismissalKind;
+  /** Their reason, if they gave one; later reviews are shown it. */
+  note?: string;
+  /** ISO timestamp. */
+  at: string;
 }
 
 /** The three ways GitHub lets a review finish, spelled as the agent recommends them. */
@@ -149,6 +176,51 @@ export interface ReviewResult {
    * the review may have gaps.
    */
   cutShort?: boolean;
+  /**
+   * Findings the agent withdrew when asked whether it was sure of them, with
+   * why. Absent on reviews from before findings were checked.
+   */
+  withdrawn?: WithdrawnFinding[];
+  /**
+   * Findings the second look could neither confirm nor rule out, shown apart
+   * from the rest, with why. Absent on reviews from before it could say so.
+   */
+  unconfirmed?: WithdrawnFinding[];
+  /** Why the findings couldn't be double-checked, when that failed. */
+  checkFailure?: string | null;
+  /** As on `ReReviewResult`, for a review that was one. */
+  scope?: string;
+  scopeNote?: string | null;
+  outside?: ReviewFinding[];
+}
+
+/** A finding the review wrote, then withdrew on a second look at the code. */
+export interface WithdrawnFinding {
+  finding: ReviewFinding;
+  /** What the code showed instead. */
+  reason: string;
+}
+
+/**
+ * A finding taken off the table before a re-review: withdrawn on a second
+ * look, or dismissed. Every later run is shown these so it doesn't raise them
+ * again.
+ */
+export interface SetAsideFinding {
+  finding: ReviewFinding;
+  why: "withdrawn" | DismissalKind;
+  /** What the code showed, for a withdrawn finding; the person's note for a dismissed one. */
+  note: string;
+}
+
+/** The review a re-review follows up on. */
+export interface PriorReview {
+  summary: string;
+  /** Every finding still open, numbered for the re-review in this order. */
+  findings: ReviewFinding[];
+  setAside: SetAsideFinding[];
+  /** The commit it read, which the re-review looks for new problems since. */
+  head: string | null;
 }
 
 /** The re-review's verdict on one finding from the previous review. */
@@ -171,6 +243,19 @@ export interface ReReviewResult {
   verdict?: string;
   conclusion?: string;
   cutShort?: boolean;
+  /** As on `ReviewResult`: new findings only, since only those are checked. */
+  withdrawn?: WithdrawnFinding[];
+  unconfirmed?: WithdrawnFinding[];
+  checkFailure?: string | null;
+  /**
+   * Where it looked for new problems: `since`, in what changed since the
+   * review before it, or `whole`, the whole diff.
+   */
+  scope?: string;
+  /** Why one meant to look at what changed read the whole diff instead. */
+  scopeNote?: string | null;
+  /** New findings outside what changed since, folded away and not double-checked. */
+  outside?: ReviewFinding[];
 }
 
 /** A short note on what one file's changes are for, shown at the top of it in the diff. */
@@ -578,8 +663,9 @@ export const gitApi = {
     engine: ReviewEngine;
     model: string | null;
     effort: string | null;
-    priorSummary: string;
-    priorFindings: ReviewFinding[];
+    prior: PriorReview;
+    /** Look for new problems in the whole diff, not only in what changed since. */
+    whole: boolean;
     prContext: PrContext | null;
   }) => invoke<ReReviewResult>("re_review_diff", { ...args }),
 

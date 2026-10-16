@@ -5,6 +5,7 @@ import {
   type Branch,
   type CommitLog,
   type DiffSummary,
+  type Dismissal,
   type ExplainResult,
   gitApi,
   isCancelled,
@@ -15,6 +16,7 @@ import {
   type ReviewFinding,
   type ReviewResult,
   type ReviewVerdict,
+  type SetAsideFinding,
   toAppError,
 } from "../ipc/git";
 import type { LineSpan } from "../lib/lineSpan";
@@ -78,6 +80,11 @@ export interface StoredReview {
   createdAt: string;
   /** Comment threads, keyed by finding (or `REVIEW_THREAD_KEY` for the whole review). */
   threads: Record<string, ReviewComment[]>;
+  /**
+   * Findings set aside before this review, withdrawn by an earlier one or
+   * dismissed, carried into every re-review so none raises them again.
+   */
+  setAside?: SetAsideFinding[];
   /** The reviews by the same engine that this one replaced, oldest first. */
   earlier?: ReviewStamp[];
   /**
@@ -113,6 +120,60 @@ function historyBefore(previous: StoredReview | undefined): Pick<StoredReview, "
     earlier: [...(earlier ?? []), stampOf(previous)].slice(-EARLIER_LIMIT),
     past: [...(past ?? []), record].slice(-PAST_LIMIT),
   };
+}
+
+/** Verdicts that close a finding: the re-review found it dealt with. */
+const CLOSED_VERDICTS = new Set(["addressed", "obsolete"]);
+
+/** Whether a re-review's verdict leaves its finding still to deal with. */
+export const isOpenVerdict = (status: string): boolean =>
+  !CLOSED_VERDICTS.has(status.toLowerCase());
+
+/**
+ * The findings a re-review of `prior` follows up on: its own, and the earlier
+ * ones it judged still open, each marked with the commit its lines are
+ * numbered on. Dismissed ones are set aside instead.
+ */
+export function openFindings(prior: StoredReview): ReviewFinding[] {
+  const own = prior.review.findings.map((finding) => ({
+    ...finding,
+    readAt: finding.readAt !== undefined ? finding.readAt : (prior.head ?? null),
+  }));
+  const carried = (prior.resolutions ?? [])
+    .filter((resolution) => isOpenVerdict(resolution.status))
+    .map(({ finding }) => ({
+      ...finding,
+      readAt: finding.readAt !== undefined ? finding.readAt : (prior.earlier?.at(-1)?.head ?? null),
+    }));
+  return [...own, ...carried].filter((finding) => !finding.dismissed);
+}
+
+/** Most set-aside findings kept: every re-review is shown them all, and the oldest matter least. */
+const SET_ASIDE_LIMIT = 60;
+
+/**
+ * What no re-review after `prior` should raise again: what was set aside
+ * before it, what it withdrew, and what was dismissed from it. One entry per
+ * finding, the most recently set aside last.
+ */
+export function setAsideAfter(prior: StoredReview): SetAsideFinding[] {
+  const withdrawn = (prior.review.withdrawn ?? []).map(
+    ({ finding, reason }): SetAsideFinding => ({ finding, why: "withdrawn", note: reason }),
+  );
+  const dismissed = [
+    ...prior.review.findings,
+    ...(prior.resolutions ?? []).map((resolution) => resolution.finding),
+  ].flatMap(({ dismissed, ...finding }): SetAsideFinding[] =>
+    dismissed ? [{ finding, why: dismissed.kind, note: dismissed.note ?? "" }] : [],
+  );
+  const byKey = new Map<string, SetAsideFinding>();
+  for (const item of [...(prior.setAside ?? []), ...withdrawn, ...dismissed]) {
+    const key = findingThreadKey(item.finding);
+    // Set aside again, it moves to the end, as the most recent.
+    byKey.delete(key);
+    byKey.set(key, item);
+  }
+  return [...byKey.values()].slice(-SET_ASIDE_LIMIT);
 }
 
 /**
@@ -451,9 +512,10 @@ export interface TabState {
   runExplain: () => Promise<void>;
   /**
    * Follows up on the stored review: one agent run that judges whether each
-   * prior finding was addressed and reads the current diff for new issues.
+   * prior finding was addressed, and looks for new issues in what changed
+   * since that review, or with `whole`, in the whole diff again.
    */
-  runReReview: () => Promise<void>;
+  runReReview: (options?: { whole?: boolean }) => Promise<void>;
   /**
    * Appends a user comment to a thread of `engine`'s review and asks that
    * engine to respond.
@@ -475,6 +537,19 @@ export interface TabState {
   editPrComment: (body: string) => void;
   closePrComment: () => void;
   sendPrComment: () => Promise<boolean>;
+  /**
+   * Dismisses a finding of `engine`'s live review, with why, or with `null`
+   * restores it. A dismissed finding folds away, and later re-reviews are
+   * told not to raise it again. `prior` says it's one the re-review judged.
+   */
+  setDismissed: (
+    engine: ReviewEngine,
+    finding: ReviewFinding,
+    prior: boolean,
+    dismissal: Dismissal | null,
+  ) => void;
+  /** Lets later re-reviews raise a finding set aside before `engine`'s live review again. */
+  restoreSetAside: (engine: ReviewEngine, finding: ReviewFinding) => void;
   /** Submits `engine`'s conclusion as a GitHub review with the chosen verdict. */
   submitPrReview: (engine: ReviewEngine, verdict: ReviewVerdict, body: string) => Promise<boolean>;
   /** Resolves a review thread on the open PR, or reopens one. */
@@ -620,6 +695,35 @@ function withPostedComment(
       ),
     },
   };
+}
+
+/**
+ * Dismisses a finding, or restores one: a current finding, or with `prior`,
+ * one the re-review judged.
+ */
+function withDismissal(
+  stored: StoredReview,
+  finding: ReviewFinding,
+  prior: boolean,
+  dismissal: Dismissal | null,
+): StoredReview {
+  const key = findingThreadKey(finding);
+  const mark = (item: ReviewFinding): ReviewFinding => {
+    if (findingThreadKey(item) !== key) return item;
+    const { dismissed, ...rest } = item;
+    void dismissed;
+    return dismissal ? { ...rest, dismissed: dismissal } : rest;
+  };
+  if (prior) {
+    return {
+      ...stored,
+      resolutions: stored.resolutions?.map((resolution) => ({
+        ...resolution,
+        finding: mark(resolution.finding),
+      })),
+    };
+  }
+  return { ...stored, review: { ...stored.review, findings: stored.review.findings.map(mark) } };
 }
 
 function readViewed(root: string, base: string, compare: string): Set<string> {
@@ -1120,7 +1224,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         }
       },
 
-      async runReReview() {
+      async runReReview({ whole = false } = {}) {
         const { repo, base, compare, summary, reviews, reviewing, reReviewing, pr } = get();
         const { engine: reviewEngine, model, effort } = env.settings();
         const prior = reviews[reviewEngine];
@@ -1136,6 +1240,10 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           get().compare === compare &&
           reviewsWorkingTree(get()) === worktree;
 
+        // Every finding still open goes to the re-review, however many reviews
+        // back it was raised, and everything set aside goes with it, so
+        // nothing drops out of the record and nothing comes back reworded.
+        const open = openFindings(prior);
         const runId = beginRun("review", reviewEngine);
         set({ reReviewing: true, reviewError: null });
         try {
@@ -1147,32 +1255,45 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
             engine: reviewEngine,
             model,
             effort,
-            priorSummary: prior.review.summary,
-            priorFindings: prior.review.findings,
+            prior: {
+              summary: prior.review.summary,
+              findings: open,
+              setAside: setAsideAfter(prior),
+              head: prior.head ?? null,
+            },
+            whole,
             prContext: pr,
           });
+          const current = readReviews(storageRoot(repo), base, scope);
+          const setAside = setAsideAfter(current[reviewEngine] ?? prior);
+          const isSetAside = new Set(setAside.map((item) => findingThreadKey(item.finding)));
           // Zip verdicts back onto the findings they judged. The model writes
           // the indices, so out-of-range ones are dropped; a prior finding it
           // failed to mention is kept with an "unknown" verdict rather than
           // silently vanishing from the record.
           const byIndex = new Map(result.resolutions.map((r) => [r.index, r]));
-          const resolutions: ResolvedFinding[] = prior.review.findings.map((finding, index) => {
-            const verdict = byIndex.get(index);
-            return {
-              finding,
-              status: verdict?.status ?? "unknown",
-              note: verdict?.note ?? "",
-            };
-          });
+          const resolutions: ResolvedFinding[] = open
+            .map((finding, index) => {
+              const verdict = byIndex.get(index);
+              return {
+                finding,
+                status: verdict?.status ?? "unknown",
+                note: verdict?.note ?? "",
+              };
+            })
+            .filter((resolution) => !isSetAside.has(findingThreadKey(resolution.finding)));
           // Old conversations move with their findings into the resolutions'
           // namespaced keys; the new findings and the new summary start with
-          // clean threads rather than inheriting the previous review's.
+          // clean threads rather than inheriting the previous review's. A
+          // finding carried from further back already had one there.
+          const raisedByPrior = new Set(prior.review.findings.map(findingThreadKey));
           const threads: Record<string, ReviewComment[]> = {};
           for (const resolution of resolutions) {
-            const old = prior.threads[findingThreadKey(resolution.finding)];
+            const key = findingThreadKey(resolution.finding);
+            const old =
+              prior.threads[raisedByPrior.has(key) ? key : resolutionThreadKey(resolution.finding)];
             if (old?.length) threads[resolutionThreadKey(resolution.finding)] = old;
           }
-          const current = readReviews(storageRoot(repo), base, scope);
           const stored: StoredReview = {
             review: {
               summary: result.summary,
@@ -1180,8 +1301,15 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
               verdict: result.verdict,
               conclusion: result.conclusion,
               cutShort: result.cutShort,
+              withdrawn: result.withdrawn,
+              unconfirmed: result.unconfirmed,
+              checkFailure: result.checkFailure,
+              scope: result.scope,
+              scopeNote: result.scopeNote,
+              outside: result.outside,
             },
             resolutions,
+            setAside,
             engine: reviewEngine,
             model,
             effort,
@@ -1435,6 +1563,32 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           );
           return false;
         }
+      },
+
+      setDismissed(engine, finding, prior, dismissal) {
+        const { repo, base, compare, reviews } = get();
+        const stored = reviews[engine];
+        if (!base || !compare || !stored) return;
+        const scope = viewedScope(compare, reviewsWorkingTree(get()));
+        const updated = withDismissal(stored, finding, prior, dismissal);
+        const next = { ...readReviews(storageRoot(repo), base, scope), [engine]: updated };
+        writeReviews(storageRoot(repo), base, scope, next);
+        set({ reviews: next });
+      },
+
+      restoreSetAside(engine, finding) {
+        const { repo, base, compare, reviews } = get();
+        const stored = reviews[engine];
+        if (!base || !compare || !stored) return;
+        const scope = viewedScope(compare, reviewsWorkingTree(get()));
+        const key = findingThreadKey(finding);
+        const updated: StoredReview = {
+          ...stored,
+          setAside: stored.setAside?.filter((item) => findingThreadKey(item.finding) !== key),
+        };
+        const next = { ...readReviews(storageRoot(repo), base, scope), [engine]: updated };
+        writeReviews(storageRoot(repo), base, scope, next);
+        set({ reviews: next });
       },
 
       async submitPrReview(engine, verdict, body) {

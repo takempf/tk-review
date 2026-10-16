@@ -81,7 +81,7 @@ pub static SPECIALISTS: &[Specialist] = &[
         name: "security-reviewer",
         label: "Security",
         summary: "Reviews code for who can do what: missing authentication and authorization checks, data from one tenant reaching another, trust in what the client sends, injection, and secrets or personal data leaking.",
-        launches: "When a diff changes source code outside tests and migrations.",
+        launches: "When a diff changes server code, or browser code that handles markup, credentials, storage, redirects, or messages from other windows.",
         placeholder: "e.g. The admin pool skips row-level security, so every read through it must check membership first.",
         role: "an application security specialist reviewing a pull request",
         stakes: "Security holes pass every test, because tests exercise what a legitimate user does. They surface later as a pentest finding, a customer's data in another customer's account, or an incident.",
@@ -89,7 +89,14 @@ pub static SPECIALISTS: &[Specialist] = &[
         history: "Run `git log` on the files you review, for earlier security fixes to the same code. In Linear or Slack, search for words like security, pentest, permission, authorization, leak, or vulnerability alongside the feature's name.",
         checklist: include_str!("specialists/security.md"),
         turns: 40,
-        picks: |file| file.is_code() && !file.is_test() && !file.is_migration(),
+        // Browser code only where it touches what an attacker can reach: a
+        // layout or styling change has nothing for this review to find.
+        picks: |file| {
+            file.is_code()
+                && !file.is_test()
+                && !file.is_migration()
+                && (!file.is_frontend() || file.mentions(SECURITY_TERMS))
+        },
     },
     Specialist {
         key: "runtime",
@@ -257,7 +264,7 @@ pub static SPECIALISTS: &[Specialist] = &[
         key: "maintainability",
         name: "maintainability-reviewer",
         label: "Maintainability",
-        summary: "Reviews code for what will cost the next developer: duplicates of helpers that already exist, misleading names and comments, dead code and speculative abstractions, tests that can't fail, and broken module boundaries.",
+        summary: "Reviews code for what will cost the next developer: duplicates of helpers that already exist, misleading names and comments, tests that can't fail, and broken module boundaries. Simplifications and cleanups only when the repository's rules ask for them.",
         launches: "When a diff changes source code or tests.",
         placeholder: "e.g. Comments explain why, never what; remove comments addressed to the reviewer.",
         role: "a maintainability specialist reviewing a pull request",
@@ -407,6 +414,37 @@ const BROWSER_TERMS: &[&str] = &[
     "new worker(",
     "offscreencanvas",
     "lazy(",
+];
+
+/// Words in changed browser code that put it within an attacker's reach:
+/// markup built from strings, credentials and what stores them, redirects,
+/// and messages from other windows.
+const SECURITY_TERMS: &[&str] = &[
+    "dangerouslysetinnerhtml",
+    "innerhtml",
+    "outerhtml",
+    "insertadjacenthtml",
+    "eval(",
+    "new function(",
+    "postmessage",
+    "window.open",
+    "_blank",
+    "location.href",
+    "location.assign",
+    "redirect",
+    "sanitize",
+    "dompurify",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "apikey",
+    "api_key",
+    "auth",
+    "permission",
+    "cookie",
+    "localstorage",
+    "sessionstorage",
 ];
 
 /// Words in changed scripts that mean they use React.
@@ -793,7 +831,8 @@ pub struct Panel {
 /// them and hold it to that. Codex, which takes no subagent definitions, gets
 /// each one's checklist in its own prompt. `None` when no specialist picks
 /// anything, or for codex. `generated` holds the paths marked generated,
-/// which most specialists leave alone.
+/// which most specialists leave alone. `only`, when given, holds the paths a
+/// re-review looks at, and the specialists pick from those alone.
 pub fn add_specialist_reviews(
     prompt: &mut String,
     engine: &str,
@@ -801,8 +840,12 @@ pub fn add_specialist_reviews(
     compare: Option<&str>,
     generated: &HashSet<String>,
     rules: &RepoRules,
+    only: Option<&HashSet<String>>,
 ) -> Option<Panel> {
-    let changes = file_changes(patch, generated);
+    let mut changes = file_changes(patch, generated);
+    if let Some(only) = only {
+        changes.retain(|file| only.contains(&file.path));
+    }
     let picked: Vec<Picked> = SPECIALISTS
         .iter()
         .filter_map(|specialist| {
@@ -877,7 +920,7 @@ fn lead_instructions(picked: &[Picked]) -> String {
         r#"Parts of this diff get a specialist's review on top of yours. Each specialist is a subagent defined for this run, already holding its checklist and the diffs of the files in its area:
 {panel}
 1. In your first response, launch every one of them with the Agent tool, in the foreground, alongside your first reads: one response with an Agent call for each, so they work at the same time. Tell each in a few sentences what the change is for and what it needs to know from the rest of the diff, such as which code reads or writes the tables a migration touches, or which server change a client change depends on, and whether that ships in this same change.
-2. Review the whole diff yourself as usual. The specialists add depth in their areas; they don't take anything off your hands.
+2. Review the whole diff yourself, but spend your reading where no specialist is looking: the files none of them picked, and how the parts of the change fit together, such as a client change and the server change it relies on. Within a specialist's area, check what it reports rather than reviewing those files again from the start.
 3. Check each finding a specialist reports against the code before you use it. Report the ones that hold as ordinary findings on their file and line, merged with your own and with each other's so each problem appears once, and drop the ones that don't hold.
 4. In each finding's `reviewers`, name everyone who raised it: `{LEAD}` when you found it yourself, and the subagent's name for each specialist whose report it came from. A problem that you and a specialist both found lists both.
 5. Weigh them in the verdict. A problem a specialist rates critical that holds up must be fixed before this merges.
@@ -900,6 +943,27 @@ fn codex_checklists(picked: &[Picked], rules: &RepoRules) -> String {
         ));
     }
     text
+}
+
+/// Adds every specialist's rules for the repository to a prompt that weighs
+/// findings without launching the specialists, such as the check of a
+/// review's findings. Nothing, when no specialist has rules kept.
+pub fn add_specialist_rules(prompt: &mut String, patch: &str, rules: &RepoRules) {
+    let kept: String = SPECIALISTS
+        .iter()
+        .filter_map(|specialist| {
+            let rules = rules.specialist(specialist.key).trim();
+            (!rules.is_empty()).then(|| format!("{} rules:\n\n{rules}\n\n", specialist.label))
+        })
+        .collect();
+    if kept.is_empty() {
+        return;
+    }
+    insert_before_diff(
+        prompt,
+        patch,
+        &format!("The person running this review also keeps rules for the specialist reviewers that look at parts of a diff. A finding can rest on one of these rather than on anything in the code:\n\n{kept}"),
+    );
 }
 
 /// A specialist's checklist, followed by the repository's own rules for it
@@ -950,7 +1014,7 @@ fn specialist_prompt(picked: &Picked, compare: Option<&str>, rules: &str) -> Str
 
 Before judging, read this repository's own rules for your area: `CLAUDE.md` and `AGENTS.md` at the root and beside the files you review, skills under `.claude/skills` whose descriptions cover your area, and the docs those point to. Hold the change to them. {preparation} The working tree may not match the diff's compare side, so the diffs below are the authority on what changed. Make independent reads and searches in the same response rather than one per turn.
 
-Then look for history where it would change a finding, and stop as soon as you have enough. Spend a few turns on it at most. {history} Use Linear or Slack only if their tools turn up through ToolSearch. When a past incident, PR, or fix bears on a problem you report, cite it in that entry. Skip any source that's missing or refused.
+Look for history only for a problem you'd rate critical or warning, where it would change the finding, and stop as soon as you have enough: a few turns at most. {history} Use Linear or Slack only if their tools turn up through ToolSearch. When a past incident, PR, or fix bears on a problem you report, cite it in that entry. Skip any source that's missing or refused.
 
 {guidance}
 
@@ -1241,6 +1305,37 @@ mod tests {
     }
 
     #[test]
+    fn security_reads_browser_code_only_where_an_attacker_can_reach_it() {
+        let patch = [
+            modified(
+                "apps/web/src/Layout.tsx",
+                "+<div className={css.grid}>{children}</div>",
+            ),
+            modified(
+                "apps/web/src/Comment.tsx",
+                "+<div dangerouslySetInnerHTML={{ __html: body }} />",
+            ),
+            modified(
+                "apps/web/src/session.ts",
+                "+localStorage.setItem('token', token);",
+            ),
+            modified(
+                "apps/api/src/routes/export.ts",
+                "+export const route = handler;",
+            ),
+        ]
+        .concat();
+        assert_eq!(
+            picked_by("security", &patch),
+            [
+                "apps/web/src/Comment.tsx",
+                "apps/web/src/session.ts",
+                "apps/api/src/routes/export.ts"
+            ]
+        );
+    }
+
+    #[test]
     fn a_claude_review_launches_every_specialist_that_picked_something() {
         let patch = migration_patch();
         let mut prompt = prompt_for(&patch);
@@ -1251,6 +1346,7 @@ mod tests {
             Some("feature"),
             &HashSet::new(),
             &RepoRules::default(),
+            None,
         )
         .expect("a panel");
 
@@ -1321,7 +1417,8 @@ mod tests {
             &patch,
             None,
             &HashSet::new(),
-            &RepoRules::default()
+            &RepoRules::default(),
+            None
         )
         .is_none());
         assert!(
@@ -1346,7 +1443,8 @@ mod tests {
                 &patch,
                 None,
                 &HashSet::new(),
-                &RepoRules::default()
+                &RepoRules::default(),
+                None
             )
             .is_none());
             assert_eq!(prompt, before);
@@ -1361,9 +1459,16 @@ mod tests {
         rules.specialists.insert("migrations".into(), rule.into());
 
         let mut prompt = prompt_for(&patch);
-        let panel =
-            add_specialist_reviews(&mut prompt, "claude", &patch, None, &HashSet::new(), &rules)
-                .expect("panel");
+        let panel = add_specialist_reviews(
+            &mut prompt,
+            "claude",
+            &patch,
+            None,
+            &HashSet::new(),
+            &rules,
+            None,
+        )
+        .expect("panel");
         let definition = definition(&panel, "migration-reviewer");
         let subagent = definition["prompt"].as_str().expect("prompt");
         let checklist = subagent
@@ -1377,7 +1482,15 @@ mod tests {
         assert!(!security.contains(rule));
 
         let mut prompt = prompt_for(&patch);
-        add_specialist_reviews(&mut prompt, "codex", &patch, None, &HashSet::new(), &rules);
+        add_specialist_reviews(
+            &mut prompt,
+            "codex",
+            &patch,
+            None,
+            &HashSet::new(),
+            &rules,
+            None,
+        );
         assert!(
             prompt.contains(&guidance(&SPECIALISTS[0], rule)),
             "{prompt}"
@@ -1412,6 +1525,7 @@ mod tests {
             Some("feature"),
             &HashSet::new(),
             &RepoRules::default(),
+            None,
         )
         .expect("panel");
         let subagent = definition_prompt(&panel, "maintainability-reviewer");
@@ -1460,6 +1574,8 @@ mod tests {
             body: "b".into(),
             reviewers: reviewers.iter().map(|name| (*name).to_owned()).collect(),
             posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
         };
         let panel = Panel {
             names: vec!["security-reviewer", "migration-reviewer"],

@@ -67,6 +67,9 @@ test("each reviewed commit keeps its summaries, findings, resolutions and conclu
   await expect(current.getByText(newest.subject, { exact: true })).toBeVisible();
   await expect(current.getByText("codex summary", { exact: true })).toBeVisible();
   await expect(current.getByText("codex finding", { exact: true })).toBeVisible();
+  // An earlier finding that was dealt with folds away under the review.
+  await expect(current.getByText("Subscription fixed", { exact: true })).toBeHidden();
+  await current.getByRole("button", { name: /^Dealt with/ }).click();
   await expect(current.getByText("Subscription fixed", { exact: true })).toBeVisible();
   await expect(current.getByRole("textbox", { name: "Review conclusion" })).toHaveValue(
     "codex conclusion",

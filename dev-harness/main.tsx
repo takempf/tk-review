@@ -21,6 +21,7 @@ import { storageRoot } from "../src/store/account";
 import "../src/styles/global.css";
 import {
   BRANCHES,
+  CHECK_FAILURE,
   COMMITS,
   EXPLANATION,
   GH_POST_ERROR,
@@ -30,6 +31,7 @@ import {
   RE_REVIEW,
   REPO,
   REVIEW,
+  SCOPE_NOTE,
   SUMMARY,
   VERSIONS,
 } from "./fixture";
@@ -48,6 +50,8 @@ mockWindows("main");
  * - `refresh`: refreshing the PR fails, which shows in the banner under the header.
  * - `resolve`: resolving or reopening a review thread is refused, as GitHub
  *   refuses someone without write access.
+ * - `scope`: a re-review can't tell what changed since the review before it,
+ *   so it reads the whole diff again and says why.
  */
 const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(",") ?? []);
 
@@ -148,7 +152,9 @@ function later<T>(ms: number, value: T, error?: GitError): Promise<T> {
 
 let nextPostedComment = 900;
 const commentRequests: unknown[] = [];
-Object.assign(window, { commentRequests, sceneryHeld });
+/** What each re-review was asked to follow up on, for tests to read. */
+const reReviewRequests: unknown[] = [];
+Object.assign(window, { commentRequests, reReviewRequests, sceneryHeld });
 
 /**
  * What the harness has posted as inline or file comments, each a thread of its
@@ -441,17 +447,32 @@ stdout:
       return agentRun(
         payload,
         1500,
-        { ...REVIEW, cutShort: failing.has("turns") },
+        {
+          ...REVIEW,
+          cutShort: failing.has("turns"),
+          checkFailure: failing.has("check") ? CHECK_FAILURE : null,
+        },
         failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
       );
     // Delayed so the "Re-reviewing…" state is visible in the harness.
-    case "re_review_diff":
+    case "re_review_diff": {
+      reReviewRequests.push(payload);
+      // Reading the whole diff, nothing is outside what it read.
+      const whole = (payload as { whole: boolean }).whole || failing.has("scope");
       return agentRun(
         payload,
         1500,
-        { ...RE_REVIEW, cutShort: failing.has("turns") },
+        {
+          ...RE_REVIEW,
+          cutShort: failing.has("turns"),
+          checkFailure: failing.has("check") ? CHECK_FAILURE : null,
+          scope: whole ? "whole" : "since",
+          scopeNote: failing.has("scope") ? SCOPE_NOTE : null,
+          outside: whole ? [] : RE_REVIEW.outside,
+        },
         failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
       );
+    }
     // Slower than the review on purpose: the two run independently, and each
     // tab has to stay usable while the other's run is still going.
     case "explain_diff":

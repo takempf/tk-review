@@ -161,9 +161,8 @@ test("search reveals a folded AI finding and highlights its text", async ({ page
   await openPr(page);
   await page.getByRole("tab", { name: /^(AI review|Review)$/ }).click();
   await page.getByRole("button", { name: "Review", exact: true }).click();
-  await page
-    .getByText("Error mapping could reuse the shared kind table.", { exact: true })
-    .waitFor();
+  // A suggestion, so it starts folded inside the review too.
+  await page.getByRole("button", { name: /^Suggestions and nits/ }).waitFor();
   const findings = page
     .locator("[data-review-commit]")
     .getByRole("button", { name: /^Claude Code/ });

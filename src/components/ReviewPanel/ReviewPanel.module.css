@@ -420,12 +420,27 @@
      the tab bar's, where the row is short of width for the summary. */
   padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--panel-inset) - var(--space-3));
   border-bottom: 1px solid var(--border);
+  /* So its buttons can shed their labels when it's narrow. */
+  container-type: inline-size;
 }
 
 /* One line that reads back the agent settings; the popover behind it edits them. */
 .settingsTrigger {
   flex: 0 1 auto;
-  min-width: 0;
+  /* Never narrower than its icon, whatever else the row holds. */
+  min-width: 32px;
+}
+
+/* Narrow, "Whole diff" keeps its icon, and its name for screen readers. */
+@container (width < 440px) {
+  .wholeDiffLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 /* Reads on from the settings: "Claude Code · Opus · high effort on ⑂ d340c74".
@@ -712,6 +727,7 @@
   display: flex;
   gap: var(--space-1);
   align-items: center;
+  max-width: 100%;
   padding: 0;
   font-size: 11px;
   font-weight: 600;
@@ -749,9 +765,10 @@
   color: var(--text-faint);
 }
 
-/* A review answered at the turn limit: still worth reading, but not the
-   whole story, and the verdict should be weighed with that in mind. */
-.cutShort {
+/* A review answered at the turn limit, or whose findings couldn't be
+   double-checked: still worth reading, but not the whole story, and the
+   verdict should be weighed with that in mind. */
+.caveat {
   display: flex;
   gap: var(--space-2);
   align-items: flex-start;
@@ -984,6 +1001,75 @@
 
 .findingStatus {
   color: var(--tone);
+}
+
+/* What a finding says under its title, in parts, each under a small label. */
+.findingPart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.partLabel {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* A fold of full cards, divided from each other as the review's are. */
+.foldedList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.foldedList[hidden] {
+  display: none;
+}
+
+.foldedList > * + * {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* After a fold's count, what it holds, in words. */
+.sectionBreakdown {
+  min-width: 0;
+  margin-left: var(--space-1);
+  overflow: hidden;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* What a set-aside finding said, after why it was set aside. */
+.setAsideDetail {
+  font-size: var(--tk-text-sm);
+  line-height: var(--tk-leading-reading);
+  color: var(--text-dim);
+}
+
+/* Findings off the table: folded under a count after the rest, each read like
+   a resolved finding, with why in place of the body. */
+.withdrawnList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.withdrawnList[hidden] {
+  display: none;
 }
 
 /* Read out, not shown: the words that make a terse visible label make sense

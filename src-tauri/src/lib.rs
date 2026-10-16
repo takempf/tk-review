@@ -6,6 +6,7 @@ pub mod models;
 pub mod review;
 pub mod rules;
 pub mod runs;
+pub mod scope;
 pub mod specialists;
 
 use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};

@@ -327,7 +327,12 @@ export const REVIEW: ReviewResult = {
       line: 6,
       severity: "critical",
       title: "New non-null column has no default or backfill.",
-      body: "merge_base is `not null` but existing rows get no value, so this migration fails on any non-empty database. Add a default, or backfill before tightening the constraint.",
+      // Written in parts, as reviews write findings now; `body` is the two
+      // put together, as the backend does.
+      failure:
+        "merge_base is `not null`, but existing rows get no value, so the migration fails on any non-empty database.",
+      fix: "Add a default, or backfill before tightening the constraint.",
+      body: "merge_base is `not null`, but existing rows get no value, so the migration fails on any non-empty database.\n\n**Fix:** Add a default, or backfill before tightening the constraint.",
       // Raised by the lead and a specialist both, as a review with a panel says.
       reviewers: ["Lead", "Migrations"],
     },
@@ -358,7 +363,41 @@ export const REVIEW: ReviewResult = {
       reviewers: ["Maintainability"],
     },
   ],
+  // Neither confirmed nor ruled out when the review was asked whether it was sure.
+  unconfirmed: [
+    {
+      finding: {
+        path: "src/ipc/git.ts",
+        line: 12,
+        severity: "warning",
+        title: "Errors from a cancelled run read as failures.",
+        body: "A cancelled `review_diff` rejects with a `command` error, which the panel shows as a failure.",
+        reviewers: ["Lead"],
+      },
+      reason: "Couldn't find whether the backend sends `cancelled` or `command` for a stopped run.",
+    },
+  ],
+  // Taken back when the review was asked whether it was sure: the code it
+  // pointed at already does what the finding asked for.
+  withdrawn: [
+    {
+      finding: {
+        path: "src/components/DiffViewer/DiffViewer.tsx",
+        line: 21,
+        endLine: 29,
+        severity: "warning",
+        title: "Diff input is rebuilt on every render.",
+        body: "The `DiffFileInput` is built in the component body, so every layout change re-creates it and `MultiFileDiff` re-diffs both sides.",
+        reviewers: ["React"],
+      },
+      reason:
+        "`input` is built in a `useMemo` keyed on `versions` and `file.path`, so a layout change reuses it.",
+    },
+  ],
 };
+
+/** Why a review's findings couldn't be double-checked, for `?fail=check`. */
+export const CHECK_FAILURE = "Claude was still going after 60 minutes, so it was stopped.";
 
 /**
  * Stand-in re-review of `REVIEW`: exercises every resolution status against
@@ -403,7 +442,23 @@ export const RE_REVIEW: ReReviewResult = {
       reviewers: ["Migrations"],
     },
   ],
+  // It looked for new problems in what changed since the review, and raised
+  // one in code that hadn't changed, which folds away.
+  scope: "since",
+  outside: [
+    {
+      path: "src/components/DiffViewer/DiffViewer.tsx",
+      line: 3,
+      severity: "suggestion",
+      title: "Import order mixes local and package imports.",
+      body: "The relative import sits between two package imports; group them so the next import added lands in the right place.",
+    },
+  ],
 };
+
+/** Why a re-review read the whole diff again, for `?fail=scope`. */
+export const SCOPE_NOTE =
+  "The commit the last review read, `0a1b2c3`, is gone from the repository, so this re-review read the whole diff again.";
 
 /**
  * An explanation, shaped to exercise the rendering rather than to read as a

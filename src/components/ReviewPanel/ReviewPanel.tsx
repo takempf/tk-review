@@ -19,6 +19,7 @@ import {
   Tabs,
 } from "tk-design-system";
 import {
+  type DismissalKind,
   gitApi,
   type PrComment,
   type PrContext,
@@ -55,6 +56,7 @@ import {
   type AgentRunKind,
   CONCLUSION_POST_KEY,
   findingThreadKey,
+  isOpenVerdict,
   type ListedReview,
   postTargetKey,
   REVIEW_THREAD_KEY,
@@ -78,7 +80,7 @@ import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
 import { Fold } from "../Fold/Fold";
 import { GitHubMarkdown } from "../Markdown/Markdown";
 import { Model } from "../Model/Model";
-import { RepoRulesButton } from "../RepoRules/RepoRules";
+import { RepoRulesButton, RuleFromFindingButton } from "../RepoRules/RepoRules";
 import { ReviewLoader } from "../ReviewLoader/ReviewLoader";
 import { RunProgress } from "../RunProgress/RunProgress";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
@@ -749,7 +751,7 @@ function Explanation({ stored }: { stored: StoredExplanation }) {
           <CopyButton text={overall} label="Copy walkthrough" />
         </div>
         {cutShort ? (
-          <p className={css.cutShort}>
+          <p className={css.caveat}>
             <Icon name="warning" />
             <span>
               {ENGINE_LABELS[stored.engine]} hit its turn limit partway through, so it explained
@@ -1252,9 +1254,6 @@ function usePriorPlacement(
   return placed?.key === key ? placed.placement : null;
 }
 
-/** Verdicts that close a finding: nothing left of it to send to the PR. */
-const SETTLED = new Set(["addressed", "obsolete"]);
-
 /**
  * A finding's title, after its severity or verdict as an icon in its tone
  * (the word is the icon's tooltip): how much it matters, or whether it was
@@ -1304,10 +1303,12 @@ function Resolution({
   const { source, live, key: review } = listed;
   const { finding, status, note } = resolution;
   const threadKey = resolutionThreadKey(finding);
-  const postable =
-    live && pr != null && (!SETTLED.has(status.toLowerCase()) || finding.postedUrl != null);
-  // The review it came from is the last of the earlier ones.
-  const readAt = source.earlier?.at(-1)?.head ?? null;
+  const open = isOpenVerdict(status);
+  const postable = live && pr != null && (open || finding.postedUrl != null);
+  // Its lines are numbered on the commit it was carried from, or failing a
+  // record of that, the one the review before this read.
+  const readAt =
+    finding.readAt !== undefined ? finding.readAt : (source.earlier?.at(-1)?.head ?? null);
   const placement = usePriorPlacement(finding, readAt, postable ? pr : null);
 
   return (
@@ -1338,21 +1339,94 @@ function Resolution({
         placeholder="Ask about this verdict…"
         askLabel="Ask about this"
         actions={
-          pr && postable ? (
-            <PrCommentComposer
-              engine={source.engine}
-              finding={finding}
-              patch={patch}
-              pr={pr}
-              postedUrl={finding.postedUrl}
-              prior={placement ?? "pending"}
-              settled={SETTLED.has(status.toLowerCase())}
-            />
-          ) : !live && finding.postedUrl ? (
-            <PostedLink url={finding.postedUrl} />
-          ) : null
+          <>
+            {pr && postable ? (
+              <PrCommentComposer
+                engine={source.engine}
+                finding={finding}
+                patch={patch}
+                pr={pr}
+                postedUrl={finding.postedUrl}
+                prior={placement ?? "pending"}
+                settled={!open}
+              />
+            ) : !live && finding.postedUrl ? (
+              <PostedLink url={finding.postedUrl} />
+            ) : null}
+            {live && open ? (
+              <DismissControl engine={source.engine} finding={finding} prior />
+            ) : null}
+          </>
         }
       />
+    </li>
+  );
+}
+
+/**
+ * What a finding says under its title: how it goes wrong, then the fix, each
+ * under a label, so every finding reads the same way. Findings from before
+ * reviews wrote them in parts have one body instead.
+ */
+function FindingParts({ finding }: { finding: ReviewFinding }) {
+  if (!finding.failure && !finding.fix) {
+    return <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />;
+  }
+  return (
+    <>
+      {finding.failure ? (
+        <div className={css.findingPart}>
+          <p className={css.partLabel}>How it happens</p>
+          <GitHubMarkdown markdown={finding.failure} className={css.agentMarkdown} />
+        </div>
+      ) : null}
+      {finding.fix ? (
+        <div className={css.findingPart}>
+          <p className={css.partLabel}>Fix</p>
+          <GitHubMarkdown markdown={finding.fix} className={css.agentMarkdown} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** Severities that don't need dealing with before a merge, which fold away. */
+const MINOR_SEVERITIES = new Set(["suggestion", "nit"]);
+
+const isMinor = (finding: ReviewFinding): boolean =>
+  MINOR_SEVERITIES.has(finding.severity.toLowerCase());
+
+/**
+ * Cards folded away under a heading and a count: the findings that don't need
+ * dealing with before a merge, or the earlier ones a re-review found dealt
+ * with. A search match inside opens it.
+ */
+function FoldedCards({
+  heading,
+  count,
+  children,
+}: {
+  heading: string;
+  count: number;
+  children: ReactNode;
+}) {
+  const fold = useRef<HTMLLIElement>(null);
+  const [open, setOpen] = useFoldOpen(fold, false);
+  return (
+    <li ref={fold} data-reveal>
+      <button
+        type="button"
+        className={css.sectionHeading}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name={open ? "chevron-down" : "chevron-right"} />
+        {heading}
+        <span className={css.sectionCount}>{count}</span>
+      </button>
+      <ul className={css.foldedList} hidden={!open}>
+        {children}
+      </ul>
     </li>
   );
 }
@@ -1412,26 +1486,205 @@ function Finding({
           />
         }
       />
-      <GitHubMarkdown markdown={finding.body} className={css.agentMarkdown} />
+      <FindingParts finding={finding} />
       <Thread
         listed={listed}
         threadKey={threadKey}
         placeholder="Ask about this finding…"
         askLabel="Ask about this"
         actions={
-          live && pr ? (
-            <PrCommentComposer
-              engine={source.engine}
-              finding={finding}
-              patch={patch}
-              pr={pr}
-              postedUrl={finding.postedUrl}
-            />
-          ) : !live && finding.postedUrl ? (
-            <PostedLink url={finding.postedUrl} />
-          ) : null
+          <>
+            {live && pr ? (
+              <PrCommentComposer
+                engine={source.engine}
+                finding={finding}
+                patch={patch}
+                pr={pr}
+                postedUrl={finding.postedUrl}
+              />
+            ) : !live && finding.postedUrl ? (
+              <PostedLink url={finding.postedUrl} />
+            ) : null}
+            {live ? (
+              <DismissControl engine={source.engine} finding={finding} prior={false} />
+            ) : null}
+          </>
         }
       />
+    </li>
+  );
+}
+
+const DISMISSALS: { value: DismissalKind; label: string }[] = [
+  { value: "wontFix", label: "Won't fix" },
+  { value: "notAProblem", label: "Not a problem" },
+];
+
+const dismissalLabel = (kind: string): string =>
+  DISMISSALS.find((item) => item.value === kind)?.label ?? "Dismissed";
+
+/**
+ * Takes a finding off the table: it folds away under the review, and later
+ * re-reviews are told not to raise it again, with the reason if one is given.
+ * Not while a review runs, which was already handed the findings as they were.
+ */
+function DismissControl({
+  engine,
+  finding,
+  prior,
+}: {
+  engine: ReviewEngine;
+  finding: ReviewFinding;
+  /** It's one the re-review judged. */
+  prior: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<DismissalKind>("wontFix");
+  const [note, setNote] = useState("");
+  const running = useTab((state) => state.reviewing || state.reReviewing);
+  const setDismissed = useTab((state) => state.setDismissed);
+
+  function dismiss() {
+    const at = new Date().toISOString();
+    const why = note.trim();
+    setDismissed(engine, finding, prior, why ? { kind, note: why, at } : { kind, at });
+    setOpen(false);
+  }
+
+  return (
+    <Details
+      open={open}
+      onOpenChange={setOpen}
+      disabled={running}
+      trigger={
+        <>
+          <Icon name="close" /> Dismiss
+        </>
+      }
+    >
+      <RadioGroup
+        className={css.verdicts}
+        aria-label="Why dismiss it"
+        value={kind}
+        onValueChange={(value) => setKind(value as DismissalKind)}
+      >
+        {DISMISSALS.map((item) => (
+          <Radio key={item.value} value={item.value}>
+            {item.label}
+          </Radio>
+        ))}
+      </RadioGroup>
+      <CommentEditor
+        variant="scenery"
+        value={note}
+        onChange={setNote}
+        onSubmit={dismiss}
+        canSubmit
+        ariaLabel="Why it's dismissed"
+        placeholder="Why, for later reviews (optional)"
+      />
+      <div className={css.composerActions}>
+        <Button variant="primary" size="sm" onClick={dismiss}>
+          <Icon name="close" /> Dismiss finding
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </Details>
+  );
+}
+
+/** One finding in the fold of set-aside findings: what it was, and why it's off the table. */
+interface SetAsideItem {
+  finding: ReviewFinding;
+  /** Why it's set aside, as the fold's heading counts them: `withdrawn`, `dismissed`, … */
+  group: string;
+  /** The mark's word: `withdrawn`, or the dismissal. */
+  label: string;
+  /** Beside the location, such as what severity it was. */
+  aside: string;
+  /** Why: what the code showed, or the person's note. */
+  note: string;
+  /** What the finding itself said, when that's worth reading too. */
+  detail?: string;
+  /** The mark; a cross, for something taken back or dismissed. */
+  icon?: IconName;
+  /** Puts it back, for a live review's dismissals, which can also become a rule. */
+  restore?: () => void;
+}
+
+/** A rule drafted from a dismissed finding, for the person to reword before saving it. */
+function ruleFor(finding: ReviewFinding, note: string): string {
+  const title = finding.title.trim().replace(/\.$/, "");
+  const why = note.trim();
+  return `- Don't raise "${title}" in \`${finding.path}\`${why ? `: ${why}` : "."}`;
+}
+
+/**
+ * Findings off the table, folded away under one count that says what's in
+ * it: those a re-review found outside what changed, those a second look
+ * couldn't confirm or took back, and those dismissed. Each says why, so a
+ * reader who disagrees can raise it in the review's thread, or restore a
+ * dismissal.
+ */
+function SetAside({ items }: { items: SetAsideItem[] }) {
+  const [open, setOpen] = useState(false);
+  const root = useTab((state) => state.repo.root);
+  const sorted = useMemo(() => inDiffOrder(items, (item) => item.finding), [items]);
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of items) counts.set(item.group, (counts.get(item.group) ?? 0) + 1);
+    return [...counts].map(([group, count]) => `${count} ${group}`).join(" · ");
+  }, [items]);
+  return (
+    <li data-reveal>
+      <button
+        type="button"
+        className={css.sectionHeading}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name={open ? "chevron-down" : "chevron-right"} />
+        Set aside
+        <span className={css.sectionCount}>{items.length}</span>
+        <span className={css.sectionBreakdown}>{groups}</span>
+      </button>
+      <ul className={css.withdrawnList} hidden={!open}>
+        {sorted.map(({ finding, label, aside, note, detail, icon = "close", restore }) => (
+          <li key={findingThreadKey(finding)} className={`${css.finding} ${css.status_obsolete}`}>
+            <div className={css.findingTop}>
+              <FindingLocation path={finding.path} lines={findingLines(finding)} />
+              <span className={css.findingNote}>{aside}</span>
+            </div>
+            <FindingTitle
+              icon={icon}
+              label={label}
+              title={finding.title}
+              copy={
+                <CopyButton
+                  text={findingMarkdown(finding, finding.severity, finding.body)}
+                  label="Copy finding"
+                />
+              }
+            />
+            {note ? <GitHubMarkdown markdown={note} className={css.agentMarkdown} /> : null}
+            {detail ? <GitHubMarkdown markdown={detail} className={css.setAsideDetail} /> : null}
+            {restore ? (
+              <div className={css.itemActions}>
+                <Button variant="ghost" size="sm" onClick={restore}>
+                  Restore
+                </Button>
+                <RuleFromFindingButton
+                  root={root}
+                  reviewers={finding.reviewers ?? []}
+                  rule={ruleFor(finding, note)}
+                />
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </li>
   );
 }
@@ -1456,11 +1709,26 @@ function ReviewSummary({
       tabIndex={-1}
     >
       {source.review.cutShort ? (
-        <p className={css.cutShort}>
+        <p className={css.caveat}>
           <Icon name="warning" />
           <span>
             {ENGINE_LABELS[source.engine]} hit its turn limit partway through, so it answered from
             what it had read by then. Some changes may not have been checked.
+          </span>
+        </p>
+      ) : null}
+      {source.review.scopeNote ? (
+        <p className={css.caveat}>
+          <Icon name="info" />
+          <span>{source.review.scopeNote}</span>
+        </p>
+      ) : null}
+      {source.review.checkFailure ? (
+        <p className={css.caveat}>
+          <Icon name="warning" />
+          <span>
+            {ENGINE_LABELS[source.engine]} couldn't double-check these findings, so some may not
+            hold. {source.review.checkFailure}
           </span>
         </p>
       ) : null}
@@ -1943,16 +2211,45 @@ function AgentSettings({
           <ReviewButton />
         </span>
       ) : review ? (
-        <RepoRulesButton root={root} />
+        <span className={css.controlsEnd}>
+          <WholeDiffButton />
+          <RepoRulesButton root={root} />
+        </span>
       ) : null}
     </div>
   );
 }
 
 /**
+ * Once a review exists, a re-review looks for new problems only in what
+ * changed since; this one looks in the whole diff again, for when the review
+ * before missed too much to build on.
+ */
+function WholeDiffButton() {
+  const reviewEngine = useAppStore((state) => state.reviewEngine);
+  const hasReview = useTab((state) => state.reviews[reviewEngine] != null);
+  const busy = useTab((state) => state.reviewing || state.reReviewing);
+  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
+  const runReReview = useTab((state) => state.runReReview);
+  if (!hasReview) return null;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => void runReReview({ whole: true })}
+      disabled={busy || !hasDiff}
+      title={`Ask ${ENGINE_LABELS[reviewEngine]} to check that its open findings were addressed, then review the whole diff again for new issues, not only what changed since its last review`}
+    >
+      <Icon name="refresh" />
+      <span className={css.wholeDiffLabel}>Whole diff</span>
+    </Button>
+  );
+}
+
+/**
  * One button that changes job: the first press reviews, and once a review
- * exists it becomes a follow-up — check the stored findings against the
- * current code, then look for new problems.
+ * exists it becomes a follow-up — check the open findings against the current
+ * code, then look for new problems in what changed since.
  */
 function ReviewButton() {
   const reviewEngine = useAppStore((state) => state.reviewEngine);
@@ -1974,7 +2271,7 @@ function ReviewButton() {
       title={
         hasDiff
           ? hasReview
-            ? `Ask ${agent} to check that its previous findings were addressed, then review the changed code for new issues`
+            ? `Ask ${agent} to check that its open findings were addressed, then look for new issues in what changed since its last review`
             : `Ask ${agent} to review this comparison`
           : "Nothing to review until a comparison has changes"
       }
@@ -2038,20 +2335,103 @@ function ReviewCard({
   const { source, live } = listed;
   const section = useRef<HTMLElement>(null);
   const [open, setOpen] = useFoldOpen(section, live);
+  const setDismissed = useTab((state) => state.setDismissed);
+  const restoreSetAside = useTab((state) => state.restoreSetAside);
   const findings = useMemo(
-    () => inDiffOrder(source.review.findings, (finding) => finding),
+    () =>
+      inDiffOrder(
+        source.review.findings.filter((finding) => !finding.dismissed),
+        (finding) => finding,
+      ),
     [source],
   );
   const resolutions = useMemo(
-    () => inDiffOrder(source.resolutions ?? [], (resolution) => resolution.finding),
+    () =>
+      inDiffOrder(
+        (source.resolutions ?? []).filter((resolution) => !resolution.finding.dismissed),
+        (resolution) => resolution.finding,
+      ),
     [source],
   );
+  // Up front, what needs dealing with; suggestions and nits fold away, and
+  // so do earlier findings a re-review found dealt with.
+  const major = findings.filter((finding) => !isMinor(finding));
+  const minor = findings.filter(isMinor);
+  const openEarlier = resolutions.filter((resolution) => isOpenVerdict(resolution.status));
+  const dealtWith = resolutions.filter((resolution) => !isOpenVerdict(resolution.status));
+  const setAside = useMemo(() => {
+    const { engine, review } = source;
+    // New findings a re-review made outside what changed since the review
+    // before it: likely ones that review missed, so shown apart.
+    const outside = (review.outside ?? []).map(
+      (finding): SetAsideItem => ({
+        finding,
+        group: "outside what changed",
+        label: finding.severity,
+        aside: `Outside what changed · ${finding.severity}`,
+        note: finding.body,
+        icon: severityIcon(finding.severity),
+      }),
+    );
+    const unconfirmed = (review.unconfirmed ?? []).map(
+      ({ finding, reason }): SetAsideItem => ({
+        finding,
+        group: "not confirmed",
+        label: "not confirmed",
+        aside: `Not confirmed · was ${finding.severity}`,
+        note: reason,
+        detail: finding.body,
+        icon: "minus",
+      }),
+    );
+    const withdrawn = (review.withdrawn ?? []).map(
+      ({ finding, reason }): SetAsideItem => ({
+        finding,
+        group: "withdrawn",
+        label: "withdrawn",
+        aside: `Withdrawn · was ${finding.severity}`,
+        note: reason,
+      }),
+    );
+    // Dismissed from this review, and dismissed before it and carried along:
+    // a live review's can be put back.
+    const dismissed = [
+      ...review.findings.map((finding) => ({ finding, prior: false })),
+      ...(source.resolutions ?? []).map(({ finding }) => ({ finding, prior: true })),
+    ].flatMap(({ finding, prior }): SetAsideItem[] =>
+      finding.dismissed
+        ? [
+            {
+              finding,
+              group: "dismissed",
+              label: dismissalLabel(finding.dismissed.kind),
+              aside: dismissalLabel(finding.dismissed.kind),
+              note: finding.dismissed.note ?? "",
+              restore: live ? () => setDismissed(engine, finding, prior, null) : undefined,
+            },
+          ]
+        : [],
+    );
+    const dismissedBefore = (source.setAside ?? [])
+      .filter((item) => item.why !== "withdrawn")
+      .map(
+        ({ finding, why, note }): SetAsideItem => ({
+          finding,
+          group: "dismissed",
+          label: dismissalLabel(why),
+          aside: `${dismissalLabel(why)} · earlier`,
+          note,
+          restore: live ? () => restoreSetAside(engine, finding) : undefined,
+        }),
+      );
+    return [...outside, ...unconfirmed, ...withdrawn, ...dismissed, ...dismissedBefore];
+  }, [source, live, setDismissed, restoreSetAside]);
   const reReview = source.resolutions != null;
   const { submitted } = source.review;
   // When first, as it's what tells reviews apart; the line is cut from its end.
   const meta = [
     shortTime(source.createdAt),
-    reReview ? "re-review" : null,
+    reReview ? (source.review.scope === "whole" ? "full re-review" : "re-review") : null,
     source.effort ? `${source.effort} effort` : null,
   ].filter(Boolean);
 
@@ -2079,14 +2459,22 @@ function ReviewCard({
       <div className={css.reviewBody} hidden={!open}>
         <ul className={css.findings}>
           <ReviewSummary listed={listed} patch={patch} pr={pr} />
-          {findings.length === 0 ? (
+          {major.length === 0 ? (
             <li className={css.status} data-reveal>
               {reReview
-                ? "No new findings beyond the previous review."
-                : "No findings — the diff came back clean."}
+                ? minor.length
+                  ? "Nothing new that needs fixing before this merges."
+                  : "No new findings beyond the previous review."
+                : minor.length
+                  ? "Nothing that needs fixing before this merges."
+                  : source.review.findings.length
+                    ? "Nothing left open: every finding was dismissed."
+                    : setAside.length
+                      ? "No findings held up on a second look."
+                      : "No findings — the diff came back clean."}
             </li>
           ) : (
-            findings.map((finding) => (
+            major.map((finding) => (
               <Finding
                 key={findingThreadKey(finding)}
                 finding={finding}
@@ -2096,7 +2484,7 @@ function ReviewCard({
               />
             ))
           )}
-          {resolutions.map((resolution) => (
+          {openEarlier.map((resolution) => (
             <Resolution
               key={resolutionThreadKey(resolution.finding)}
               resolution={resolution}
@@ -2105,6 +2493,33 @@ function ReviewCard({
               pr={pr}
             />
           ))}
+          {minor.length ? (
+            <FoldedCards heading="Suggestions and nits" count={minor.length}>
+              {minor.map((finding) => (
+                <Finding
+                  key={findingThreadKey(finding)}
+                  finding={finding}
+                  listed={listed}
+                  patch={patch}
+                  pr={pr}
+                />
+              ))}
+            </FoldedCards>
+          ) : null}
+          {dealtWith.length ? (
+            <FoldedCards heading="Dealt with" count={dealtWith.length}>
+              {dealtWith.map((resolution) => (
+                <Resolution
+                  key={resolutionThreadKey(resolution.finding)}
+                  resolution={resolution}
+                  listed={listed}
+                  patch={patch}
+                  pr={pr}
+                />
+              ))}
+            </FoldedCards>
+          ) : null}
+          {setAside.length ? <SetAside items={setAside} /> : null}
           {live ? (
             <Conclusion source={source} pr={pr} />
           ) : submitted ? (
@@ -2203,8 +2618,8 @@ function ReviewTab() {
   const { handingOver, label, runId, shown, revealed, shapesLeft } = useRunHandover(
     running,
     reReviewing
-      ? `${agent} is checking whether its previous findings were addressed, then reviewing the changed code for new issues.`
-      : `${agent} is reading the diff and the surrounding code.`,
+      ? `${agent} is checking whether its previous findings were addressed and reviewing the changed code for new issues, then double-checking what it finds.`
+      : `${agent} is reading the diff and the surrounding code, then double-checking what it finds.`,
     reviews,
   );
   const bodyRef = useRef<HTMLDivElement>(null);

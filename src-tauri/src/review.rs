@@ -18,6 +18,7 @@ use crate::git;
 use crate::github::{review_comment_id, PrComment, PrContext};
 use crate::rules::RepoRules;
 use crate::runs::{AgentRun, Stop, QUIET_LIMIT, RUN_LIMIT};
+use crate::scope::{self, Since};
 use crate::specialists::{self, Panel};
 
 /// Fewest agentic turns a claude run gets. A small diff can still reach far:
@@ -228,6 +229,30 @@ const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values. T
 /// lines, or the whole file.
 const LOCATION_GUIDANCE: &str = "`line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
 
+/// What a finding has to be to be reported at all. Each run is a sample of
+/// what a review can notice, and the findings that come and go between runs
+/// are the ones nobody can trace to a failure, so the bar is a failure the
+/// reviewer can describe, in what the change itself does.
+const REPORTING_BAR: &str = "Report a problem only when you can say how it goes wrong: what reaches it, and what the user or the system sees. Report what this change introduces or makes worse, not what the code already did before it. A problem you suspect but can't trace to a failure is worth reporting only when the stakes are high, such as data loss or a security hole, and then `failure` says what you couldn't confirm. Report at most five suggestions and nits, the ones most worth the author's time. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch.";
+
+/// One scale for `severity`, tied to what happens if the change merges, so
+/// that a finding's rating doesn't drift between runs. The app shows
+/// critical and warning findings, and folds the rest away.
+const SEVERITY_GUIDANCE: &str = r#"`severity` says what happens if this merges as it is:
+- "critical": data loss or corruption, a security hole, or an outage, on a path production will take.
+- "warning": a bug that users or other code will hit on a realistic path, or a change that breaks something else.
+- "suggestion": no bug, but a cost you can name, such as code that will drift from its copy, a name or comment that misleads, or a test that can't fail.
+- "nit": small, and safe to ignore.
+Only critical and warning findings are shown up front; the rest are folded away, so rate each honestly rather than up."#;
+
+/// How a finding is written: in parts, so every finding reads the same way and
+/// a reader can tell in seconds whether it matters and what to do.
+const FINDING_GUIDANCE: &str = r#"Each finding has three parts:
+- `title` is the consequence, for whoever hits it, in plain words: "A wrong password takes seven seconds to report", not "fetchUser retries 4xx responses". No more than about ten words.
+- `failure` is how it happens: the inputs, state, or sequence of events that reach the problem, and what the user or the system sees. A sentence or two, or a numbered list of up to about four steps.
+- `fix` is what to change: one sentence, or a small code block when the change is easier shown than said.
+Don't repeat the title in `failure`, or `failure` in `fix`."#;
+
 /// How the review and re-review prompts pick `verdict` and write `conclusion`:
 /// the review the user would submit on GitHub, drafted for them to adjust.
 const VERDICT_GUIDANCE: &str = r#"`verdict` is the GitHub review you recommend submitting:
@@ -256,7 +281,20 @@ pub struct ReviewFinding {
     /// One of critical | warning | suggestion | nit — but the model writes it,
     /// so treat it as a label rather than an enum.
     pub severity: String,
+    /// The consequence, for whoever hits it, in plain words.
     pub title: String,
+    /// How it goes wrong: the inputs, state, or events that reach it. Empty
+    /// on findings from before reviews wrote their findings in parts, whose
+    /// `body` holds it all.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub failure: String,
+    /// What to change. Empty, as `failure` is, on older findings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix: String,
+    /// The whole finding as one piece of Markdown, for posting it, copying it,
+    /// and listing it back to the agent: `failure` and `fix` together, put
+    /// together by the app (see `settle_body`), on findings written in parts.
+    #[serde(default)]
     pub body: String,
     /// Who raised it, when specialists reviewed alongside the lead: the names
     /// the app shows, such as `Lead` or `Migrations`. The model names them by
@@ -284,6 +322,35 @@ impl ReviewFinding {
             }
             _ => {}
         }
+    }
+
+    /// A suggestion or a nit: nothing that needs fixing before a merge.
+    fn is_minor(&self) -> bool {
+        ["suggestion", "nit"]
+            .iter()
+            .any(|minor| self.severity.eq_ignore_ascii_case(minor))
+    }
+
+    /// Puts a finding written in parts together as one piece of Markdown,
+    /// which is what gets posted, copied, and listed back to the agent.
+    fn settle_body(&mut self) {
+        if !self.body.trim().is_empty() {
+            return;
+        }
+        let failure = self.failure.trim();
+        let fix = self.fix.trim();
+        self.body = match (failure.is_empty(), fix.is_empty()) {
+            (_, true) => failure.to_owned(),
+            // A fix that's a code block, or runs over lines, starts on its own.
+            (true, false) if fix.contains('\n') || fix.starts_with("```") => {
+                format!("**Fix:**\n\n{fix}")
+            }
+            (true, false) => format!("**Fix:** {fix}"),
+            (false, false) if fix.contains('\n') || fix.starts_with("```") => {
+                format!("{failure}\n\n**Fix:**\n\n{fix}")
+            }
+            (false, false) => format!("{failure}\n\n**Fix:** {fix}"),
+        };
     }
 
     /// Where the finding points, for the prompts that list findings back to the
@@ -315,6 +382,27 @@ pub struct ReviewResult {
     /// so the review may have gaps. Set by the app, never by the model.
     #[serde(default, skip_deserializing)]
     pub cut_short: bool,
+    /// Findings the agent took back when asked whether it was sure of them.
+    /// Set by the app, never by the model.
+    #[serde(default, skip_deserializing)]
+    pub withdrawn: Vec<WithdrawnFinding>,
+    /// Findings it could neither confirm nor rule out on that second look,
+    /// shown apart from the rest. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub unconfirmed: Vec<WithdrawnFinding>,
+    /// Why the findings could not be double-checked, when that failed; they
+    /// are then as the review first wrote them. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub check_failure: Option<String>,
+}
+
+/// A finding the review wrote and then withdrew on a second look.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawnFinding {
+    pub finding: ReviewFinding,
+    /// What the code showed instead.
+    pub reason: String,
 }
 
 /// Reviews the whole comparison with the chosen engine and returns structured
@@ -361,6 +449,7 @@ pub fn review_diff(
         compare,
         &generated,
         rules,
+        None,
     );
     let answer = if engine == "claude" {
         let schema = panel
@@ -390,8 +479,39 @@ pub fn review_diff(
     result.cut_short = answer.cut_short;
     for finding in &mut result.findings {
         finding.tidy_span();
+        finding.settle_body();
     }
     specialists::credit_reviewers(&mut result.findings, panel.as_ref());
+
+    let minor = take_minor(&mut result.findings);
+    if !result.findings.is_empty() {
+        let review = ReviewToCheck {
+            summary: &result.summary,
+            verdict: &result.verdict,
+            conclusion: &result.conclusion,
+            findings: &result.findings,
+            earlier: String::new(),
+            set_aside: String::new(),
+        };
+        let check = double_check(
+            root, compare, &patch, engine, model, effort, &review, pr_context, rules, run,
+        );
+        match check {
+            Ok(check) => {
+                let checked = check.apply(
+                    &mut result.findings,
+                    &mut result.summary,
+                    &mut result.verdict,
+                    &mut result.conclusion,
+                );
+                result.withdrawn = checked.withdrawn;
+                result.unconfirmed = checked.unconfirmed;
+            }
+            Err(GitError::Cancelled) => return Err(GitError::Cancelled),
+            Err(error) => result.check_failure = Some(error.to_string()),
+        }
+    }
+    result.findings.extend(minor);
     Ok(result)
 }
 
@@ -427,10 +547,77 @@ pub struct ReReviewResult {
     /// As on `ReviewResult`.
     #[serde(default, skip_deserializing)]
     pub cut_short: bool,
+    /// As on `ReviewResult`: new findings only, since only those are checked.
+    #[serde(default, skip_deserializing)]
+    pub withdrawn: Vec<WithdrawnFinding>,
+    /// As on `ReviewResult`, and as `withdrawn` is, new findings only.
+    #[serde(default, skip_deserializing)]
+    pub unconfirmed: Vec<WithdrawnFinding>,
+    /// As on `ReviewResult`.
+    #[serde(default, skip_deserializing)]
+    pub check_failure: Option<String>,
+    /// Where it looked for new problems: `since`, in what changed since the
+    /// review before it, or `whole`, the whole diff. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub scope: String,
+    /// Why a re-review meant to look at what changed read the whole diff
+    /// instead. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub scope_note: Option<String>,
+    /// New findings outside what changed since the review before, folded away
+    /// rather than shown, and not double-checked. Critical ones are shown
+    /// wherever they are. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub outside: Vec<ReviewFinding>,
+}
+
+/// A finding taken off the table before a re-review: withdrawn on a second
+/// look, or dismissed by the person reviewing. Every later run is shown these
+/// so it doesn't raise them again.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAsideFinding {
+    pub finding: ReviewFinding,
+    /// `withdrawn`, `wontFix`, or `notAProblem`. The app writes it, but it's
+    /// only ever shown to the model, so anything else reads as a dismissal.
+    pub why: String,
+    /// What the code showed, for a withdrawn finding; the person's note, if
+    /// they left one, for a dismissed one.
+    #[serde(default)]
+    pub note: String,
+}
+
+impl SetAsideFinding {
+    fn label(&self) -> &'static str {
+        match self.why.as_str() {
+            "withdrawn" => "withdrawn",
+            "notAProblem" => "dismissed: not a problem",
+            _ => "dismissed: won't fix",
+        }
+    }
+}
+
+/// The review a re-review follows up on, as the app keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriorReview {
+    pub summary: String,
+    /// Every finding still open: the last review's own, and those it judged
+    /// unaddressed or partial from the reviews before it. The re-review
+    /// numbers them in this order.
+    #[serde(default)]
+    pub findings: Vec<ReviewFinding>,
+    #[serde(default)]
+    pub set_aside: Vec<SetAsideFinding>,
+    /// The commit it read, which a re-review looks for new problems since.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// Re-reviews the comparison against an earlier review: judges whether each
-/// prior finding was addressed, then reviews the current diff for new issues.
+/// prior finding was addressed, then looks for new problems in what changed
+/// since that review read the code, or with `whole`, in the whole diff again.
+/// See `scope` for why the default is narrower.
 ///
 /// One CLI run rather than two: the same read of the current code answers
 /// both questions, and splitting them would double the agentic cost.
@@ -442,8 +629,8 @@ pub fn re_review_diff(
     engine: &str,
     model: Option<&str>,
     effort: Option<&str>,
-    prior_summary: &str,
-    prior_findings: &[ReviewFinding],
+    prior: &PriorReview,
+    whole: bool,
     pr_context: Option<&PrContext>,
     rules: &RepoRules,
     run: &AgentRun,
@@ -453,7 +640,7 @@ pub fn re_review_diff(
             "unknown review engine: {engine}"
         )));
     }
-    if prior_findings.is_empty() && prior_summary.trim().is_empty() {
+    if prior.findings.is_empty() && prior.summary.trim().is_empty() {
         return Err(GitError::Command(
             "There is no previous review to check against.".into(),
         ));
@@ -466,8 +653,15 @@ pub fn re_review_diff(
         ));
     }
 
-    let mut prompt =
-        build_re_review_prompt(compare, prior_summary, prior_findings, &patch, pr_context);
+    let (since, scope_note) = if whole {
+        (None, None)
+    } else {
+        match scope::changes_since(root, prior.head.as_deref(), compare, &patch) {
+            Ok(since) => (Some(since), None),
+            Err(why) => (None, Some(why)),
+        }
+    };
+    let mut prompt = build_re_review_prompt(compare, prior, &patch, since.as_ref(), pr_context);
     add_repo_instructions(&mut prompt, &patch, root, engine);
     add_review_rules(&mut prompt, &patch, &rules.review);
     let generated = git::generated_paths(root, compare, &specialists::changed_paths(&patch));
@@ -478,7 +672,15 @@ pub fn re_review_diff(
         compare,
         &generated,
         rules,
+        since.as_ref().map(Since::paths).as_ref(),
     );
+    if since.is_some() && panel.is_some() {
+        insert_before_diff(
+            &mut prompt,
+            &patch,
+            "This re-review looks only at what changed since your earlier review, so tell each specialist which lines of its files changed since, and to report only problems in those changes.\n\n",
+        );
+    }
     let answer = if engine == "claude" {
         let schema = panel
             .as_ref()
@@ -488,7 +690,7 @@ pub fn re_review_diff(
             &prompt,
             model,
             effort,
-            turn_budget(&patch),
+            turn_budget(since.as_ref().map_or(&patch, |since| &since.patch)),
             panel.as_ref(),
             Some(schema.as_deref().unwrap_or(RE_REVIEW_SCHEMA)),
             run,
@@ -507,25 +709,102 @@ pub fn re_review_diff(
     result.cut_short = answer.cut_short;
     for finding in &mut result.findings {
         finding.tidy_span();
+        finding.settle_body();
     }
     specialists::credit_reviewers(&mut result.findings, panel.as_ref());
+    result.scope = if since.is_some() { "since" } else { "whole" }.to_owned();
+    result.scope_note = scope_note;
+    if let Some(since) = &since {
+        // Held to what changed in code, not only in the prompt: a problem the
+        // earlier review missed elsewhere is what made re-reviews churn.
+        let (inside, outside) =
+            std::mem::take(&mut result.findings)
+                .into_iter()
+                .partition(|finding| {
+                    since.covers(finding) || finding.severity.eq_ignore_ascii_case("critical")
+                });
+        result.findings = inside;
+        result.outside = outside;
+    }
+
+    let minor = take_minor(&mut result.findings);
+    if !result.findings.is_empty() {
+        let review = ReviewToCheck {
+            summary: &result.summary,
+            verdict: &result.verdict,
+            conclusion: &result.conclusion,
+            findings: &result.findings,
+            earlier: earlier_verdicts_note(&prior.findings, &result.resolutions),
+            set_aside: set_aside_note(&prior.set_aside),
+        };
+        let check = double_check(
+            root, compare, &patch, engine, model, effort, &review, pr_context, rules, run,
+        );
+        match check {
+            Ok(check) => {
+                let checked = check.apply(
+                    &mut result.findings,
+                    &mut result.summary,
+                    &mut result.verdict,
+                    &mut result.conclusion,
+                );
+                result.withdrawn = checked.withdrawn;
+                result.unconfirmed = checked.unconfirmed;
+            }
+            Err(GitError::Cancelled) => return Err(GitError::Cancelled),
+            Err(error) => result.check_failure = Some(error.to_string()),
+        }
+    }
+    result.findings.extend(minor);
     Ok(result)
+}
+
+/// The findings set aside before a run, for its prompt: what each was, and
+/// why it's off the table. Empty when there are none.
+fn set_aside_note(set_aside: &[SetAsideFinding]) -> String {
+    if set_aside.is_empty() {
+        return String::new();
+    }
+    let mut note = String::from("These findings from earlier reviews were set aside: withdrawn because the code showed them wrong, or dismissed by the person reviewing. Don't raise any of them again, in any wording, unless the code they point at has changed so that why they were set aside no longer holds:\n\n");
+    for item in set_aside {
+        let finding = &item.finding;
+        note.push_str(&format!(
+            "- [{}] {} ({}) — {}\n",
+            item.label(),
+            finding.path,
+            finding.location_label(),
+            finding.title
+        ));
+        let why = item.note.trim();
+        if !why.is_empty() {
+            note.push_str(&format!("  Why: {}\n", why.replace('\n', " ")));
+        }
+    }
+    note.push('\n');
+    note
 }
 
 fn build_re_review_prompt(
     compare: Option<&str>,
-    prior_summary: &str,
-    prior_findings: &[ReviewFinding],
+    prior: &PriorReview,
     patch: &str,
+    since: Option<&Since>,
     pr_context: Option<&PrContext>,
 ) -> String {
     let target = match compare {
         Some(compare) => format!("the `{compare}` ref"),
         None => "the working tree, so it may include uncommitted work-in-progress".to_owned(),
     };
+    let prior_summary = &prior.summary;
+    let set_aside = set_aside_note(&prior.set_aside);
+    let new_problems = match since {
+        None => "2. Review the current diff for NEW problems, exactly as you would a fresh pull request: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside. Pay particular attention to code that changed since the earlier review: fixes introduce their own bugs.".to_owned(),
+        Some(since) if since.is_empty() => format!("2. Nothing in the diff has changed since your earlier review read `{}`, so there are no new problems to look for: leave `findings` empty.", since.short_head()),
+        Some(since) => format!("2. Look for NEW problems in what changed since your earlier review read `{}`: the changes under \"What changed since your earlier review\" below, and code they break, such as the callers of a function whose behavior changed. Fixes introduce their own bugs, so read these closely: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Don't go back over code that hasn't changed since. Your earlier review covered it, and a problem it missed there stays out of this review unless it's critical. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside.", since.short_head()),
+    };
 
     let mut findings_list = String::new();
-    for (index, finding) in prior_findings.iter().enumerate() {
+    for (index, finding) in prior.findings.iter().enumerate() {
         findings_list.push_str(&format!(
             "{index}. [{}] {} ({}) — {}\n   {}\n{}",
             finding.severity,
@@ -546,14 +825,14 @@ Your earlier review said:
 
 {prior_summary}
 
-Its findings, numbered:
+The findings still open from your earlier reviews, numbered:
 
 {findings_list}
-You have two jobs, in order:
+{set_aside}You have two jobs, in order:
 
 1. For EVERY numbered finding, judge whether it has been addressed in the current code. Use `status` values: "addressed" (fixed), "unaddressed" (still present as reported), "partial" (improved but not fully fixed), "obsolete" (the code it pointed at is gone or changed enough that the finding no longer applies). In `note`, say what the verdict is grounded in — where the fix is, or what still remains. If a finding was wrong to begin with, mark it "obsolete" and say so. Where a finding was sent to the pull request, what happened to it there follows it: whether its GitHub thread is resolved, and any replies. Take a reply saying it was fixed, or a resolved thread, as a claim to check against the code rather than as the verdict, and say in `note` when one bears on it.
 
-2. Review the current diff for NEW problems, exactly as you would a fresh pull request: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Do not re-report the numbered findings — their resolutions cover them. Pay particular attention to code that changed since the earlier review: fixes introduce their own bugs.
+{new_problems}
 
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
@@ -574,15 +853,18 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
       "line": 123,
       "endLine": null,
       "severity": "critical | warning | suggestion | nit",
-      "title": "One short sentence naming the problem.",
-      "body": "What is wrong, why it matters, and what to do instead."
+      "title": "What goes wrong, for whoever hits it.",
+      "failure": "How it happens, and what the user or the system sees.",
+      "fix": "What to change."
     }}
   ]
 }}
 
-`resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} Include new findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, and do not report style nits a formatter would catch. An empty findings array is a valid answer when nothing new is wrong.
+`resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} {REPORTING_BAR} An empty findings array is a valid answer when nothing new is wrong.
 
-A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+{SEVERITY_GUIDANCE}
+
+{FINDING_GUIDANCE}
 
 {VERDICT_GUIDANCE}
 Weigh the earlier findings that are still unaddressed or partial alongside the new ones. The conclusion should say what is left, not what was fixed.
@@ -590,6 +872,318 @@ Weigh the earlier findings that are still unaddressed or partial alongside the n
 {WRITING_GUIDANCE}
 
 {JSON_MARKDOWN_NOTE} Keep each `note` to a sentence or two.
+
+The diff:
+
+{patch}"#
+    );
+    if let Some(since) = since.filter(|since| !since.is_empty()) {
+        insert_before_diff(
+            &mut prompt,
+            patch,
+            &format!(
+                "What changed since your earlier review, as a diff from `{}`, the commit it read, cut down to this diff's own changes:\n\n{}\n",
+                since.short_head(),
+                since.patch
+            ),
+        );
+    }
+    if let Some(pr) = pr_context {
+        let mut context = String::new();
+        append_pr_context(&mut context, pr);
+        insert_before_diff(&mut prompt, patch, &context);
+    }
+    prompt
+}
+
+/// Takes the suggestions and nits out of `findings`, leaving the ones a check
+/// reads again: the rest fold away in the app anyway, and each finding
+/// checked costs the check a few turns of reading.
+fn take_minor(findings: &mut Vec<ReviewFinding>) -> Vec<ReviewFinding> {
+    let (major, minor) = std::mem::take(findings)
+        .into_iter()
+        .partition(|finding| !finding.is_minor());
+    *findings = major;
+    minor
+}
+
+/// Fewest agentic turns a check of a review's findings gets. Most of a check
+/// is rereading the code each finding points at and the code that calls it.
+const CHECK_TURNS: usize = 12;
+
+/// Agentic turns for checking `findings` findings: a few reads each on top of
+/// `CHECK_TURNS`, and never more than a review of a small diff gets.
+fn check_turn_budget(findings: usize) -> usize {
+    (CHECK_TURNS + 3 * findings).min(MIN_TURNS)
+}
+
+/// A review as its check is shown it: what it concluded, and the findings to
+/// check.
+struct ReviewToCheck<'a> {
+    summary: &'a str,
+    verdict: &'a str,
+    conclusion: &'a str,
+    findings: &'a [ReviewFinding],
+    /// A re-review's verdicts on the review before it, which its conclusion
+    /// weighs too; see `earlier_verdicts_note`. Empty for a first review.
+    earlier: String,
+    /// The findings set aside before a re-review, which a new one mustn't
+    /// repeat; see `set_aside_note`. Empty for a first review.
+    set_aside: String,
+}
+
+/// The check's answer: one judgement per finding, then the review's summary,
+/// verdict, and conclusion restated to match what held.
+#[derive(Debug, Deserialize)]
+struct FindingsCheck {
+    #[serde(default)]
+    checks: Vec<FindingCheck>,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    verdict: String,
+    #[serde(default)]
+    conclusion: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FindingCheck {
+    /// Index into the findings the check prompt numbered.
+    index: usize,
+    /// `holds`, `unsure`, or `wrong`: what the code showed.
+    #[serde(default)]
+    outcome: String,
+    /// The severity the finding deserves on a second look.
+    #[serde(default)]
+    severity: String,
+    /// What in the code confirms the finding, shows it wrong, or leaves it open.
+    #[serde(default)]
+    reason: String,
+}
+
+/// What a check took out of the findings shown, each with why.
+#[derive(Debug, Default)]
+struct Checked {
+    /// The code showed them wrong.
+    withdrawn: Vec<WithdrawnFinding>,
+    /// The code could settle them neither way.
+    unconfirmed: Vec<WithdrawnFinding>,
+}
+
+impl FindingsCheck {
+    /// Settles a review around the check: findings that hold stay, at the
+    /// severity the check gave them, and the rest are returned as withdrawn
+    /// or unconfirmed. The model writes the indices and the outcomes, so
+    /// out-of-range indices are ignored, and a finding it skipped, or gave an
+    /// outcome it wasn't offered, stays as it was: no answer is no evidence a
+    /// finding is wrong. The restated summary, verdict, and conclusion replace
+    /// the review's only when something changed, so a check that confirms
+    /// everything leaves the review's own words alone.
+    fn apply(
+        self,
+        findings: &mut Vec<ReviewFinding>,
+        summary: &mut String,
+        verdict: &mut String,
+        conclusion: &mut String,
+    ) -> Checked {
+        let mut checked = Checked::default();
+        let mut rerated = false;
+        let mut kept = Vec::new();
+        for (index, mut finding) in std::mem::take(findings).into_iter().enumerate() {
+            let Some(check) = self.checks.iter().find(|check| check.index == index) else {
+                kept.push(finding);
+                continue;
+            };
+            let set_aside = match check.outcome.trim().to_ascii_lowercase().as_str() {
+                "wrong" => Some(&mut checked.withdrawn),
+                "unsure" => Some(&mut checked.unconfirmed),
+                _ => None,
+            };
+            if let Some(list) = set_aside {
+                list.push(WithdrawnFinding {
+                    finding,
+                    reason: check.reason.trim().to_owned(),
+                });
+                continue;
+            }
+            let severity = check.severity.trim();
+            if !severity.is_empty() && !severity.eq_ignore_ascii_case(&finding.severity) {
+                finding.severity = severity.to_owned();
+                rerated = true;
+            }
+            kept.push(finding);
+        }
+        *findings = kept;
+
+        if !checked.withdrawn.is_empty() || !checked.unconfirmed.is_empty() || rerated {
+            for (field, restated) in [
+                (summary, self.summary),
+                (verdict, self.verdict),
+                (conclusion, self.conclusion),
+            ] {
+                if !restated.trim().is_empty() {
+                    *field = restated;
+                }
+            }
+        }
+        checked
+    }
+}
+
+/// Asks the engine that wrote a review whether it is sure of its findings,
+/// before any of them reach the pull request: a second run, shown the review,
+/// that checks each finding against the code and says which hold.
+///
+/// A fresh run rather than the review's session resumed, so it reads the code
+/// again instead of trusting what it concluded the first time, and so it works
+/// the same for both engines.
+#[allow(clippy::too_many_arguments)]
+fn double_check(
+    root: &Path,
+    compare: Option<&str>,
+    patch: &str,
+    engine: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    review: &ReviewToCheck,
+    pr_context: Option<&PrContext>,
+    rules: &RepoRules,
+    run: &AgentRun,
+) -> Result<FindingsCheck, GitError> {
+    let mut prompt = build_check_prompt(compare, review, patch, pr_context);
+    add_repo_instructions(&mut prompt, patch, root, engine);
+    add_review_rules(&mut prompt, patch, &rules.review);
+    // A specialist's finding can rest on its rules, which the check would
+    // otherwise find no trace of in the code.
+    specialists::add_specialist_rules(&mut prompt, patch, rules);
+    let text = if engine == "claude" {
+        claude_result_text(
+            root,
+            &prompt,
+            model,
+            effort,
+            check_turn_budget(review.findings.len()),
+            None,
+            Some(CHECK_SCHEMA),
+            run,
+        )?
+        .text
+    } else {
+        codex_result_text(root, &prompt, model, effort, Some(CHECK_SCHEMA), run)?
+    };
+    parse_agent_json(&text)
+}
+
+/// A re-review's verdicts on the earlier review's findings, for its check:
+/// not checked themselves, but weighed by the conclusion it restates.
+fn earlier_verdicts_note(prior: &[ReviewFinding], resolutions: &[FindingResolution]) -> String {
+    let lines: String = resolutions
+        .iter()
+        .filter_map(|resolution| {
+            let finding = prior.get(resolution.index)?;
+            Some(format!(
+                "- [{}] {} ({}) — {}\n",
+                resolution.status,
+                finding.path,
+                finding.location_label(),
+                finding.title
+            ))
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("Your re-review also judged the findings of the review before it. Those verdicts aren't being checked here, but the summary, verdict, and conclusion cover them too:\n\n{lines}\n")
+}
+
+fn build_check_prompt(
+    compare: Option<&str>,
+    review: &ReviewToCheck,
+    patch: &str,
+    pr_context: Option<&PrContext>,
+) -> String {
+    let target = match compare {
+        Some(compare) => format!("the `{compare}` ref"),
+        None => "the working tree, so it may include uncommitted work-in-progress".to_owned(),
+    };
+
+    let mut findings_list = String::new();
+    for (index, finding) in review.findings.iter().enumerate() {
+        findings_list.push_str(&format!(
+            "{index}. [{}] {} ({}) — {}\n   {}\n",
+            finding.severity,
+            finding.path,
+            finding.location_label(),
+            finding.title,
+            finding.body,
+        ));
+    }
+    let ReviewToCheck {
+        summary,
+        verdict,
+        conclusion,
+        earlier,
+        set_aside,
+        ..
+    } = review;
+    let repeats = if set_aside.is_empty() {
+        ""
+    } else {
+        "\n6. It doesn't repeat a finding that was set aside, listed above, in other words, unless the code it points at has changed so that why it was set aside no longer holds."
+    };
+
+    let mut prompt = format!(
+        r#"You reviewed a git diff a moment ago. Before your review goes to the pull request: you sure about that?
+
+The compare side of the diff is {target}. Your review said:
+
+{summary}
+
+Its verdict was "{verdict}", with this conclusion:
+
+{conclusion}
+
+Its findings, numbered:
+
+{findings_list}
+{earlier}{set_aside}Check every numbered finding again, as though someone else had written it and you expect some of it to be wrong. You are running inside the repository: read the code each finding points at, and the code around and calling it, rather than trusting the diff or your memory of it. A finding holds when all of these are true:
+1. The code does what the finding says it does.
+2. The problem can actually happen: a caller, an input, or an order of events reaches it.
+3. Nothing already prevents it, such as a guard, a type, a constraint, a caller that never passes that value, or a test that pins the behavior.
+4. The repository's own conventions don't settle it the other way.
+5. This change introduces it or makes it worse: the code didn't already behave this way before this diff.{repeats}
+
+Give each finding an `outcome`: "holds" when the code shows all of these to be true; "wrong" when it shows any of them false, or the finding rests on something you can't find in the code at all; "unsure" when you can't settle it either way. Wrong findings are withdrawn, and unsure ones are shown apart from the rest, as not confirmed. Being asked whether you're sure is not evidence either way: don't call a finding wrong because you were asked, and don't say it holds because you wrote it.
+
+Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
+
+{{
+  "checks": [
+    {{
+      "index": 0,
+      "outcome": "holds | unsure | wrong",
+      "severity": "critical | warning | suggestion | nit",
+      "reason": "What in the code confirms the finding, shows it wrong, or leaves it open."
+    }}
+  ],
+  "summary": "Your review's summary, restated to rest only on what holds.",
+  "verdict": "approve | comment | request_changes",
+  "conclusion": "Your review's conclusion, restated to rest only on what holds."
+}}
+
+`checks` must have exactly one entry per numbered finding, using its number as `index`. `severity` is what the finding deserves now that you've checked it: usually what it was, lower when the problem is real but smaller than you said, higher when it's worse.
+
+{SEVERITY_GUIDANCE}
+
+`reason` is a sentence or two naming the code you checked. The reason for a wrong or unsure finding is shown to the person running the review in its place, so make it specific: "`parseDate` is only called from `api/client.ts`, which validates the string first," not "the input is validated."
+
+`summary`, `verdict`, and `conclusion` are your review's, restated so they no longer rest on anything wrong, unsure, or re-rated. Where nothing changed, repeat them as written.
+
+{VERDICT_GUIDANCE}
+
+{WRITING_GUIDANCE}
+
+{JSON_MARKDOWN_NOTE} Keep each `reason` to a sentence or two.
 
 The diff:
 
@@ -929,15 +1523,18 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
       "line": 123,
       "endLine": null,
       "severity": "critical | warning | suggestion | nit",
-      "title": "One short sentence naming the problem.",
-      "body": "What is wrong, why it matters, and what to do instead."
+      "title": "What goes wrong, for whoever hits it.",
+      "failure": "How it happens, and what the user or the system sees.",
+      "fix": "What to change."
     }}
   ]
 }}
 
-{LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Include findings you are uncertain about, marked with a lower severity, rather than silently dropping them. Do not pad with praise, do not restate the diff, and do not report style nits a formatter would catch. An empty findings array is a valid answer for a clean diff.
+{LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. {REPORTING_BAR} An empty findings array is a valid answer for a clean diff.
 
-A finding's `body` is usually one short paragraph, followed by a list or code block only when the specifics need one.
+{SEVERITY_GUIDANCE}
+
+{FINDING_GUIDANCE}
 
 {VERDICT_GUIDANCE}
 
@@ -1791,11 +2388,12 @@ const REVIEW_SCHEMA: &str = r#"{
           "path": {"type": "string"},
           "line": {"type": ["integer", "null"]},
           "endLine": {"type": ["integer", "null"]},
-          "severity": {"type": "string"},
+          "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "nit"]},
           "title": {"type": "string"},
-          "body": {"type": "string"}
+          "failure": {"type": "string"},
+          "fix": {"type": "string"}
         },
-        "required": ["path", "line", "endLine", "severity", "title", "body"],
+        "required": ["path", "line", "endLine", "severity", "title", "failure", "fix"],
         "additionalProperties": false
       }
     }
@@ -1832,11 +2430,12 @@ const RE_REVIEW_SCHEMA: &str = r#"{
           "path": {"type": "string"},
           "line": {"type": ["integer", "null"]},
           "endLine": {"type": ["integer", "null"]},
-          "severity": {"type": "string"},
+          "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "nit"]},
           "title": {"type": "string"},
-          "body": {"type": "string"}
+          "failure": {"type": "string"},
+          "fix": {"type": "string"}
         },
-        "required": ["path", "line", "endLine", "severity", "title", "body"],
+        "required": ["path", "line", "endLine", "severity", "title", "failure", "fix"],
         "additionalProperties": false
       }
     }
@@ -1864,6 +2463,33 @@ const EXPLAIN_SCHEMA: &str = r#"{
     }
   },
   "required": ["overall", "files"],
+  "additionalProperties": false
+}"#;
+
+/// JSON Schema for the check of a review's findings. The checks come first,
+/// so the restated conclusion is written after them.
+const CHECK_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {"type": "integer"},
+          "outcome": {"type": "string", "enum": ["holds", "unsure", "wrong"]},
+          "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "nit"]},
+          "reason": {"type": "string"}
+        },
+        "required": ["index", "outcome", "severity", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "summary": {"type": "string"},
+    "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
+    "conclusion": {"type": "string"}
+  },
+  "required": ["checks", "summary", "verdict", "conclusion"],
   "additionalProperties": false
 }"#;
 
@@ -1955,6 +2581,16 @@ fn extract_json_object(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An earlier review to follow up on, with nothing set aside.
+    fn prior(summary: &str, findings: &[ReviewFinding]) -> PriorReview {
+        PriorReview {
+            summary: summary.to_owned(),
+            findings: findings.to_vec(),
+            set_aside: Vec::new(),
+            head: None,
+        }
+    }
 
     /// What a finished claude run left behind: its exit status and stdout.
     fn claude_output(stdout: &str, succeeded: bool) -> Output {
@@ -2090,6 +2726,8 @@ mod tests {
             body: "b".into(),
             reviewers: Vec::new(),
             posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
         };
         let tidied = |mut finding: ReviewFinding| {
             finding.tidy_span();
@@ -2107,7 +2745,8 @@ mod tests {
         let patch = "diff --git a/src/a.ts b/src/a.ts";
         assert!(build_prompt(None, patch, None).contains(LOCATION_GUIDANCE));
         assert!(
-            build_re_review_prompt(None, "Summary.", &[], patch, None).contains(LOCATION_GUIDANCE)
+            build_re_review_prompt(None, &prior("Summary.", &[]), patch, None, None)
+                .contains(LOCATION_GUIDANCE)
         );
         for schema in [REVIEW_SCHEMA, RE_REVIEW_SCHEMA] {
             let schema: serde_json::Value = serde_json::from_str(schema).expect("schema");
@@ -2155,10 +2794,18 @@ mod tests {
             body: "The loop misses the last element.".into(),
             reviewers: Vec::new(),
             posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
         };
         for prompt in [
             build_prompt(Some("feature"), patch, None),
-            build_re_review_prompt(Some("feature"), "Summary.", &[finding], patch, None),
+            build_re_review_prompt(
+                Some("feature"),
+                &prior("Summary.", &[finding]),
+                patch,
+                None,
+                None,
+            ),
         ] {
             assert!(prompt.contains(VERDICT_GUIDANCE), "{prompt}");
             assert!(
@@ -2304,6 +2951,8 @@ mod tests {
             body: "The loop misses the last element.".into(),
             reviewers: Vec::new(),
             posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
         };
         let thread = vec![
             ThreadComment {
@@ -2347,10 +2996,18 @@ mod tests {
             body: "The loop misses the last element.".into(),
             reviewers: Vec::new(),
             posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
         };
         let json_prompts = [
             build_prompt(Some("feature"), patch, None),
-            build_re_review_prompt(Some("feature"), "Summary.", &[finding.clone()], patch, None),
+            build_re_review_prompt(
+                Some("feature"),
+                &prior("Summary.", std::slice::from_ref(&finding)),
+                patch,
+                None,
+                None,
+            ),
             build_explain_prompt(Some("feature"), patch, None),
         ];
         for prompt in &json_prompts {
@@ -2473,6 +3130,7 @@ mod tests {
             None,
             &std::collections::HashSet::new(),
             &RepoRules::default(),
+            None,
         );
         assert!(panel.is_some());
         let note = prompt
@@ -2663,8 +3321,8 @@ mod tests {
             "gemini",
             None,
             None,
-            "Earlier summary.",
-            &[],
+            &prior("Earlier summary.", &[]),
+            false,
             None,
             &rules,
             &run,
@@ -2683,8 +3341,8 @@ mod tests {
             "claude",
             None,
             None,
-            "  ",
-            &[],
+            &prior("  ", &[]),
+            false,
             None,
             &RepoRules::default(),
             &AgentRun::detached(),
@@ -2730,7 +3388,7 @@ mod tests {
 
     #[test]
     fn the_re_review_prompt_numbers_the_prior_findings_and_asks_for_both_jobs() {
-        let prior = vec![
+        let findings = vec![
             ReviewFinding {
                 path: "src/a.ts".into(),
                 line: Some(12),
@@ -2740,6 +3398,8 @@ mod tests {
                 body: "The loop misses the last element.".into(),
                 reviewers: Vec::new(),
                 posted_url: None,
+                failure: String::new(),
+                fix: String::new(),
             },
             ReviewFinding {
                 path: "src/b.ts".into(),
@@ -2750,13 +3410,15 @@ mod tests {
                 body: "The comment describes removed behavior.".into(),
                 reviewers: Vec::new(),
                 posted_url: None,
+                failure: String::new(),
+                fix: String::new(),
             },
         ];
         let prompt = build_re_review_prompt(
             Some("feature"),
-            "Small, focused change.",
-            &prior,
+            &prior("Small, focused change.", &findings),
             "diff --git a/src/a.ts b/src/a.ts",
+            None,
             None,
         );
 
@@ -2833,12 +3495,17 @@ mod tests {
             body: "The loop misses the last element.".into(),
             reviewers: Vec::new(),
             posted_url: posted_url.map(str::to_owned),
+            failure: String::new(),
+            fix: String::new(),
         };
         let prompt = build_re_review_prompt(
             Some("feature"),
-            "Small, focused change.",
-            &[finding(Some(posted)), finding(None)],
+            &prior(
+                "Small, focused change.",
+                &[finding(Some(posted)), finding(None)],
+            ),
             "diff --git a/src/a.ts b/src/a.ts",
+            None,
             Some(&pr),
         );
 
@@ -3051,5 +3718,509 @@ ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","mes
         assert!(log.len() < FAILURE_LOG_BYTES + 64, "{}", log.len());
         assert!(log.contains("stderr:\n…\n"), "elided start");
         assert!(log.trim_end().ends_with("the end"));
+    }
+
+    fn check_finding(path: &str, severity: &str, title: &str) -> ReviewFinding {
+        ReviewFinding {
+            path: path.into(),
+            line: Some(3),
+            end_line: None,
+            severity: severity.into(),
+            title: title.into(),
+            body: format!("Why {title} matters."),
+            reviewers: vec!["Lead".into(), "Migrations".into()],
+            posted_url: None,
+            failure: String::new(),
+            fix: String::new(),
+        }
+    }
+
+    /// A review's summary, verdict, conclusion, and findings, as the check
+    /// is handed them and settles them.
+    struct Review {
+        summary: String,
+        verdict: String,
+        conclusion: String,
+        findings: Vec<ReviewFinding>,
+    }
+
+    impl Review {
+        fn sample() -> Self {
+            Self {
+                summary: "Two bugs and a nit.".into(),
+                verdict: "request_changes".into(),
+                conclusion: "Fix the null check and the lock.".into(),
+                findings: vec![
+                    check_finding("src/a.ts", "critical", "Null dereference"),
+                    check_finding("db/1.sql", "warning", "Long lock"),
+                    check_finding("src/b.ts", "nit", "Stale comment"),
+                ],
+            }
+        }
+
+        fn apply(&mut self, check: &str) -> Vec<WithdrawnFinding> {
+            self.check(check).withdrawn
+        }
+
+        fn check(&mut self, check: &str) -> Checked {
+            let check: FindingsCheck = parse_agent_json(check).expect("check");
+            check.apply(
+                &mut self.findings,
+                &mut self.summary,
+                &mut self.verdict,
+                &mut self.conclusion,
+            )
+        }
+
+        fn titles(&self) -> Vec<&str> {
+            self.findings
+                .iter()
+                .map(|finding| finding.title.as_str())
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_check_withdraws_what_does_not_hold_and_restates_the_review() {
+        let mut review = Review::sample();
+        let withdrawn = review.apply(
+            r#"{"checks": [
+                {"index": 0, "outcome": "wrong", "severity": "critical", "reason": "  `load` returns early on null.  "},
+                {"index": 1, "outcome": "holds", "severity": "warning", "reason": "The table is large."},
+                {"index": 2, "outcome": "holds", "severity": "nit", "reason": "The comment is stale."}
+            ], "summary": "One lock to fix.", "verdict": "comment", "conclusion": "Shorten the lock."}"#,
+        );
+
+        assert_eq!(review.titles(), ["Long lock", "Stale comment"]);
+        assert_eq!(withdrawn.len(), 1);
+        assert_eq!(withdrawn[0].finding.title, "Null dereference");
+        assert_eq!(withdrawn[0].reason, "`load` returns early on null.");
+        // Who raised it stays with it either way.
+        assert_eq!(withdrawn[0].finding.reviewers, ["Lead", "Migrations"]);
+        assert_eq!(review.summary, "One lock to fix.");
+        assert_eq!(review.verdict, "comment");
+        assert_eq!(review.conclusion, "Shorten the lock.");
+    }
+
+    #[test]
+    fn a_check_can_re_rate_a_finding_that_holds() {
+        let mut review = Review::sample();
+        let withdrawn = review.apply(
+            r#"{"checks": [
+                {"index": 0, "outcome": "holds", "severity": "suggestion", "reason": "Only reachable in tests."},
+                {"index": 1, "outcome": "holds", "severity": "Warning", "reason": "Confirmed."},
+                {"index": 2, "outcome": "holds", "severity": "", "reason": "Confirmed."}
+            ], "summary": "A lock to fix.", "verdict": "comment", "conclusion": "Shorten the lock."}"#,
+        );
+
+        assert!(withdrawn.is_empty());
+        let severities: Vec<&str> = review
+            .findings
+            .iter()
+            .map(|finding| finding.severity.as_str())
+            .collect();
+        // A change of case or a blank is no re-rating.
+        assert_eq!(severities, ["suggestion", "warning", "nit"]);
+        assert_eq!(review.verdict, "comment");
+    }
+
+    /// A check that confirms everything leaves the review in its own words,
+    /// however the model restated them.
+    #[test]
+    fn a_check_that_changes_nothing_keeps_the_reviews_words() {
+        let mut review = Review::sample();
+        let withdrawn = review.apply(
+            r#"{"checks": [
+                {"index": 0, "outcome": "holds", "severity": "critical", "reason": "Confirmed."},
+                {"index": 1, "outcome": "holds", "severity": "warning", "reason": "Confirmed."},
+                {"index": 2, "outcome": "holds", "severity": "nit", "reason": "Confirmed."}
+            ], "summary": "Reworded.", "verdict": "comment", "conclusion": "Reworded."}"#,
+        );
+
+        assert!(withdrawn.is_empty());
+        assert_eq!(review.titles().len(), 3);
+        assert_eq!(review.summary, "Two bugs and a nit.");
+        assert_eq!(review.verdict, "request_changes");
+        assert_eq!(review.conclusion, "Fix the null check and the lock.");
+    }
+
+    #[test]
+    fn only_findings_that_need_fixing_are_checked_again() {
+        let mut findings = Review::sample().findings;
+        findings.push(check_finding("src/c.ts", "Suggestion", "Reuse the helper"));
+        let minor = take_minor(&mut findings);
+        let titles = |findings: &[ReviewFinding]| {
+            findings
+                .iter()
+                .map(|finding| finding.title.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(titles(&findings), ["Null dereference", "Long lock"]);
+        assert_eq!(titles(&minor), ["Stale comment", "Reuse the helper"]);
+    }
+
+    #[test]
+    fn a_check_sets_apart_what_it_cannot_confirm() {
+        let mut review = Review::sample();
+        let checked = review.check(
+            r#"{"checks": [
+                {"index": 0, "outcome": "unsure", "severity": "critical", "reason": "Can't tell whether `load` ever sees null."},
+                {"index": 1, "outcome": "holds", "severity": "warning", "reason": "The table is large."},
+                {"index": 2, "outcome": "maybe", "severity": "nit", "reason": "Not an outcome it was offered."}
+            ], "summary": "One lock to fix.", "verdict": "comment", "conclusion": "Shorten the lock."}"#,
+        );
+
+        // An outcome it wasn't offered is no evidence either way.
+        assert_eq!(review.titles(), ["Long lock", "Stale comment"]);
+        assert!(checked.withdrawn.is_empty());
+        assert_eq!(checked.unconfirmed.len(), 1);
+        assert_eq!(checked.unconfirmed[0].finding.title, "Null dereference");
+        assert_eq!(
+            checked.unconfirmed[0].reason,
+            "Can't tell whether `load` ever sees null."
+        );
+        // Setting one apart changes what the review rests on.
+        assert_eq!(review.summary, "One lock to fix.");
+    }
+
+    /// The model writes the indices: one it skips is kept, a bad one is
+    /// ignored, and a repeat doesn't override the first.
+    #[test]
+    fn a_check_keeps_findings_it_did_not_judge() {
+        let mut review = Review::sample();
+        let withdrawn = review.apply(
+            r#"{"checks": [
+                {"index": 2, "outcome": "wrong", "severity": "nit", "reason": "The comment was updated."},
+                {"index": 2, "outcome": "holds", "severity": "nit", "reason": "Second thoughts."},
+                {"index": 9, "outcome": "wrong", "severity": "nit", "reason": "Out of range."}
+            ], "summary": "", "verdict": "request_changes", "conclusion": ""}"#,
+        );
+
+        assert_eq!(review.titles(), ["Null dereference", "Long lock"]);
+        assert_eq!(withdrawn.len(), 1);
+        assert_eq!(withdrawn[0].reason, "The comment was updated.");
+        // A blank restatement keeps what the review said.
+        assert_eq!(review.summary, "Two bugs and a nit.");
+        assert_eq!(review.conclusion, "Fix the null check and the lock.");
+    }
+
+    #[test]
+    fn the_check_prompt_numbers_the_findings_and_asks_whether_it_is_sure() {
+        let review = Review::sample();
+        let patch = "diff --git a/src/a.ts b/src/a.ts\n+const x = load();";
+        let pr = sample_pr();
+        let prompt = build_check_prompt(
+            Some("feature"),
+            &ReviewToCheck {
+                summary: &review.summary,
+                verdict: &review.verdict,
+                conclusion: &review.conclusion,
+                findings: &review.findings,
+                earlier: String::new(),
+                set_aside: String::new(),
+            },
+            patch,
+            Some(&pr),
+        );
+
+        assert!(prompt.contains("you sure about that?"), "{prompt}");
+        assert!(prompt.contains("Two bugs and a nit."), "{prompt}");
+        assert!(
+            prompt.contains("Its verdict was \"request_changes\""),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("0. [critical] src/a.ts (line: 3) — Null dereference\n   Why Null dereference matters.\n"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("2. [nit] src/b.ts (line: 3) — Stale comment"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("don't call a finding wrong because you were asked"),
+            "{prompt}"
+        );
+        // A problem the code already had before the diff isn't the diff's.
+        assert!(
+            prompt.contains("5. This change introduces it or makes it worse"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("\"unsure\" when you can't settle it"),
+            "{prompt}"
+        );
+        assert!(prompt.contains(VERDICT_GUIDANCE), "{prompt}");
+        // The PR goes ahead of the diff, which still ends the prompt, so the
+        // repository's instructions and rules can go there too.
+        assert!(prompt.contains("pull request #7"), "{prompt}");
+        assert!(
+            prompt.ends_with(&format!("The diff:\n\n{patch}")),
+            "{prompt}"
+        );
+        // Nothing was set aside, so there's nothing it could repeat.
+        assert!(!prompt.contains("set aside"), "{prompt}");
+    }
+
+    fn set_aside() -> Vec<SetAsideFinding> {
+        vec![
+            SetAsideFinding {
+                finding: check_finding("src/a.ts", "warning", "Input is rebuilt on every render"),
+                why: "withdrawn".into(),
+                note: "It's built in a `useMemo`\nkeyed on the path.".into(),
+            },
+            SetAsideFinding {
+                finding: check_finding("src/b.ts", "suggestion", "Reuse the shared error table"),
+                why: "wontFix".into(),
+                note: String::new(),
+            },
+            SetAsideFinding {
+                finding: check_finding("db/1.sql", "warning", "Index the new column"),
+                why: "notAProblem".into(),
+                note: "The table has twelve rows.".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_re_review_is_told_what_was_set_aside_and_not_to_raise_it_again() {
+        let mut prior = prior("Summary.", &[check_finding("src/c.ts", "warning", "Leak")]);
+        prior.set_aside = set_aside();
+        let prompt = build_re_review_prompt(Some("feature"), &prior, "diff", None, None);
+
+        assert!(
+            prompt.contains("The findings still open from your earlier reviews, numbered:\n\n0. [warning] src/c.ts (line: 3) — Leak"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("- [withdrawn] src/a.ts (line: 3) — Input is rebuilt on every render\n  Why: It's built in a `useMemo` keyed on the path.\n"),
+            "{prompt}"
+        );
+        // A dismissal with no note says only what it was.
+        assert!(
+            prompt.contains("- [dismissed: won't fix] src/b.ts (line: 3) — Reuse the shared error table\n- [dismissed: not a problem]"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Why: The table has twelve rows."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("or any finding that was set aside"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_finding_written_in_parts_is_put_together_for_posting() {
+        let mut finding = check_finding("src/a.ts", "warning", "Uploads fail");
+        finding.body = String::new();
+        finding.failure = "1. A file over 5 MB is chosen.\n2. The request times out.".into();
+        finding.fix = "Stream the upload.".into();
+        finding.settle_body();
+        assert_eq!(
+            finding.body,
+            "1. A file over 5 MB is chosen.\n2. The request times out.\n\n**Fix:** Stream the upload."
+        );
+
+        // A fix shown as code starts on its own line.
+        let mut finding = check_finding("src/a.ts", "warning", "Uploads fail");
+        finding.body = String::new();
+        finding.failure = "It times out.".into();
+        finding.fix = "```ts\nstream(file);\n```".into();
+        finding.settle_body();
+        assert_eq!(
+            finding.body,
+            "It times out.\n\n**Fix:**\n\n```ts\nstream(file);\n```"
+        );
+
+        // An older finding's own body stays as it was.
+        let mut finding = check_finding("src/a.ts", "warning", "Uploads fail");
+        finding.fix = "Ignored.".into();
+        finding.settle_body();
+        assert_eq!(finding.body, "Why Uploads fail matters.");
+    }
+
+    #[test]
+    fn reviews_report_only_what_they_can_trace_to_a_failure_in_parts() {
+        let patch = "diff --git a/a.ts b/a.ts\n+x";
+        for prompt in [
+            build_prompt(Some("feature"), patch, None),
+            build_re_review_prompt(Some("feature"), &prior("Summary.", &[]), patch, None, None),
+        ] {
+            assert!(prompt.contains(REPORTING_BAR), "{prompt}");
+            assert!(prompt.contains(SEVERITY_GUIDANCE), "{prompt}");
+            assert!(prompt.contains(FINDING_GUIDANCE), "{prompt}");
+            assert!(!prompt.contains("uncertain about"), "{prompt}");
+        }
+        for schema in [REVIEW_SCHEMA, RE_REVIEW_SCHEMA] {
+            let schema: serde_json::Value = serde_json::from_str(schema).expect("valid schema");
+            let finding = &schema["properties"]["findings"]["items"];
+            assert_eq!(
+                finding["required"],
+                serde_json::json!([
+                    "path", "line", "endLine", "severity", "title", "failure", "fix"
+                ])
+            );
+            assert_eq!(
+                finding["properties"]["severity"]["enum"],
+                serde_json::json!(["critical", "warning", "suggestion", "nit"])
+            );
+        }
+    }
+
+    #[test]
+    fn a_re_review_looks_for_new_problems_in_what_changed_since() {
+        let patch = "diff --git a/a.ts b/a.ts\n+whole diff";
+        let since = Since {
+            head: "0123456789".into(),
+            patch: "diff --git a/a.ts b/a.ts\n+the fix".into(),
+            lines: std::collections::HashMap::from([("a.ts".to_owned(), vec![(3, 3)])]),
+        };
+        let prompt = build_re_review_prompt(
+            Some("feature"),
+            &prior("Summary.", &[]),
+            patch,
+            Some(&since),
+            None,
+        );
+        assert!(
+            prompt.contains(
+                "2. Look for NEW problems in what changed since your earlier review read `0123456`"
+            ),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Don't go back over code that hasn't changed since."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("What changed since your earlier review, as a diff from `0123456`, the commit it read, cut down to this diff's own changes:\n\ndiff --git a/a.ts b/a.ts\n+the fix\n"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.ends_with(&format!("The diff:\n\n{patch}")),
+            "{prompt}"
+        );
+
+        let unchanged = Since {
+            head: "0123456789".into(),
+            ..Since::default()
+        };
+        let prompt = build_re_review_prompt(
+            Some("feature"),
+            &prior("Summary.", &[]),
+            patch,
+            Some(&unchanged),
+            None,
+        );
+        assert!(prompt.contains("leave `findings` empty"), "{prompt}");
+        assert!(
+            !prompt.contains("What changed since your earlier review, as a diff"),
+            "{prompt}"
+        );
+
+        // Asked for the whole diff, it reviews it all as before.
+        let prompt =
+            build_re_review_prompt(Some("feature"), &prior("Summary.", &[]), patch, None, None);
+        assert!(
+            prompt.contains("exactly as you would a fresh pull request"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn the_check_withdraws_a_finding_that_repeats_one_set_aside() {
+        let review = Review::sample();
+        let prompt = build_check_prompt(
+            Some("feature"),
+            &ReviewToCheck {
+                summary: &review.summary,
+                verdict: &review.verdict,
+                conclusion: &review.conclusion,
+                findings: &review.findings,
+                earlier: String::new(),
+                set_aside: set_aside_note(&set_aside()),
+            },
+            "diff",
+            None,
+        );
+
+        assert!(prompt.contains("- [withdrawn] src/a.ts"), "{prompt}");
+        assert!(
+            prompt.contains("6. It doesn't repeat a finding that was set aside"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_re_reviews_check_is_told_the_earlier_verdicts() {
+        let prior = Review::sample().findings;
+        let resolutions = [
+            FindingResolution {
+                index: 1,
+                status: "unaddressed".into(),
+                note: "Still locks.".into(),
+            },
+            FindingResolution {
+                index: 7,
+                status: "addressed".into(),
+                note: "Out of range.".into(),
+            },
+        ];
+
+        let note = earlier_verdicts_note(&prior, &resolutions);
+
+        assert!(
+            note.contains("- [unaddressed] db/1.sql (line: 3) — Long lock\n"),
+            "{note}"
+        );
+        assert!(!note.contains("Out of range"), "{note}");
+        assert_eq!(earlier_verdicts_note(&prior, &[]), "");
+    }
+
+    #[test]
+    fn the_check_schema_requires_a_judgement_per_finding_and_a_verdict() {
+        let schema: serde_json::Value = serde_json::from_str(CHECK_SCHEMA).expect("valid schema");
+        let check = &schema["properties"]["checks"]["items"];
+        for field in ["index", "outcome", "severity", "reason"] {
+            assert!(check["required"]
+                .as_array()
+                .expect("required")
+                .contains(&field.into()));
+        }
+        assert_eq!(
+            schema["properties"]["verdict"]["enum"],
+            serde_json::json!(["approve", "comment", "request_changes"])
+        );
+    }
+
+    #[test]
+    fn the_check_gets_a_few_turns_per_finding_up_to_a_small_reviews() {
+        assert_eq!(check_turn_budget(1), CHECK_TURNS + 3);
+        assert!(check_turn_budget(4) < check_turn_budget(8));
+        assert_eq!(check_turn_budget(100), MIN_TURNS);
+    }
+
+    /// What the app keeps of a check: the withdrawn findings with their
+    /// reasons, and why it failed when it did. The model never writes these.
+    #[test]
+    fn withdrawn_findings_reach_the_page_but_never_come_from_the_model() {
+        let json = r#"{"summary": "s", "findings": [],
+            "withdrawn": [{"finding": {"path": "a", "line": 1, "severity": "nit", "title": "t", "body": "b"}, "reason": "r"}],
+            "checkFailure": "made up"}"#;
+        let mut review: ReviewResult = parse_agent_json(json).expect("parse");
+        assert!(review.withdrawn.is_empty());
+        assert_eq!(review.check_failure, None);
+
+        review.withdrawn.push(WithdrawnFinding {
+            finding: check_finding("src/a.ts", "critical", "Null dereference"),
+            reason: "It returns early.".into(),
+        });
+        review.check_failure = Some("claude failed".into());
+        let sent = serde_json::to_value(&review).expect("serialize");
+        assert_eq!(sent["withdrawn"][0]["reason"], "It returns early.");
+        assert_eq!(sent["withdrawn"][0]["finding"]["title"], "Null dereference");
+        assert_eq!(sent["checkFailure"], "claude failed");
     }
 }

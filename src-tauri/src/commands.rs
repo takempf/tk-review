@@ -16,7 +16,7 @@ use crate::github::{
 };
 use crate::models::{self, EngineModels};
 use crate::review::{
-    self, ExplainResult, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment,
+    self, ExplainResult, PriorReview, ReReviewResult, ReviewFinding, ReviewResult, ThreadComment,
 };
 use crate::rules::{self, RepoRules, RepoRulesEntry};
 use crate::runs::{AgentRun, AgentRuns};
@@ -245,8 +245,9 @@ pub async fn review_diff(
 }
 
 /// Re-reviews the comparison against an earlier review: judges whether each
-/// prior finding was addressed, then reviews the current diff for new issues.
-/// One agent run, as slow as `review_diff`.
+/// prior finding was addressed, then looks for new issues in what changed
+/// since, or with `whole`, in the whole diff. One agent run, as slow as
+/// `review_diff`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn re_review_diff(
@@ -259,8 +260,8 @@ pub async fn re_review_diff(
     engine: String,
     model: Option<String>,
     effort: Option<String>,
-    prior_summary: String,
-    prior_findings: Vec<ReviewFinding>,
+    prior: PriorReview,
+    whole: bool,
     pr_context: Option<PrContext>,
 ) -> Result<ReReviewResult, GitError> {
     let rules_file = rules_file(&app)?;
@@ -275,8 +276,8 @@ pub async fn re_review_diff(
             &engine,
             model.as_deref(),
             effort.as_deref(),
-            &prior_summary,
-            &prior_findings,
+            &prior,
+            whole,
             pr_context.as_ref(),
             &rules,
             &run,

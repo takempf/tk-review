@@ -44,4 +44,4 @@ Tests:
 Scope:
 - Unrelated changes (refactors, formatting, renames elsewhere) mixed into a behaviour change make both harder to review and to revert. Suggest splitting them when they are substantial.
 
-Severity: these are rarely "critical". "warning" for duplication that will drift, names or comments that mislead, tests that can't fail, and broken boundaries. "suggestion" for simplifications and cleanups. "nit" for small naming and comment fixes. Leave out what a formatter or linter catches, and taste you can't tie to a cost.
+Severity: report only what you'd rate "warning": duplication that will drift (name the copy that already exists), names or comments that mislead, tests that can't fail, and boundaries this change breaks. Leave out simplifications, cleanups, and small naming or comment fixes unless this repository's rules for you ask for them: a review reports only a few suggestions, and yours would crowd out the ones that matter. Leave out what a formatter or linter catches, and taste you can't tie to a cost.

@@ -39,7 +39,7 @@ pnpm check      # biome lint and format, with fixes
 
 From `src-tauri/`: `cargo test` (some tests build real repos in a temp dir), `cargo clippy --all-targets`, and `cargo fmt`. If `cargo` is missing after a Homebrew rustup install, its shims aren't on your PATH: `fish_add_path -U /opt/homebrew/opt/rustup/bin`.
 
-The harness stubs the Rust side with Tauri's `mockIPC`, so UI work doesn't need a native rebuild. Query parameters act out edge cases: `?prs=200` for a long PR list, and `?fail=review` (or `turns`, `explain`, `post`, `list`, `refresh`) for each failure.
+The harness stubs the Rust side with Tauri's `mockIPC`, so UI work doesn't need a native rebuild. Query parameters act out edge cases: `?prs=200` for a long PR list, and `?fail=review` (or `turns`, `check`, `explain`, `post`, `list`, `refresh`) for each failure.
 
 ## Comparisons
 
@@ -66,6 +66,21 @@ Each PR or comparison opens in its own tab, and tabs stay open until you close t
 
 Both run in the repository, so the agent can read callers and tests rather than judge the patch alone. A restricted Claude run skips the repository's `CLAUDE.md` and your `~/.claude/settings.json`, so the app puts `CLAUDE.md` (or `AGENTS.md`) in the prompt and fills a blank model or effort from your settings.
 
+### Findings
+
+A review reports a problem only when it can say how it goes wrong, and only what the change introduces or makes worse. Each finding is written in three parts: the consequence as its title, how it happens, and the fix. Severity follows one scale, set by what happens if the change merges as it is:
+
+| Severity | Means |
+| --- | --- |
+| critical | data loss or corruption, a security hole, or an outage |
+| warning | a bug users or other code will hit on a realistic path |
+| suggestion | no bug, but a cost you can name |
+| nit | small, and safe to ignore |
+
+Critical and warning findings are shown up front. Suggestions and nits fold away under a count, at most five of them. So do findings set aside: withdrawn or not confirmed on a second look, outside what a re-review looked at, or dismissed.
+
+**Dismiss** takes a finding off the table as "won't fix" or "not a problem", with a reason if you give one. Every later re-review is told not to raise it again, nor anything a second look withdrew. A dismissal can be restored, or turned into a rule with **Make it a rule**, which drafts one for the reviewer that raised it.
+
 ### Specialists
 
 Parts of a diff also go to specialists, each owning one way changes fail in production. A specialist picks files by where they live and what their changed lines mention, and carries a checklist in [`specialists/`](src-tauri/src/specialists):
@@ -73,7 +88,7 @@ Parts of a diff also go to specialists, each owning one way changes fail in prod
 | Specialist | Picks |
 | --- | --- |
 | Migrations | files under `migrations`, `migration`, or `migrate`, and schema dumps |
-| Security | source code outside tests and migrations |
+| Security | server code, and browser code that handles markup, credentials, storage, redirects, or messages from other windows |
 | Backend runtime | server code using transactions, pools, queues, retries, timeouts, storage, or outside services |
 | GraphQL | schemas, documents, resolvers, and GraphQL client code |
 | Rollout | contracts between things that deploy apart: migrations, API schemas, job payloads, stored client state, routes |
@@ -82,9 +97,15 @@ Parts of a diff also go to specialists, each owning one way changes fail in prod
 | Graphics | shaders, three.js, react-three-fiber, WebGL, textures, canvases |
 | Billing | billing, payments, credits, refunds, quotas, usage |
 | Analytics | analytics and tracking events |
-| Maintainability | source code and tests |
+| Maintainability | source code and tests, for warnings only unless its rules ask for more |
 
-Files marked `linguist-generated` are left out, except a generated GraphQL schema. A Claude review gets each specialist that picked something as a read-only subagent, carrying its checklist, the repository's rules for it, and its files' diffs (up to 192 KB, then paths to read). The lead reviewer launches them all at once, reviews the whole diff itself, checks what they report, and merges what holds. Each finding names who raised it ("Lead · Migrations"), and a run that skips a specialist is resumed once to launch it. Codex gets the checklists in its prompt instead.
+Files marked `linguist-generated` are left out, except a generated GraphQL schema. A Claude review gets each specialist that picked something as a read-only subagent, carrying its checklist, the repository's rules for it, and its files' diffs (up to 192 KB, then paths to read). The lead reviewer launches them all at once, reviews what no specialist covers (the files none picked, and how the parts fit together), checks what they report, and merges what holds. Each finding names who raised it ("Lead · Migrations"), and a run that skips a specialist is resumed once to launch it. Codex gets the checklists in its prompt instead.
+
+### Second look
+
+Before a review's findings are shown, the engine that wrote them is asked whether it's sure. A second run, handed the review's critical and warning findings, rereads the code behind each one. A finding holds if the code does what it says, something can reach the problem, nothing already prevents it, and the change brought it in. One the code shows wrong is withdrawn, and one it can't settle is marked not confirmed; both fold away under the review with what the code showed. Findings that hold can be re-rated, and the summary, verdict, and conclusion are restated when anything changed.
+
+The check is a fresh run rather than the review's session resumed, so it reads the code again instead of trusting its first conclusions, and Codex can do it too. Suggestions and nits aren't checked, since they fold away anyway, and a re-review checks only its new findings. If the check fails, the review keeps its findings as written and says they weren't double-checked; cancelling stops both.
 
 ### Rules
 
@@ -92,13 +113,15 @@ Files marked `linguist-generated` are left out, except a generated GraphQL schem
 
 ### Re-review, threads, and storage
 
-**Re-review** gives every earlier finding a verdict (addressed, unaddressed, partial, or obsolete) against the current code, and reads the diff again for new problems. Each finding has a comment thread, and so does the review. Replies come from the engine that wrote the review, and each reply re-sends the finding, its file's diff, and the thread, so threads survive restarts without CLI session files.
+**Re-review** gives every finding still open a verdict (addressed, unaddressed, partial, or obsolete) against the current code, however many reviews back it was raised. It then looks for new problems only in what changed since the last review read the code: the diff from that commit, cut down to the comparison's own changes, so what a merge from the base brought in drops out. New findings elsewhere fold away as outside what changed, unless they're critical. A review reads the code afresh each time and notices different things, so reading the whole diff again would surface new findings however little changed. **Whole diff** does that anyway, for when you want it, and a re-review of the working tree, or of a commit that's no longer there, reads the whole diff and says why. Earlier findings it found dealt with fold away.
+
+Each finding has a comment thread, and so does the review. Replies come from the engine that wrote the review, and each reply re-sends the finding, its file's diff, and the thread, so threads survive restarts without CLI session files.
 
 Reviews are kept in localStorage per repository, ref pair, engine, and `gh` account. Revisiting a comparison shows its earlier reviews, and Claude and Codex reviews of the same diff show side by side.
 
 ### Limits
 
-- Claude runs get 60 turns plus one per two files, up to 150. A run that runs out is resumed once without tools (`--resume <id> --tools ""`) to answer from what it read, and the review is marked as cut short.
+- Claude runs get 60 turns plus one per two files, up to 150. The check of a review's findings gets 12 plus three per finding it checks, up to 60. A re-review's budget counts only the files that changed since. A run that runs out is resumed once without tools (`--resume <id> --tools ""`) to answer from what it read, and the review is marked as cut short.
 - A run that writes nothing for 15 minutes, or is still going after an hour, is stopped. **Cancel** stops one sooner.
 - A failure leads with one sentence on what went wrong, and keeps the CLI's raw output behind **Show details**.
 
@@ -128,6 +151,7 @@ src-tauri/src/
   review.rs             the agent CLIs: prompts, runs, parsing
   specialists.rs        the specialist reviewers: what each picks and is told
   specialists/          each specialist's checklist
+  scope.rs              what a re-review looks at: what changed since the last review
   rules.rs              the rules kept per repository
   voice.md              how explanations should sound
   runs.rs               runs in flight, so they can be cancelled and timed out

@@ -31,6 +31,44 @@ export function RepoRulesButton({ root }: { root: string }) {
   );
 }
 
+/** A rule to add to the rules before they're shown: drafted, for the person to reword. */
+interface RuleDraft {
+  /** Who raised what it's about, as findings name them: `Lead`, `Migrations`, … */
+  reviewers: string[];
+  rule: string;
+}
+
+/**
+ * Opens the rules with one added, drafted from a dismissed finding, for the
+ * person to reword before saving: a dismissal that keeps coming back is a rule
+ * the repository is missing. It goes to the lead's rules, which every review
+ * follows, unless only a specialist raised the finding.
+ */
+export function RuleFromFindingButton({ root, ...draft }: RuleDraft & { root: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger
+        render={<Button variant="ghost" size="sm" />}
+        title="Add a rule, so later reviews of this repository don't raise this"
+      >
+        <Icon name="rows" />
+        Make it a rule
+      </Dialog.Trigger>
+      <Dialog.Popup size="lg" aria-label="Review rules">
+        <RulesForm root={root} onDone={() => setOpen(false)} draft={draft} />
+      </Dialog.Popup>
+    </Dialog.Root>
+  );
+}
+
+/** The rule slot a draft goes to: a lone specialist's, or else the lead's. */
+function draftSlot(draft: RuleDraft, reviewers: RuleSlot[]): string {
+  const [only, ...others] = draft.reviewers;
+  if (!only || others.length > 0) return "review";
+  return reviewers.find((reviewer) => reviewer.label === only)?.key ?? "review";
+}
+
 /** Text with `code` spans, as the backend writes a reviewer's description. */
 function WithCode({ text }: { text: string }) {
   let at = 0;
@@ -49,7 +87,15 @@ function WithCode({ text }: { text: string }) {
  * and each specialist's only to that specialist, so the list shows whose are
  * set and the editor shows one reviewer's at a time.
  */
-function RulesForm({ root, onDone }: { root: string; onDone: () => void }) {
+function RulesForm({
+  root,
+  onDone,
+  draft,
+}: {
+  root: string;
+  onDone: () => void;
+  draft?: RuleDraft;
+}) {
   const [repo, setRepo] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
   const [reviewers, setReviewers] = useState<RuleSlot[]>([]);
@@ -57,6 +103,8 @@ function RulesForm({ root, onDone }: { root: string; onDone: () => void }) {
   const [selected, setSelected] = useState("review");
   const [error, setError] = useState<AppError | null>(null);
   const [saving, setSaving] = useState(false);
+  // The draft the form opened with; it's added once, to the rules as read.
+  const [opening] = useState(draft);
 
   useEffect(() => {
     let current = true;
@@ -66,14 +114,21 @@ function RulesForm({ root, onDone }: { root: string; onDone: () => void }) {
         setRepo(entry.repo);
         setFile(entry.file);
         setReviewers(entry.reviewers);
-        setRules(entry.rules);
+        if (opening) {
+          const key = draftSlot(opening, entry.reviewers);
+          const kept = entry.rules[key]?.trimEnd() ?? "";
+          setRules({ ...entry.rules, [key]: kept ? `${kept}\n${opening.rule}` : opening.rule });
+          setSelected(key);
+        } else {
+          setRules(entry.rules);
+        }
       },
       (cause) => current && setError(toAppError(cause, "Couldn't read the rules")),
     );
     return () => {
       current = false;
     };
-  }, [root]);
+  }, [root, opening]);
 
   const save = () => {
     if (!rules || saving) return;
