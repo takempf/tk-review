@@ -235,6 +235,7 @@ const RULE_SLOTS: RuleSlot[] = (
     ["graphics", "Graphics", "Reviews WebGL, three.js, shader, and canvas code."],
     ["billing", "Billing", "Reviews code that charges, refunds, or enforces limits."],
     ["analytics", "Analytics", "Reviews analytics and tracking events."],
+    ["architecture", "Architecture", "Reviews whether each fix is made where its problem starts."],
     ["maintainability", "Maintainability", "Reviews what will cost the next developer."],
   ] as const
 ).map(([key, label, about]) => ({ key, label, about, placeholder: `e.g. A rule for ${label}.` }));

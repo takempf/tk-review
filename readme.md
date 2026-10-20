@@ -79,6 +79,8 @@ A review reports a problem only when it can say how it goes wrong, and only what
 | suggestion | no bug, but a cost you can name |
 | nit | small, and safe to ignore |
 
+A fix is held to where its problem starts. One that hides a symptom while the cause stays in place (an error swallowed, a delay around a race, a special case for one input, a consumer correcting what its producer gets wrong) counts as something the change introduces, though the cause is older. The finding names the code where the cause is, and the fix there; when that's more than the PR should take on, it asks for the workaround to be marked and tracked. One whose cause still reaches users, or that hides real failures, is a warning, and the verdict asks for changes. A re-review calls an earlier finding answered this way partial, not addressed.
+
 Critical and warning findings are shown up front. Suggestions and nits fold away under a count, at most five of them. So do findings set aside: withdrawn or not confirmed on a second look, outside what a re-review looked at, or dismissed.
 
 **Dismiss** takes a finding off the table as "won't fix" or "not a problem", with a reason if you give one. Every later re-review is told not to raise it again, nor anything a second look withdrew. A dismissal can be restored, or turned into a rule with **Make it a rule**, which drafts one for the reviewer that raised it.
@@ -99,6 +101,7 @@ Parts of a diff also go to specialists, each owning one way changes fail in prod
 | Graphics | shaders, three.js, react-three-fiber, WebGL, textures, canvases |
 | Billing | billing, payments, credits, refunds, quotas, usage |
 | Analytics | analytics and tracking events |
+| Architecture | source code, tests, and migrations, for fixes made somewhere other than where the problem starts |
 | Maintainability | source code and tests, for warnings only unless its rules ask for more |
 
 Files marked `linguist-generated` are left out, except a generated GraphQL schema. A Claude review gets each specialist that picked something as a read-only subagent, carrying its checklist, the repository's rules for it, and its files' diffs (up to 192 KB, then paths to read). The lead reviewer launches them all at once, reviews what no specialist covers (the files none picked, and how the parts fit together), checks what they report, and merges what holds. Each finding names who raised it ("Lead · Migrations"), and a run that skips a specialist is resumed once to launch it. Codex gets the checklists in its prompt instead.

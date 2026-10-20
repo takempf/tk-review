@@ -229,6 +229,23 @@ const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values. T
 /// lines, or the whole file.
 const LOCATION_GUIDANCE: &str = "`line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
 
+/// What a review does with a fix that hides its problem rather than solving it.
+/// The cause predates the change, which the reporting bar would otherwise
+/// count against the finding, so this says why the workaround still counts.
+const WORKAROUND_GUIDANCE: &str = r#"Hold every fix to where its problem starts. A fix that makes a symptom go away while its cause stays in place is a workaround, and it's worth a finding:
+- an error caught and logged, defaulted, or ignored, where something upstream produced it
+- a null check or fallback for a value that should never be missing
+- a delay, retry, or longer timeout around what is really a race or an ordering bug
+- a special case for one input, record, customer, or caller
+- a cast, `@ts-ignore`, lint suppression, or skipped test that silences a real mismatch
+- a consumer correcting what its producer gets wrong, or a migration repairing rows the code will keep writing wrong
+- one call site fixed while others share the cause
+The cause predates the change, but the workaround is new, so it counts as something this change introduces: it hides the cause from the next person, and the cause still reaches users by every path it doesn't cover.
+
+Report a workaround only once you have found the cause: read upstream until you can name the code where it starts, and check what else reaches it. `failure` says where the cause is and what still reaches it or is now hidden. `fix` is the change at the cause, concretely enough to act on, not a better patch at the symptom. When the real fix is more than this pull request should take on, `fix` still says what it is, and asks for the workaround to be marked in the code with a link to a ticket for it.
+
+Leave alone a workaround the pull request already says is one, marked in the code and tracked, a check at a real boundary such as input from users or another service, and a workaround for a cause outside this codebase, such as a browser or vendor bug, that says so."#;
+
 /// What a finding has to be to be reported at all. Each run is a sample of
 /// what a review can notice, and the findings that come and go between runs
 /// are the ones nobody can trace to a failure, so the bar is a failure the
@@ -240,8 +257,8 @@ const REPORTING_BAR: &str = "Report a problem only when you can say how it goes 
 /// critical and warning findings, and folds the rest away.
 const SEVERITY_GUIDANCE: &str = r#"`severity` says what happens if this merges as it is:
 - "critical": data loss or corruption, a security hole, or an outage, on a path production will take.
-- "warning": a bug that users or other code will hit on a realistic path, or a change that breaks something else.
-- "suggestion": no bug, but a cost you can name, such as code that will drift from its copy, a name or comment that misleads, or a test that can't fail.
+- "warning": a bug that users or other code will hit on a realistic path, a change that breaks something else, or a workaround whose cause still reaches users by another path, or that hides failures that matter.
+- "suggestion": no bug, but a cost you can name, such as code that will drift from its copy, a name or comment that misleads, a test that can't fail, or a workaround whose cause nothing else reaches.
 - "nit": small, and safe to ignore.
 Only critical and warning findings are shown up front; the rest are folded away, so rate each honestly rather than up."#;
 
@@ -257,7 +274,7 @@ Don't repeat the title in `failure`, or `failure` in `fix`."#;
 /// the review the user would submit on GitHub, drafted for them to adjust.
 const VERDICT_GUIDANCE: &str = r#"`verdict` is the GitHub review you recommend submitting:
 - "approve": nothing needs to change before merging. Any findings are suggestions or nits the author can take or leave.
-- "request_changes": at least one problem must be fixed before this merges, such as a real bug, a security issue, or data loss.
+- "request_changes": at least one problem must be fixed before this merges, such as a real bug, a security issue, data loss, or a fix that only hides its problem.
 - "comment": somewhere in between. There are questions or concerns the author should answer, but you are not confident they block merging.
 
 `conclusion` is the body of that GitHub review, addressed to the author. The findings are posted separately, so don't repeat their detail:
@@ -798,9 +815,9 @@ fn build_re_review_prompt(
     let prior_summary = &prior.summary;
     let set_aside = set_aside_note(&prior.set_aside);
     let new_problems = match since {
-        None => "2. Review the current diff for NEW problems, exactly as you would a fresh pull request: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside. Pay particular attention to code that changed since the earlier review: fixes introduce their own bugs.".to_owned(),
+        None => "2. Review the current diff for NEW problems, exactly as you would a fresh pull request: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside. Pay particular attention to code that changed since the earlier review: fixes introduce their own bugs, and a fix made in answer to a finding is where workarounds most often slip in.".to_owned(),
         Some(since) if since.is_empty() => format!("2. Nothing in the diff has changed since your earlier review read `{}`, so there are no new problems to look for: leave `findings` empty.", since.short_head()),
-        Some(since) => format!("2. Look for NEW problems in what changed since your earlier review read `{}`: the changes under \"What changed since your earlier review\" below, and code they break, such as the callers of a function whose behavior changed. Fixes introduce their own bugs, so read these closely: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Don't go back over code that hasn't changed since. Your earlier review covered it, and a problem it missed there stays out of this review unless it's critical. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside.", since.short_head()),
+        Some(since) => format!("2. Look for NEW problems in what changed since your earlier review read `{}`: the changes under \"What changed since your earlier review\" below, and code they break, such as the callers of a function whose behavior changed. Fixes introduce their own bugs, and a fix made in answer to a finding is where workarounds most often slip in, so read these closely: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. Don't go back over code that hasn't changed since. Your earlier review covered it, and a problem it missed there stays out of this review unless it's critical. Do not re-report the numbered findings — their resolutions cover them — or any finding that was set aside.", since.short_head()),
     };
 
     let mut findings_list = String::new();
@@ -830,7 +847,7 @@ The findings still open from your earlier reviews, numbered:
 {findings_list}
 {set_aside}You have two jobs, in order:
 
-1. For EVERY numbered finding, judge whether it has been addressed in the current code. Use `status` values: "addressed" (fixed), "unaddressed" (still present as reported), "partial" (improved but not fully fixed), "obsolete" (the code it pointed at is gone or changed enough that the finding no longer applies). In `note`, say what the verdict is grounded in — where the fix is, or what still remains. If a finding was wrong to begin with, mark it "obsolete" and say so. Where a finding was sent to the pull request, what happened to it there follows it: whether its GitHub thread is resolved, and any replies. Take a reply saying it was fixed, or a resolved thread, as a claim to check against the code rather than as the verdict, and say in `note` when one bears on it.
+1. For EVERY numbered finding, judge whether it has been addressed in the current code. Use `status` values: "addressed" (fixed), "unaddressed" (still present as reported), "partial" (improved but not fully fixed), "obsolete" (the code it pointed at is gone or changed enough that the finding no longer applies). In `note`, say what the verdict is grounded in — where the fix is, or what still remains. If a finding was wrong to begin with, mark it "obsolete" and say so. A finding answered with a workaround, its symptom gone while its cause stays in place, is "partial", not "addressed": say in `note` where the cause still is. Where a finding was sent to the pull request, what happened to it there follows it: whether its GitHub thread is resolved, and any replies. Take a reply saying it was fixed, or a resolved thread, as a claim to check against the code rather than as the verdict, and say in `note` when one bears on it.
 
 {new_problems}
 
@@ -861,6 +878,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 }}
 
 `resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} {REPORTING_BAR} An empty findings array is a valid answer when nothing new is wrong.
+
+{WORKAROUND_GUIDANCE}
 
 {SEVERITY_GUIDANCE}
 
@@ -1151,7 +1170,7 @@ Its findings, numbered:
 2. The problem can actually happen: a caller, an input, or an order of events reaches it.
 3. Nothing already prevents it, such as a guard, a type, a constraint, a caller that never passes that value, or a test that pins the behavior.
 4. The repository's own conventions don't settle it the other way.
-5. This change introduces it or makes it worse: the code didn't already behave this way before this diff.{repeats}
+5. This change introduces it or makes it worse: the code didn't already behave this way before this diff. For a finding that a fix is a workaround, the workaround is what the change introduces, so this holds when the cause is where the finding says, and still reaches users or is hidden as it says.{repeats}
 
 Give each finding an `outcome`: "holds" when the code shows all of these to be true; "wrong" when it shows any of them false, or the finding rests on something you can't find in the code at all; "unsure" when you can't settle it either way. Wrong findings are withdrawn, and unsure ones are shown apart from the rest, as not confirmed. Being asked whether you're sure is not evidence either way: don't call a finding wrong because you were asked, and don't say it holds because you wrote it.
 
@@ -1511,6 +1530,8 @@ fn build_prompt(compare: Option<&str>, patch: &str, pr_context: Option<&PrContex
 
 You are running inside the repository the diff belongs to. Use your file reading and search tools to check surrounding context whenever it would change a finding — callers of a changed function, related tests, the definitions a change relies on.
 
+Start from what the change is for: the pull request's description, its ticket, and its commits. Where it fixes something, judge the fix by whether it is made where the problem starts, not only by whether its own lines are right.
+
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
 {{
@@ -1530,7 +1551,9 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ]
 }}
 
-{LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, misleading names or comments, missing error handling at real boundaries. {REPORTING_BAR} An empty findings array is a valid answer for a clean diff.
+{LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, fixes that only hide their problem, misleading names or comments, missing error handling at real boundaries. {REPORTING_BAR} An empty findings array is a valid answer for a clean diff.
+
+{WORKAROUND_GUIDANCE}
 
 {SEVERITY_GUIDANCE}
 
@@ -4067,6 +4090,45 @@ ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","mes
                 serde_json::json!(["critical", "warning", "suggestion", "nit"])
             );
         }
+    }
+
+    #[test]
+    fn reviews_hold_fixes_to_where_their_problem_starts() {
+        let patch = "diff --git a/a.ts b/a.ts\n+x";
+        let review = build_prompt(Some("feature"), patch, None);
+        let re_review =
+            build_re_review_prompt(Some("feature"), &prior("Summary.", &[]), patch, None, None);
+        for prompt in [&review, &re_review] {
+            assert!(prompt.contains(WORKAROUND_GUIDANCE), "{prompt}");
+            assert!(
+                prompt.contains("a fix that only hides its problem"),
+                "{prompt}"
+            );
+        }
+        // An earlier finding answered with a workaround isn't dealt with.
+        assert!(
+            re_review.contains("answered with a workaround, its symptom gone while its cause stays in place, is \"partial\""),
+            "{re_review}"
+        );
+        // Its cause predates the change, which mustn't get it withdrawn.
+        let findings = [check_finding("a.ts", "warning", "Uploads still fail")];
+        let check = build_check_prompt(
+            Some("feature"),
+            &ReviewToCheck {
+                summary: "s",
+                verdict: "request_changes",
+                conclusion: "c",
+                findings: &findings,
+                earlier: String::new(),
+                set_aside: String::new(),
+            },
+            patch,
+            None,
+        );
+        assert!(
+            check.contains("the workaround is what the change introduces"),
+            "{check}"
+        );
     }
 
     #[test]

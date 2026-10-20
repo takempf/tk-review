@@ -261,6 +261,21 @@ pub static SPECIALISTS: &[Specialist] = &[
         picks: |file| file.is_code() && !file.is_test() && file.mentions(ANALYTICS_TERMS),
     },
     Specialist {
+        key: "architecture",
+        name: "architecture-reviewer",
+        label: "Architecture",
+        summary: "Reviews whether each fix is made where its problem starts: workarounds that hide a symptom while the cause stays reachable, such as errors swallowed, races papered over with delays, special cases for one input, data corrected downstream of where it goes wrong, and fixes in the wrong layer.",
+        launches: "When a diff changes source code, tests, or migrations.",
+        placeholder: "e.g. Data problems are fixed in the resolver or the migration, never patched over in the client.",
+        role: "a software architect reviewing a pull request for fixes made in the wrong place",
+        stakes: "A workaround passes its tests, because they were written for the symptom it hides. The cause stays, and comes back on the next path that reaches it, or as a second workaround on top of the first, until nobody can say why the code works.",
+        preparation: "Work out what the change is for before judging it. Then, for each fix it makes, read upstream from the symptom to the code where the problem starts, and search for the other code that reaches the same cause.",
+        history: "Run `git log` on the files you review, and `git log -S` on the workaround's shape, for earlier patches to the same symptom. In Linear or Slack, search the symptom alongside words like workaround, hack, regression, or root cause.",
+        checklist: include_str!("specialists/architecture.md"),
+        turns: 40,
+        picks: |file| file.is_code(),
+    },
+    Specialist {
         key: "maintainability",
         name: "maintainability-reviewer",
         label: "Maintainability",
@@ -1302,6 +1317,16 @@ mod tests {
             .any(|path| path.ends_with("creditsPlugin.test.ts")));
         assert!(!maintainability.iter().any(|path| path.ends_with(".md")));
         assert!(picked_by("migrations", &patch).is_empty());
+        // A skipped or loosened test is a workaround too, so architecture
+        // reads tests, and migrations, which can repair what code keeps
+        // writing wrong.
+        let architecture = picked_by("architecture", &patch);
+        assert!(architecture
+            .iter()
+            .any(|path| path.ends_with("creditsPlugin.test.ts")));
+        assert!(!architecture.iter().any(|path| path.ends_with(".md")));
+        assert!(picked_by("architecture", &migration_patch())
+            .contains(&"apps/api/src/migrations/0002_add_owner.sql".to_owned()));
     }
 
     #[test]
