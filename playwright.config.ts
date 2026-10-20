@@ -3,7 +3,10 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./dev-harness/tests",
   fullyParallel: true,
-  workers: 2,
+  // Most of a test is the harness's simulated round-trips, which overlap well.
+  // Past about half the cores, the dev server and the motion tests' timing
+  // start to suffer.
+  workers: "50%",
   use: {
     baseURL: "http://127.0.0.1:1420",
     viewport: { width: 1500, height: 1000 },
