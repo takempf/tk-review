@@ -382,7 +382,10 @@ test("a GitHub reply beside an AI finding expands at that trigger", async ({ pag
   const aiTab = page.getByRole("tab", { name: /^(AI review|Review)$/ });
   await aiTab.click();
   await page.getByRole("button", { name: "Review", exact: true }).click();
-  await page.getByRole("button", { name: "Send to PR", exact: true }).nth(1).click();
+  await page
+    .locator(`[data-search-id^="review:claude:f:${migration}:"]`)
+    .getByRole("button", { name: "Send to PR", exact: true })
+    .click();
   await page.getByRole("button", { name: "Post", exact: true }).click();
   await expect(page.getByRole("link", { name: "Posted to PR", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "PR", exact: true }).click();

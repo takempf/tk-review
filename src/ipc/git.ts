@@ -91,7 +91,10 @@ export interface FileVersions {
 
 /** One problem the reviewer found, anchored to a file (and lines, when it has them). */
 export interface ReviewFinding {
-  /** Path as it appears in the diff's compare side. */
+  /**
+   * Path as it appears in the diff's compare side, or `""` for a finding about
+   * the change as a whole (see `isWholeChange`).
+   */
   path: string;
   /** New-file line number — the first, for a span — or `null` for whole-file findings. */
   line: number | null;

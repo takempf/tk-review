@@ -402,7 +402,8 @@ fn span(finding: &ReviewFinding) -> Option<(u32, u32)> {
 /// Whether two findings, from different runs, are about the same problem: the
 /// same file, and lines within `LINE_SLACK` of each other, or both about the
 /// file as a whole. Wording isn't compared, since runs word one problem every
-/// which way, so two problems on neighbouring lines can count as one.
+/// which way, so two problems on neighbouring lines can count as one, and so
+/// can two about the change as a whole.
 fn same_problem(a: &ReviewFinding, b: &ReviewFinding) -> bool {
     if a.path != b.path {
         return false;
@@ -585,6 +586,7 @@ fn render_report(dir: &Path, runs: &[(usize, BenchRun)]) -> String {
             .collect();
         severities.dedup();
         let at = match span(finding) {
+            _ if finding.is_general() => "(the change as a whole)".to_owned(),
             Some((start, end)) if end > start => format!("{}:{start}-{end}", finding.path),
             Some((start, _)) => format!("{}:{start}", finding.path),
             None => finding.path.clone(),

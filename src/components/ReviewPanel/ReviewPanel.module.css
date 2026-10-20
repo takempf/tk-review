@@ -1164,6 +1164,17 @@
   text-align: right;
 }
 
+/* Where a finding about the change as a whole points: words rather than a
+   path, so nothing to clip from the start. */
+.wholeChange {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The file list's split: folders dim, the file name at full strength. It
    follows the link's colour on the link's timing, which changes on hover. */
 .pathName {

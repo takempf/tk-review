@@ -314,7 +314,10 @@ export const VERSIONS: Record<string, FileVersions> = {
   "migrations/0007_add_reviews_table.sql": sided(SQL_OLD, SQL_NEW),
 };
 
-/** Stand-in Claude review; exercises every severity, a line span, and a path outside the diff. */
+/**
+ * Stand-in Claude review; exercises every severity, a line span, a path
+ * outside the diff, and a finding about the change as a whole.
+ */
 export const REVIEW: ReviewResult = {
   summary:
     "A focused rework of the diff viewer's data flow, plus a schema migration. The riskiest part is the migration: it adds a non-null column without a backfill for existing rows.",
@@ -362,6 +365,19 @@ export const REVIEW: ReviewResult = {
       body: "The docblock still says the helper returns a tuple; it now returns an object.",
       reviewers: ["Maintainability"],
     },
+    {
+      // About the change as a whole, so it has no path and posts to the PR
+      // conversation.
+      path: "",
+      line: null,
+      severity: "warning",
+      title: "Stale diffs are hidden rather than prevented.",
+      failure:
+        "Each caller now drops a response for a file that's no longer selected, but the read itself never learns the selection changed:\n- `DiffViewer.tsx` checks `cancelled` once the read resolves\n- `git.ts` retries a failed read before giving up\n\nThe next caller needs the same guard, and abandoned reads still run.",
+      fix: "Cancel the read where it starts: pass an `AbortSignal` from the file selection into `getFileVersions`, and drop the per-caller guards.",
+      body: "Each caller now drops a response for a file that's no longer selected, but the read itself never learns the selection changed:\n- `DiffViewer.tsx` checks `cancelled` once the read resolves\n- `git.ts` retries a failed read before giving up\n\nThe next caller needs the same guard, and abandoned reads still run.\n\n**Fix:** Cancel the read where it starts: pass an `AbortSignal` from the file selection into `getFileVersions`, and drop the per-caller guards.",
+      reviewers: ["Lead", "Architecture"],
+    },
   ],
   // Neither confirmed nor ruled out when the review was asked whether it was sure.
   unconfirmed: [
@@ -401,7 +417,7 @@ export const CHECK_FAILURE = "Claude was still going after 60 minutes, so it was
 
 /**
  * Stand-in re-review of `REVIEW`: exercises every resolution status against
- * the four findings above, plus one new finding — the "fix that introduced
+ * the five findings above, plus one new finding — the "fix that introduced
  * its own bug" case the feature exists to catch.
  */
 export const RE_REVIEW: ReReviewResult = {
@@ -430,6 +446,11 @@ export const RE_REVIEW: ReReviewResult = {
       index: 3,
       status: "obsolete",
       note: "The docblock was rewritten as part of the rename, so there is no stale tuple wording left to fix.",
+    },
+    {
+      index: 4,
+      status: "partial",
+      note: "A third guard was added in `FileList.tsx` rather than cancelling the read, so the cause is still in `getFileVersions`.",
     },
   ],
   findings: [

@@ -52,7 +52,8 @@ impl Since {
     }
 
     /// Whether a new finding is about what changed: near a changed line, or
-    /// about a changed file as a whole.
+    /// about a changed file as a whole. One about the change as a whole has
+    /// no file, so it never is.
     pub fn covers(&self, finding: &ReviewFinding) -> bool {
         let Some(spans) = self.lines.get(&finding.path) else {
             return false;
@@ -363,5 +364,7 @@ mod tests {
         assert!(!since.covers(&finding("a.ts", Some(48), None)));
         assert!(!since.covers(&finding("a.ts", Some(10), Some(30))));
         assert!(!since.covers(&finding("b.ts", Some(41), None)));
+        // About the change as a whole: no lines to hold to what changed.
+        assert!(!since.covers(&finding("", None, None)));
     }
 }

@@ -936,7 +936,7 @@ fn lead_instructions(picked: &[Picked]) -> String {
 {panel}
 1. In your first response, launch every one of them with the Agent tool, in the foreground, alongside your first reads: one response with an Agent call for each, so they work at the same time. Tell each in a few sentences what the change is for and what it needs to know from the rest of the diff, such as which code reads or writes the tables a migration touches, or which server change a client change depends on, and whether that ships in this same change.
 2. Review the whole diff yourself, but spend your reading where no specialist is looking: the files none of them picked, and how the parts of the change fit together, such as a client change and the server change it relies on. Within a specialist's area, check what it reports rather than reviewing those files again from the start.
-3. Check each finding a specialist reports against the code before you use it. Report the ones that hold as ordinary findings on their file and line, merged with your own and with each other's so each problem appears once, and drop the ones that don't hold.
+3. Check each finding a specialist reports against the code before you use it. Report the ones that hold as ordinary findings on their file and line, or about the change as a whole where that's how the specialist reported it, merged with your own and with each other's so each problem appears once, and drop the ones that don't hold.
 4. In each finding's `reviewers`, name everyone who raised it: `{LEAD}` when you found it yourself, and the subagent's name for each specialist whose report it came from. A problem that you and a specialist both found lists both.
 5. Weigh them in the verdict. A problem a specialist rates critical that holds up must be fixed before this merges.
 
@@ -947,7 +947,7 @@ fn lead_instructions(picked: &[Picked]) -> String {
 /// What a codex review gets in place of the panel: each specialist's checklist
 /// and rules, for the files in its area.
 fn codex_checklists(picked: &[Picked], rules: &RepoRules) -> String {
-    let mut text = String::from("Parts of this diff fall in areas that get a specialist's checklist on top of an ordinary review. Review the files in each area against its checklist as well as everything else, and report what you find as ordinary findings on the file and line.\n\n");
+    let mut text = String::from("Parts of this diff fall in areas that get a specialist's checklist on top of an ordinary review. Review the files in each area against its checklist as well as everything else, and report what you find as ordinary findings on the file and line, or about the change as a whole when no one place shows it.\n\n");
     for picked in picked {
         text.push_str(&format!(
             "{} checklist, for {}. {}\n\n{}\n\n",
@@ -1034,7 +1034,7 @@ Look for history only for a problem you'd rate critical or warning, where it wou
 {guidance}
 
 Report back in plain text, one entry per problem, most serious first:
-- `path:line` or `path:start-end`, in new-file line numbers
+- `path:line` or `path:start-end`, in new-file line numbers, or "the whole change" for a problem with the approach that no one place shows
 - severity: critical, warning, suggestion, or nit
 - one sentence naming the problem
 - the failure: the concrete inputs, state, or sequence of events that goes wrong, and what the user or the system sees

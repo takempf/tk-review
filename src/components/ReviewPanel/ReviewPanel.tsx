@@ -32,7 +32,13 @@ import {
 } from "../../ipc/git";
 import { ENGINE_LABELS } from "../../lib/engines";
 import { splitPath } from "../../lib/fileChange";
-import { describeLines, findingLines, formatLines, type LineSpan } from "../../lib/lineSpan";
+import {
+  describeLines,
+  findingLines,
+  formatLines,
+  type LineSpan,
+  WHOLE_CHANGE,
+} from "../../lib/lineSpan";
 import { useModelCatalogs, useModelLabel } from "../../lib/models";
 import {
   findingAfter,
@@ -1141,12 +1147,20 @@ function PrCommentComposer({
  * a narrow panel. The file name is also the bright part, as in the file list.
  * Clicking scrolls the diff surface to those lines and highlights them, not
  * just to the file — a whole-file finding has no lines and lands on the header.
+ * A finding about the change as a whole has no path, and nowhere to jump to.
  */
 function FindingLocation({ path, lines }: { path: string; lines: LineSpan | null }) {
   const selectFile = useTab((state) => state.selectFile);
   const inDiff = useTab(
     (state) => state.summary?.files.some((file) => file.path === path) ?? false,
   );
+  if (!path) {
+    return (
+      <div className={css.findingLocation}>
+        <span className={css.wholeChange}>{WHOLE_CHANGE}</span>
+      </div>
+    );
+  }
   const at = lines ? `:${formatLines(lines)}` : "";
   const { dir, name } = splitPath(path);
   const text = (
@@ -1618,7 +1632,8 @@ interface SetAsideItem {
 function ruleFor(finding: ReviewFinding, note: string): string {
   const title = finding.title.trim().replace(/\.$/, "");
   const why = note.trim();
-  return `- Don't raise "${title}" in \`${finding.path}\`${why ? `: ${why}` : "."}`;
+  const where = finding.path ? ` in \`${finding.path}\`` : "";
+  return `- Don't raise "${title}"${where}${why ? `: ${why}` : "."}`;
 }
 
 /**
@@ -1758,7 +1773,9 @@ function ReviewSummary({
 }
 
 /**
- * Diff order, so a review reads top-to-bottom alongside the surface.
+ * Diff order, so a review reads top-to-bottom alongside the surface. Findings
+ * about the change as a whole have no path, so they come first, as a
+ * reviewer's comments on the approach would.
  */
 function inDiffOrder<T>(items: T[], findingOf: (item: T) => ReviewFinding): T[] {
   return [...items].sort((a, b) => {

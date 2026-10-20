@@ -226,8 +226,19 @@ Your prose may be posted as a GitHub pull request comment, where GitHub turns ce
 const JSON_MARKDOWN_NOTE: &str = "Markdown goes inside the JSON string values. Titles are plain text: no Markdown in a `title`, and ideally no more than ten words.";
 
 /// How the review and re-review prompts anchor a finding: one line, a span of
-/// lines, or the whole file.
-const LOCATION_GUIDANCE: &str = "`line` is the new-file line number a finding anchors to, or null when it applies to the file as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
+/// lines, the whole file, or the change as a whole.
+const LOCATION_GUIDANCE: &str = "`path` is the file a finding is about, spelled as the diff spells it, or null for a finding about the change as a whole (see below). `line` is the new-file line number a finding anchors to, or null when it applies to the file, or the change, as a whole. When the problem spans several lines — a block, a function, a condition split across lines — set `line` to its first line and `endLine` to its last, so the whole span can be highlighted; otherwise `endLine` is null. Keep a span to the lines that actually show the problem, not the whole enclosing function.";
+
+/// When a finding is about the change as a whole rather than one place in it.
+/// These go to the pull request's conversation, where a reviewer would raise
+/// the approach, rather than on a line.
+const WHOLE_CHANGE_GUIDANCE: &str = r#"Most findings belong on a line, since that is where the author will read them. Some belong to the change as a whole, because no one place in the diff shows them:
+- a workaround spread across several files, or an approach that routes around a problem instead of fixing it
+- a change made in the wrong layer, or a second version of a mechanism the codebase already has
+- a design that won't hold for a case the pull request, its ticket, or the code around it says is coming
+- something the change needs that is missing altogether, such as a migration, a caller, or the other side of a contract
+- a pull request description that the code disagrees with
+Give one of these a null `path` and a null `line`, and it is posted to the pull request's conversation. Hold it to the same bar as any other finding: a cost you can name and a concrete alternative, not a preference. Use one only for what no line can carry, and rarely more than two in a review."#;
 
 /// What a review does with a fix that hides its problem rather than solving it.
 /// The cause predates the change, which the reporting bar would otherwise
@@ -285,7 +296,9 @@ const VERDICT_GUIDANCE: &str = r#"`verdict` is the GitHub review you recommend s
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
-    /// Path as it appears in the diff's compare side.
+    /// Path as it appears in the diff's compare side. Empty for a finding
+    /// about the change as a whole, which the model writes as a null path.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub path: String,
     /// New-file line number the finding anchors to, when there is one: the
     /// first line, for a finding that spans several.
@@ -325,11 +338,30 @@ pub struct ReviewFinding {
     pub posted_url: Option<String>,
 }
 
+/// A string the model may write as null, read as an empty one.
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 impl ReviewFinding {
+    /// About the change as a whole rather than one file: the approach, or
+    /// something missing from the diff altogether. It goes to the pull
+    /// request's conversation rather than on a file.
+    pub fn is_general(&self) -> bool {
+        self.path.is_empty()
+    }
+
     /// Settles what the model wrote into one shape per kind of location: a span
     /// that ends where it starts is a single line, one written backwards is
-    /// turned around, and a span with no start is the whole file.
+    /// turned around, and a span with no start is the whole file. A finding
+    /// with no path has no lines either.
     fn tidy_span(&mut self) {
+        if self.path.trim().is_empty() {
+            self.path.clear();
+            self.line = None;
+            self.end_line = None;
+            return;
+        }
         match (self.line, self.end_line) {
             (None, _) => self.end_line = None,
             (Some(start), Some(end)) if end == start => self.end_line = None,
@@ -371,13 +403,18 @@ impl ReviewFinding {
     }
 
     /// Where the finding points, for the prompts that list findings back to the
-    /// agent: `line: 12`, `lines: 12-18`, or `line: whole file`.
-    fn location_label(&self) -> String {
-        match (self.line, self.end_line) {
+    /// agent: `src/a.rs (line: 12)`, `src/a.rs (lines: 12-18)`,
+    /// `src/a.rs (line: whole file)`, or `the change as a whole`.
+    fn location(&self) -> String {
+        if self.is_general() {
+            return "the change as a whole".to_owned();
+        }
+        let lines = match (self.line, self.end_line) {
             (Some(start), Some(end)) => format!("lines: {start}-{end}"),
             (Some(line), None) => format!("line: {line}"),
             (None, _) => "line: whole file".to_owned(),
-        }
+        };
+        format!("{} ({lines})", self.path)
     }
 }
 
@@ -733,7 +770,10 @@ pub fn re_review_diff(
     result.scope_note = scope_note;
     if let Some(since) = &since {
         // Held to what changed in code, not only in the prompt: a problem the
-        // earlier review missed elsewhere is what made re-reviews churn.
+        // earlier review missed elsewhere is what made re-reviews churn. A
+        // finding about the change as a whole has no lines to hold to what
+        // changed, and it's the earlier review's to raise, so it folds away
+        // too unless it's critical.
         let (inside, outside) =
             std::mem::take(&mut result.findings)
                 .into_iter()
@@ -786,10 +826,9 @@ fn set_aside_note(set_aside: &[SetAsideFinding]) -> String {
     for item in set_aside {
         let finding = &item.finding;
         note.push_str(&format!(
-            "- [{}] {} ({}) — {}\n",
+            "- [{}] {} — {}\n",
             item.label(),
-            finding.path,
-            finding.location_label(),
+            finding.location(),
             finding.title
         ));
         let why = item.note.trim();
@@ -823,10 +862,9 @@ fn build_re_review_prompt(
     let mut findings_list = String::new();
     for (index, finding) in prior.findings.iter().enumerate() {
         findings_list.push_str(&format!(
-            "{index}. [{}] {} ({}) — {}\n   {}\n{}",
+            "{index}. [{}] {} — {}\n   {}\n{}",
             finding.severity,
-            finding.path,
-            finding.location_label(),
+            finding.location(),
             finding.title,
             finding.body,
             github_thread_note(finding, pr_context)
@@ -866,7 +904,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ],
   "findings": [
     {{
-      "path": "path/as/it/appears/in/the/diff",
+      "path": "path/as/it/appears/in/the/diff, or null for the change as a whole",
       "line": 123,
       "endLine": null,
       "severity": "critical | warning | suggestion | nit",
@@ -880,6 +918,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 `resolutions` must have exactly one entry per numbered finding, using its number as `index`. {LOCATION_GUIDANCE} {REPORTING_BAR} An empty findings array is a valid answer when nothing new is wrong.
 
 {WORKAROUND_GUIDANCE}
+
+{WHOLE_CHANGE_GUIDANCE}
 
 {SEVERITY_GUIDANCE}
 
@@ -1101,10 +1141,9 @@ fn earlier_verdicts_note(prior: &[ReviewFinding], resolutions: &[FindingResoluti
         .filter_map(|resolution| {
             let finding = prior.get(resolution.index)?;
             Some(format!(
-                "- [{}] {} ({}) — {}\n",
+                "- [{}] {} — {}\n",
                 resolution.status,
-                finding.path,
-                finding.location_label(),
+                finding.location(),
                 finding.title
             ))
         })
@@ -1129,10 +1168,9 @@ fn build_check_prompt(
     let mut findings_list = String::new();
     for (index, finding) in review.findings.iter().enumerate() {
         findings_list.push_str(&format!(
-            "{index}. [{}] {} ({}) — {}\n   {}\n",
+            "{index}. [{}] {} — {}\n   {}\n",
             finding.severity,
-            finding.path,
-            finding.location_label(),
+            finding.location(),
             finding.title,
             finding.body,
         ));
@@ -1165,7 +1203,7 @@ Its verdict was "{verdict}", with this conclusion:
 Its findings, numbered:
 
 {findings_list}
-{earlier}{set_aside}Check every numbered finding again, as though someone else had written it and you expect some of it to be wrong. You are running inside the repository: read the code each finding points at, and the code around and calling it, rather than trusting the diff or your memory of it. A finding holds when all of these are true:
+{earlier}{set_aside}Check every numbered finding again, as though someone else had written it and you expect some of it to be wrong. You are running inside the repository: read the code each finding points at, and the code around and calling it, rather than trusting the diff or your memory of it. A finding about the change as a whole points at no one place, so read the code it describes across the diff. A finding holds when all of these are true:
 1. The code does what the finding says it does.
 2. The problem can actually happen: a caller, an input, or an order of events reaches it.
 3. Nothing already prevents it, such as a guard, a type, a constraint, a caller that never passes that value, or a test that pins the behavior.
@@ -1435,7 +1473,8 @@ pub fn review_reply(
         )));
     }
 
-    let patch = match finding {
+    // A finding about the change as a whole needs all of it, as the review does.
+    let patch = match finding.filter(|finding| !finding.is_general()) {
         Some(finding) => git::get_file_patch(root, merge_base, compare, &finding.path)?,
         None => git::get_patch(root, merge_base, compare)?,
     };
@@ -1485,10 +1524,14 @@ fn build_reply_prompt(
 
     match finding {
         Some(finding) => {
+            let diff = if finding.is_general() {
+                "The diff"
+            } else {
+                "The diff for that file"
+            };
             prompt.push_str(&format!(
-                "This conversation is about one finding from your review:\n- file: {} ({})\n- severity: {}\n- {}\n- {}\n{}\nThe diff for that file:\n\n{patch}\n\n",
-                finding.path,
-                finding.location_label(),
+                "This conversation is about one finding from your review:\n- about: {}\n- severity: {}\n- {}\n- {}\n{}\n{diff}:\n\n{patch}\n\n",
+                finding.location(),
                 finding.severity,
                 finding.title,
                 finding.body,
@@ -1540,7 +1583,7 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   "conclusion": "The GitHub review body to submit with the verdict, addressed to the author.",
   "findings": [
     {{
-      "path": "path/as/it/appears/in/the/diff",
+      "path": "path/as/it/appears/in/the/diff, or null for the change as a whole",
       "line": 123,
       "endLine": null,
       "severity": "critical | warning | suggestion | nit",
@@ -1554,6 +1597,8 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
 {LOCATION_GUIDANCE} Report real problems: bugs, broken edge cases, security issues, fixes that only hide their problem, misleading names or comments, missing error handling at real boundaries. {REPORTING_BAR} An empty findings array is a valid answer for a clean diff.
 
 {WORKAROUND_GUIDANCE}
+
+{WHOLE_CHANGE_GUIDANCE}
 
 {SEVERITY_GUIDANCE}
 
@@ -2408,7 +2453,7 @@ const REVIEW_SCHEMA: &str = r#"{
       "items": {
         "type": "object",
         "properties": {
-          "path": {"type": "string"},
+          "path": {"type": ["string", "null"]},
           "line": {"type": ["integer", "null"]},
           "endLine": {"type": ["integer", "null"]},
           "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "nit"]},
@@ -2450,7 +2495,7 @@ const RE_REVIEW_SCHEMA: &str = r#"{
       "items": {
         "type": "object",
         "properties": {
-          "path": {"type": "string"},
+          "path": {"type": ["string", "null"]},
           "line": {"type": ["integer", "null"]},
           "endLine": {"type": ["integer", "null"]},
           "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "nit"]},
@@ -4090,6 +4135,73 @@ ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","mes
                 serde_json::json!(["critical", "warning", "suggestion", "nit"])
             );
         }
+    }
+
+    #[test]
+    fn a_finding_can_be_about_the_change_as_a_whole() {
+        let json = r#"{"summary": "", "findings": [
+            {"path": null, "line": 4, "endLine": 9, "severity": "warning",
+             "title": "The fix lives in the client", "failure": "f", "fix": "x"},
+            {"path": "  ", "line": null, "endLine": null, "severity": "warning",
+             "title": "Blank path", "failure": "f", "fix": "x"}
+        ]}"#;
+        let mut review: ReviewResult = parse_agent_json(json).expect("parse");
+        for finding in &mut review.findings {
+            finding.tidy_span();
+            assert!(finding.is_general(), "{finding:?}");
+            // Nothing to anchor lines to without a file.
+            assert_eq!((finding.line, finding.end_line), (None, None));
+            assert_eq!(finding.location(), "the change as a whole");
+        }
+        assert_eq!(
+            check_finding("src/a.ts", "nit", "t").location(),
+            "src/a.ts (line: 3)"
+        );
+
+        let patch = "diff --git a/a.ts b/a.ts\n+x";
+        for prompt in [
+            build_prompt(Some("feature"), patch, None),
+            build_re_review_prompt(Some("feature"), &prior("Summary.", &[]), patch, None, None),
+        ] {
+            assert!(prompt.contains(WHOLE_CHANGE_GUIDANCE), "{prompt}");
+        }
+        for schema in [REVIEW_SCHEMA, RE_REVIEW_SCHEMA] {
+            let schema: serde_json::Value = serde_json::from_str(schema).expect("valid schema");
+            assert_eq!(
+                schema["properties"]["findings"]["items"]["properties"]["path"]["type"],
+                serde_json::json!(["string", "null"])
+            );
+        }
+    }
+
+    #[test]
+    fn a_reply_about_the_whole_change_gets_the_whole_diff() {
+        let finding = check_finding("", "warning", "The fix lives in the client");
+        let prompt = build_reply_prompt(
+            Some("feature"),
+            "Summary.",
+            Some(&finding),
+            &[],
+            "Where should it go?",
+            "diff --git a/src/a.ts b/src/a.ts",
+            None,
+        );
+        assert!(
+            prompt.contains("- about: the change as a whole"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("The diff:\n\ndiff --git"), "{prompt}");
+        let prompt = build_reply_prompt(
+            Some("feature"),
+            "Summary.",
+            Some(&check_finding("src/a.ts", "warning", "t")),
+            &[],
+            "Why?",
+            "diff --git a/src/a.ts b/src/a.ts",
+            None,
+        );
+        assert!(prompt.contains("- about: src/a.ts (line: 3)"), "{prompt}");
+        assert!(prompt.contains("The diff for that file:"), "{prompt}");
     }
 
     #[test]

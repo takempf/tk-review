@@ -1,6 +1,7 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import { useMemo } from "react";
 import { ENGINE_LABELS } from "../../lib/engines";
+import { WHOLE_CHANGE } from "../../lib/lineSpan";
 import { useScreenSettled } from "../../lib/screenTransition";
 import type { SearchDocument } from "../../lib/textSearch";
 import {
@@ -143,7 +144,7 @@ export function ReviewSearchIndex() {
           scope: "conversations",
           title: finding.title,
           text: `${finding.title}\n${finding.body}`,
-          detail: `${agent} · ${finding.path}`,
+          detail: `${agent} · ${finding.path || WHOLE_CHANGE.toLowerCase()}`,
           tab: "ai",
           target,
         });

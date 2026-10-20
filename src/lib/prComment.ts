@@ -1,5 +1,5 @@
 import type { PrCommentDestination, ReviewFinding } from "../ipc/git";
-import { findingLines, formatLines } from "./lineSpan";
+import { findingLines, formatLines, isWholeChange } from "./lineSpan";
 
 export interface PrPostLocation {
   destination: PrCommentDestination;
@@ -65,6 +65,12 @@ export function postLocationForFinding(
     endLine: null,
   } as const;
   if (!finding) return { ...conversation, note: "Posts to the PR conversation." };
+  if (isWholeChange(finding)) {
+    return {
+      ...conversation,
+      note: "Posts to the PR conversation: it's about the change as a whole.",
+    };
+  }
   const lines = findingLines(finding);
   const pathLines = patch ? patchNewLines(patch).get(finding.path) : undefined;
   const startHunk = lines ? pathLines?.get(lines.start) : undefined;
@@ -119,6 +125,8 @@ export function postBodyForFinding(
 ): string {
   if (!finding) return "Review summary";
   const body = `${finding.title}\n\n${finding.body}`;
+  // The conversation is where it was meant to go.
+  if (isWholeChange(finding)) return body;
   const lines = findingLines(finding);
   const exact =
     location.destination === "inline" &&

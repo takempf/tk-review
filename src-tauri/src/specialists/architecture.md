@@ -21,7 +21,7 @@ Shapes a workaround takes:
 What a finding says:
 - In `failure`: where the cause is, and what still reaches it or what the workaround now hides.
 - In `fix`: the change at the cause, concretely enough to act on, not "refactor this". When that is more than this pull request should take on, say so, and ask for the workaround to be marked in the code with why and a link to a ticket for the real fix.
-- Anchor it to the workaround's lines.
+- Anchor it to the workaround's lines. When the workaround is spread across files, or the problem is the approach rather than any one place, report it as about the whole change.
 
 Leave alone:
 - A workaround the pull request already says is one, marked in the code, with the real fix tracked.

@@ -13,6 +13,15 @@ export interface LineSpan {
   side?: LineSide;
 }
 
+/**
+ * About the change as a whole rather than one file: its approach, or something
+ * missing from the diff. It has no lines, and posts to the PR conversation.
+ */
+export const isWholeChange = (finding: Pick<ReviewFinding, "path">): boolean => !finding.path;
+
+/** What the app calls where a finding about the change as a whole points. */
+export const WHOLE_CHANGE = "The change as a whole";
+
 /** The lines a finding points at, or `null` for one about the whole file. */
 export function findingLines(finding: Pick<ReviewFinding, "line" | "endLine">): LineSpan | null {
   if (finding.line == null) return null;

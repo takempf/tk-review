@@ -79,6 +79,7 @@ test("re-reviews follow up on every open finding and are told what was set aside
     "New non-null column has no default or backfill.",
     "Effect cleanup races the in-flight fetch.",
     "Comment describes the old return type.",
+    "Stale diffs are hidden rather than prevented.",
   ]);
   expect(first?.findings.every((finding) => typeof finding.readAt === "string")).toBe(true);
   expect(first?.setAside).toEqual([
