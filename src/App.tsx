@@ -210,7 +210,7 @@ export function App() {
     () => ["home", ...tabs.map((open) => `tab:${open.id}` as const)],
     [tabs],
   );
-  const restoreLastRepo = useAppStore((state) => state.restoreLastRepo);
+  const restoreSession = useAppStore((state) => state.restoreSession);
 
   useFileKeyboardNav();
   useWindowTitle();
@@ -218,8 +218,8 @@ export function App() {
   useScreenHistory();
 
   useEffect(() => {
-    void restoreLastRepo();
-  }, [restoreLastRepo]);
+    void restoreSession();
+  }, [restoreSession]);
 
   return (
     <div className={css.window}>

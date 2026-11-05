@@ -339,6 +339,7 @@ export interface TabInit {
   compare: string | null;
   pr?: PrContext | null;
   pendingPr?: (PrPreview & { url: string }) | null;
+  includeUncommitted?: boolean;
 }
 
 /** The refs a PR is compared on: the base branch as fetched, and the fetched head. */
@@ -475,7 +476,7 @@ export interface TabState {
   /** An agent run finished while this tab was out of sight, and it hasn't been looked at since. */
   unseen: boolean;
 
-  /** Loads the diff, unless it is loaded or on its way. */
+  /** Opens the PR or loads the diff, unless it is loaded or on its way. */
   ensureDiff: () => Promise<void>;
   /** Clears `unseen`: the tab is on screen. */
   markSeen: () => void;
@@ -878,7 +879,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       postingComment: false,
       commentError: null,
       postedCommentUrl: null,
-      includeUncommitted: false,
+      includeUncommitted: init.includeUncommitted ?? false,
       viewed: new Set(),
       expanded: new Set(),
       loadingDiff: false,
@@ -903,9 +904,10 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       unseen: false,
 
       async ensureDiff() {
-        const { summary, loadingDiff, openingPr } = get();
+        const { summary, loadingDiff, openingPr, pendingPr } = get();
         if (summary || loadingDiff || openingPr) return;
-        await loadDiff();
+        if (pendingPr) await get().openPr(pendingPr.url);
+        else await loadDiff();
       },
 
       markSeen() {
@@ -1012,9 +1014,14 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         // Refs move under the app whenever the user fetches, pulls, or switches
         // branches in a terminal, so a refresh re-reads the repo and its branch
         // list rather than only re-running the diff.
-        const { repo, pr, refreshingPr, loadingDiff, openingPr } = get();
+        const { repo, pr, pendingPr, refreshingPr, loadingDiff, openingPr } = get();
         if (refreshingPr || loadingDiff || openingPr) return;
 
+        // A PR that failed to open has nothing to refresh yet: try opening it again.
+        if (pendingPr) {
+          await get().openPr(pendingPr.url);
+          return;
+        }
         if (pr) {
           // Re-reading the PR is a network round-trip through `gh`, and nothing
           // else is marked busy until `loadDiff` starts — so hold `refreshingPr`

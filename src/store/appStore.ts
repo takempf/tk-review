@@ -11,6 +11,7 @@ import {
 import { prMorphKey, screenSettling, transitionScreen } from "../lib/screenTransition";
 import { claimUnscopedStorage } from "./account";
 import { forgetRepo, rememberRepo } from "./history";
+import { readSession, type SavedSession, savedTab, writeSession } from "./session";
 import {
   createTabStore,
   type PrPreview,
@@ -102,6 +103,8 @@ interface AppState {
 
   openRepo: (path: string) => Promise<void>;
   restoreLastRepo: () => Promise<void>;
+  /** Reopens the repository and the tabs the last page load had open. */
+  restoreSession: () => Promise<void>;
   closeRepo: () => void;
   /** Back to the pull-request list. */
   goHome: (options?: NavigateOptions) => void;
@@ -180,7 +183,7 @@ function defaultComparison(repo: RepoInfo, branches: Branch[]) {
   return { base, compare };
 }
 
-export const useAppStore = create<AppState>((set, get) => {
+export const useAppStore = create<AppState>((set, get, api) => {
   /**
    * Applies `patch` inside the screen transition, so whatever moves between the
    * tab bar and the list glides there. Resolves once the store
@@ -280,6 +283,7 @@ export const useAppStore = create<AppState>((set, get) => {
       openPrs,
       isShown: () => shownTab(get())?.id === id,
     });
+    store.subscribe(saveSession);
     const root = init.repo.root;
     const morphKey = number != null ? prMorphKey(root, number) : `branches-${id}`;
     return { id, root, number, morphKey, store };
@@ -327,6 +331,68 @@ export const useAppStore = create<AppState>((set, get) => {
     });
     if (next) void next.store.getState().ensureDiff();
     return done;
+  }
+
+  // Off until the saved session has been read back, so starting up can't overwrite it.
+  let saving = false;
+  let restoring: Promise<void> | null = null;
+
+  function saveSession() {
+    if (!saving) return;
+    const { tabs, activeTabId, view } = get();
+    const kept = tabs.flatMap((tab) => {
+      const saved = savedTab(tab);
+      return saved ? [{ id: tab.id, saved }] : [];
+    });
+    const active = kept.findIndex((entry) => entry.id === activeTabId);
+    writeSession({
+      tabs: kept.map((entry) => entry.saved),
+      active: active === -1 ? null : active,
+      reviewing: view === "review",
+    });
+  }
+  api.subscribe(saveSession);
+
+  async function readRepo(root: string): Promise<{ repo: RepoInfo; branches: Branch[] } | null> {
+    const { repo, branches } = get();
+    if (repo?.root === root) return { repo, branches };
+    try {
+      const opened = await gitApi.selectRepo(root);
+      return { repo: opened, branches: await gitApi.listBranches(opened.root) };
+    } catch {
+      // Moved or deleted since, like a remembered repo; its tabs go with it.
+      return null;
+    }
+  }
+
+  async function restoreTabs({ tabs, active, reviewing }: SavedSession): Promise<void> {
+    const roots = [...new Set(tabs.map((tab) => tab.root))];
+    const repos = new Map(
+      await Promise.all(roots.map(async (root) => [root, await readRepo(root)] as const)),
+    );
+    const restored = tabs.map((saved) => {
+      const found = repos.get(saved.root);
+      if (!found) return null;
+      // A PR opens once it is shown, headed by its saved preview until then.
+      if (saved.pr) {
+        return makeTab(
+          { ...found, base: null, compare: null, pendingPr: saved.pr },
+          saved.pr.number,
+        );
+      }
+      const { base, compare, includeUncommitted } = saved;
+      return makeTab({ ...found, base, compare, includeUncommitted }, null);
+    });
+    const opened = restored.filter((tab) => tab != null);
+    if (opened.length === 0) return;
+    const shown = active == null ? null : (restored[active] ?? null);
+    const patch = { tabs: [...get().tabs, ...opened], activeTabId: shown?.id ?? null };
+    if (!reviewing || !shown) {
+      set(patch);
+      return;
+    }
+    await transition({ ...patch, view: "review" }, { animate: false });
+    void shown.store.getState().ensureDiff();
   }
 
   async function open(path: string, { remember }: { remember: boolean }): Promise<void> {
@@ -382,6 +448,21 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       await open(last, { remember: true });
+    },
+
+    restoreSession() {
+      // Once per page load: StrictMode runs the effect that asks twice.
+      restoring ??= (async () => {
+        const saved = readSession();
+        try {
+          await get().restoreLastRepo();
+          await restoreTabs(saved);
+        } finally {
+          saving = true;
+          saveSession();
+        }
+      })();
+      return restoring;
     },
 
     closeRepo() {

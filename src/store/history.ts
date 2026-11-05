@@ -37,7 +37,7 @@ const RECENT_REPOS_LIMIT = 8;
 /** Matches the compare ref `open_pr` fetches a pull request's head to. */
 const PR_COMPARE_REF = /^tk-review\/pr\/(\d+)$/;
 
-function readJson<T>(key: string, fallback: T): T {
+export function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as T) : fallback;

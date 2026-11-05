@@ -184,7 +184,7 @@ test("plain text still filters and Enter opens a PR number or pasted link", asyn
       exact: true,
     }),
   ).toBeVisible();
-  await page.goto("/dev-harness/");
+  await page.getByTitle("Back to pull requests").click();
   await input(page).fill("https://github.com/octocat/tk-review/pull/47");
   await input(page).press("Enter");
   await expect(
