@@ -1,7 +1,7 @@
 import { Button, cx, Icon } from "tk-design-system";
 import { useStore } from "zustand";
 import { ScreenMorph } from "../../lib/screenTransition";
-import { type ReviewTab, shownTab, tabBarShown, useAppStore } from "../../store/appStore";
+import { barTabs, type ReviewTab, tabBarShown, useAppStore } from "../../store/appStore";
 import { TabStatus } from "../TabStatus/TabStatus";
 import css from "./TabBar.module.css";
 
@@ -78,10 +78,11 @@ function Tab({
 /** The way back to the list and every open tab but the one on screen, whose header names it. */
 export function TabBar({ className }: { className?: string }) {
   const allTabs = useAppStore((state) => state.tabs);
+  const view = useAppStore((state) => state.view);
+  const activeTabId = useAppStore((state) => state.activeTabId);
+  const tabs = barTabs({ view, tabs: allTabs, activeTabId });
   const visible = useAppStore(tabBarShown);
-  const inReview = useAppStore((state) => state.view === "review");
-  const shown = useAppStore((state) => shownTab(state)?.id ?? null);
-  const tabs = allTabs.filter((tab) => tab.id !== shown);
+  const inReview = view === "review";
   const showTab = useAppStore((state) => state.showTab);
   const closeTab = useAppStore((state) => state.closeTab);
   const goHome = useAppStore((state) => state.goHome);

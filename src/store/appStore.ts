@@ -134,22 +134,30 @@ interface AppState {
   dismissError: () => void;
 }
 
-/** The tab on screen, if a review is. */
 /** What moves in a screen change. */
 export interface ScreenChange {
-  /** Tabs come or go, so every tab slides to its new place. */
+  /** Tabs come or go from the bar, so every tab slides to its new place. */
   shifting: boolean;
   /** The list's heading and the review's way back to it trade places. */
   heading: boolean;
-  /** The `morphKey` whose number and title glide between a list row and a tab. */
+  /** The `morphKey` whose number and title glide from a list row into the review's header. */
   carrying: string | null;
+  /** The `morphKey`s whose number and title glide between their tab and the review's header. */
+  trading: string[];
   /** The id of the tab closing, whose number and title fold away with it. */
   folding: string | null;
 }
 
+/** The tab on screen, if a review is. */
 export function shownTab(state: Pick<AppState, "view" | "tabs" | "activeTabId">): ReviewTab | null {
   if (state.view !== "review") return null;
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
+}
+
+/** The tabs the bar shows: every open one but the review on screen, which its header names. */
+export function barTabs(state: Pick<AppState, "view" | "tabs" | "activeTabId">): ReviewTab[] {
+  const shown = shownTab(state);
+  return state.tabs.filter((tab) => tab !== shown);
 }
 
 /**
@@ -212,24 +220,31 @@ export const useAppStore = create<AppState>((set, get, api) => {
     return done;
   }
 
-  /**
-   * What moves in the screen change `patch` makes, or `null` when nothing does
-   * and the screens only crossfade. A tab closes by being taken out of the
-   * list; a PR opened from the list takes its number and title from its row.
-   */
+  /** What moves in the screen change `patch` makes, or `null` when the screens only crossfade. */
   function plannedChange(patch: Partial<AppState>): ScreenChange | null {
     const before = get();
     const after = { ...before, ...patch };
+    const shownBefore = shownTab(before);
     const shown = shownTab(after);
+    const barBefore = barTabs(before);
+    const barAfter = barTabs(after);
     const removed = before.tabs.find((tab) => !after.tabs.includes(tab)) ?? null;
-    const added = after.tabs.some((tab) => !before.tabs.includes(tab));
+    const shifting =
+      barBefore.length !== barAfter.length || barBefore.some((tab, at) => tab !== barAfter[at]);
     const heading = (before.view === "home") !== (after.view === "home");
-    if (!added && !removed && !heading) return null;
     const opened = before.view === "home" && shown != null && !before.tabs.includes(shown);
+    const trading = [
+      shown !== shownBefore && shown && barBefore.includes(shown) ? shown.morphKey : null,
+      shownBefore !== shown && shownBefore && barAfter.includes(shownBefore)
+        ? shownBefore.morphKey
+        : null,
+    ].filter((key) => key != null);
+    if (!shifting && !heading && !opened) return null;
     return {
-      shifting: added || removed != null,
+      shifting,
       heading,
       carrying: opened ? shown.morphKey : null,
+      trading,
       folding: removed?.id ?? null,
     };
   }
