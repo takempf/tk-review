@@ -41,7 +41,7 @@ From `src-tauri/`: `cargo test` (some tests build real repos in a temp dir), `ca
 
 To see how much reviews agree from run to run, `cargo run --release --example review_bench -- run --repo <path> --pr <url> --runs 3 --out <dir>` reviews one diff several times, exactly as the app does, and writes a report of the findings each run shared, with a column to mark which were worth fixing. `--from <dir>/run-N.json` makes each run a re-review following up on that one (add `--whole` for the whole diff), and the report adds its verdicts and how many new findings fell outside what changed. `report <dir>...` prints it again, or side by side for a before and after. Each run costs what a review costs.
 
-The harness stubs the Rust side with Tauri's `mockIPC`, so UI work doesn't need a native rebuild. Query parameters act out edge cases: `?prs=200` for a long PR list, and `?fail=review` (or `turns`, `check`, `explain`, `post`, `list`, `refresh`) for each failure.
+The harness stubs the Rust side with Tauri's `mockIPC`, so UI work doesn't need a native rebuild. Query parameters act out edge cases: `?prs=200` for a long PR list, and `?fail=review` (or `turns`, `check`, `explain`, `post`, `list`, `refresh`, `codemap`) for each failure.
 
 ## Comparisons
 
@@ -140,6 +140,12 @@ The explanation resumes the review's session (`claude --resume`, or `codex exec 
 
 The voice lives in `src-tauri/src/voice.md`, so the tone can change without touching the prompt.
 
+## Codemap
+
+The **Codemap** tab beside the diff draws the comparison as a map: every file in the repository as a stack of pages shaped like its code, grouped by folder, with its imports drawn between files. Changed files are coloured by status, the lines they change are marked in the gutter, imports the change adds or removes are green or red, and everything that imports a changed file (its blast radius) is shaded. **Show diff** on a changed file opens it in the diff.
+
+It's tk-codemap ported in: the map is built in Rust (`src-tauri/src/codemap/`, with [oxc](https://oxc.rs/) parsing TypeScript and JavaScript), from the same merge base and compare commit as the diff, and tk-codemap's viewer runs in a sandboxed frame (`src/components/Codemap/viewer/`), with the app's fonts, one toolbar of menus in place of its floating panels, and a few hooks into the app. Of the source, only each line's shape reaches the frame, apart from SVGs and small images, which it draws. It's built the first time the tab is shown, and again after the diff reloads.
+
 ## Rendering
 
 Diffs render through [`@pierre/diffs`](https://diffs.com/)' `CodeView`, with every file in one virtualized scroll region. There is no file-size limit, following [Pierre's take](https://pierre.computer/writing/on-rendering-diffs) that you should be able to render any diff. Long lines are the part virtualization doesn't cover, so highlighting falls back to plain text past 2,000 characters on a line or 100,000 lines in a file.
@@ -158,6 +164,7 @@ src/
   components/           one folder per component, each with a CSS module
 src-tauri/src/
   git.rs                the git layer and its tests
+  codemap/              the Codemap tab's map: files, imports, and what the change did to them
   github.rs             pull requests through gh: list, open, refresh, post
   review.rs             the agent CLIs: prompts, runs, parsing
   specialists.rs        the specialist reviewers: what each picks and is told

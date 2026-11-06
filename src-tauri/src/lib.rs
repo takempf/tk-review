@@ -1,3 +1,4 @@
+pub mod codemap;
 mod commands;
 pub mod error;
 pub mod git;
@@ -98,6 +99,7 @@ pub fn run() {
             commands::get_patch,
             commands::list_commits,
             commands::get_file_versions,
+            commands::build_codemap,
             commands::review_diff,
             commands::get_repo_rules,
             commands::set_repo_rules,

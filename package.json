@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "check": "biome check --write .",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "bench:codemap": "playwright test -c dev-harness/bench"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

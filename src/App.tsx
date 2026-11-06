@@ -12,6 +12,7 @@ import { Home } from "./components/Home/Home";
 import { Layout } from "./components/Layout/Layout";
 import { PrBranches } from "./components/PrBranches/PrBranches";
 import { ReviewPanel } from "./components/ReviewPanel/ReviewPanel";
+import { ReviewViews } from "./components/ReviewViews/ReviewViews";
 import { ReviewSearchIndex } from "./components/Search/ReviewSearchIndex";
 import { SearchProvider } from "./components/Search/Search";
 import { TabBar } from "./components/TabBar/TabBar";
@@ -162,13 +163,17 @@ function ReviewScreen() {
         }
         aside={<ReviewPanel />}
         main={
-          summary ? (
-            <DiffSurface />
-          ) : loadingDiff || openingPr ? (
-            <DiffSkeleton />
-          ) : (
-            <p className={css.placeholder}>Choose two refs to compare.</p>
-          )
+          <ReviewViews
+            diff={
+              summary ? (
+                <DiffSurface />
+              ) : loadingDiff || openingPr ? (
+                <DiffSkeleton />
+              ) : (
+                <p className={css.placeholder}>Choose two refs to compare.</p>
+              )
+            }
+          />
         }
       />
     </>

@@ -13,3 +13,4 @@ pr-explanation-plan.md
 # Playwright artifacts.
 test-results/
 playwright-report/
+dev-harness/bench/results/

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::codemap::{self, Codemap};
 use crate::error::GitError;
 use crate::git::{self, Branch, CommitLog, DiffSummary, FileVersions, RepoInfo};
 use crate::github::{
@@ -394,6 +395,27 @@ pub async fn get_file_versions(
             compare.as_deref(),
             &path,
             old_path.as_deref(),
+        )
+    })
+    .await
+}
+
+/// A `None` compare maps the working tree, uncommitted changes included.
+#[tauri::command]
+pub async fn build_codemap(
+    root: String,
+    merge_base: String,
+    compare: Option<String>,
+    base_label: String,
+    compare_label: String,
+) -> Result<Codemap, GitError> {
+    blocking(move || {
+        codemap::build_codemap(
+            &PathBuf::from(root),
+            &merge_base,
+            compare.as_deref(),
+            &base_label,
+            &compare_label,
         )
     })
     .await

@@ -23,7 +23,6 @@
     }
   },
   "include": ["src", "dev-harness", "vite.config.ts"],
-  // A standalone Node script, run manually via node's type stripping. It resolves
-  // modules under Node's rules, not the browser ones configured above.
-  "exclude": ["dev-harness/generatePatch.ts"]
+  // Node-side scripts (the patch generator, the codemap bench) resolve modules under Node's rules.
+  "exclude": ["dev-harness/generatePatch.ts", "dev-harness/bench"]
 }

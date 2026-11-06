@@ -121,7 +121,7 @@ pub struct FileVersions {
     pub new: Option<String>,
 }
 
-fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+pub(crate) fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
     run_git_allowing(root, args, &[])
 }
 
@@ -157,7 +157,11 @@ fn run_git_allowing(root: &Path, args: &[&str], allowed: &[i32]) -> Result<Vec<u
 }
 
 /// Same as `run_git`, but feeds the command a body on stdin.
-fn run_git_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, GitError> {
+pub(crate) fn run_git_with_stdin(
+    root: &Path,
+    args: &[&str],
+    input: &[u8],
+) -> Result<Vec<u8>, GitError> {
     if !root.is_dir() {
         return Err(GitError::NotARepo(root.display().to_string()));
     }
@@ -200,7 +204,7 @@ fn run_git_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8
     }
 }
 
-fn run_git_text(root: &Path, args: &[&str]) -> Result<String, GitError> {
+pub(crate) fn run_git_text(root: &Path, args: &[&str]) -> Result<String, GitError> {
     Ok(String::from_utf8_lossy(&run_git(root, args)?)
         .trim()
         .to_owned())
@@ -595,7 +599,7 @@ pub fn generated_paths(root: &Path, rev: Option<&str>, paths: &[String]) -> Hash
 }
 
 /// Untracked files, respecting the usual exclude rules. Sorted, NUL-delimited.
-fn untracked_files(root: &Path) -> Result<Vec<String>, GitError> {
+pub(crate) fn untracked_files(root: &Path) -> Result<Vec<String>, GitError> {
     let raw = run_git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     Ok(raw
         .split(|byte| *byte == 0)
@@ -890,10 +894,10 @@ fn parse_numstat(raw: &[u8]) -> Vec<NumstatEntry> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct StatusEntry {
-    path: String,
-    old_path: Option<String>,
-    status: ChangeStatus,
+pub(crate) struct StatusEntry {
+    pub(crate) path: String,
+    pub(crate) old_path: Option<String>,
+    pub(crate) status: ChangeStatus,
 }
 
 /// Parses `git diff --name-status -z`.
@@ -901,7 +905,7 @@ struct StatusEntry {
 /// Each entry is a status field followed by one path, except renames and copies
 /// (`R100`, `C75`), which carry a similarity score and two paths.
 #[allow(clippy::while_let_on_iterator)]
-fn parse_name_status(raw: &[u8]) -> Vec<StatusEntry> {
+pub(crate) fn parse_name_status(raw: &[u8]) -> Vec<StatusEntry> {
     let mut fields = raw.split(|byte: &u8| *byte == 0);
     let mut entries = Vec::new();
 

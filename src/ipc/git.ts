@@ -89,6 +89,15 @@ export interface FileVersions {
   new: string | null;
 }
 
+/** A comparison drawn as a map, in the shape tk-codemap's viewer reads; the app only passes it along. */
+export interface Codemap {
+  graph: unknown;
+  /** Every file's code shape in one buffer, gzipped then base64-encoded. */
+  shapes: string;
+  /** SVG sources by path. */
+  svgs: Record<string, string>;
+}
+
 /** One problem the reviewer found, anchored to a file (and lines, when it has them). */
 export interface ReviewFinding {
   /**
@@ -737,4 +746,13 @@ export const gitApi = {
       path: file.path,
       oldPath: file.oldPath,
     }),
+
+  /** A null compare maps the working tree. The labels name each side in the map's header. */
+  buildCodemap: (args: {
+    root: string;
+    mergeBase: string;
+    compare: string | null;
+    baseLabel: string;
+    compareLabel: string;
+  }) => invoke<Codemap>("build_codemap", { ...args }),
 };

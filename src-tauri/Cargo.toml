@@ -29,6 +29,15 @@ libc = "0.2"
 # Where Chromium's profile goes. Already in the tree through tauri-runtime-cef.
 dirs = "6"
 tauri-plugin-opener = "3.0.0-alpha.2"
+# The codemap's import analysis parses TypeScript and JavaScript.
+oxc_parser = "0.157"
+oxc_ast = "0.157"
+oxc_allocator = "0.157"
+oxc_span = "0.157"
+oxc_ast_visit = "0.157"
+# Already in the tree: gzip for the codemap's code shapes, and regex for its scans.
+flate2 = "1"
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"
@@ -38,3 +47,17 @@ tempfile = "3"
 [[example]]
 name = "review_bench"
 test = true
+
+# The codemap parses whole repositories: optimized, these halve its time in `pnpm app`'s debug build.
+[profile.dev.package.oxc_parser]
+opt-level = 3
+[profile.dev.package.oxc_allocator]
+opt-level = 3
+[profile.dev.package.oxc_ast]
+opt-level = 3
+[profile.dev.package.oxc_ast_visit]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3

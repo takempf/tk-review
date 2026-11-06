@@ -18,6 +18,8 @@ import type {
 } from "../src/ipc/git";
 import { Root } from "../src/Root";
 import { storageRoot } from "../src/store/account";
+import { codemapFixture } from "./codemap";
+import { syntheticCodemap } from "./codemapSynthetic";
 import "../src/styles/global.css";
 import {
   BRANCHES,
@@ -53,8 +55,12 @@ mockWindows("main");
  *   refuses someone without write access.
  * - `scope`: a re-review can't tell what changed since the review before it,
  *   so it reads the whole diff again and says why.
+ * - `codemap`: drawing the codemap fails the way a bad revision does.
  */
 const failing = new Set(new URLSearchParams(location.search).get("fail")?.split(",") ?? []);
+
+/** `?codemap=8000` draws a synthetic monorepo of that many files instead of the fixture, for the bench. */
+const syntheticFiles = Number(new URLSearchParams(location.search).get("codemap") ?? 0);
 
 /**
  * How agent runs behave, from `?run=`, so their progress line can be seen:
@@ -446,6 +452,13 @@ stdout:
       return (payload as { mergeBase: string }).mergeBase === SUMMARY.mergeBase ? PATCH : "";
     case "list_commits":
       return COMMITS;
+    // Delayed so the "Drawing the codemap…" state is visible in the harness.
+    case "build_codemap":
+      return failing.has("codemap")
+        ? later(400, null, { kind: "badRevision", message: "unknown revision: 9f2c1ab" })
+        : (syntheticFiles > 0 ? syntheticCodemap(syntheticFiles) : codemapFixture()).then((map) =>
+            later(400, map),
+          );
     case "get_file_versions": {
       const path = (payload as { path: string }).path;
       return VERSIONS[path] ?? { old: null, new: null };
