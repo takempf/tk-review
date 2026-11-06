@@ -111,6 +111,9 @@
   --active-ink-1: color-mix(in oklab, var(--active) 50%, black);
   --active-ink-2: color-mix(in oklab, var(--active) 78%, black);
   --active-ink-3: color-mix(in oklab, var(--active) 44%, white);
+  --tk-spinner-ink-1: var(--active-ink-1);
+  --tk-spinner-ink-2: var(--active-ink-2);
+  --tk-spinner-ink-3: var(--active-ink-3);
   --danger: var(--tk-danger);
   --danger-bg: var(--tk-danger-soft);
 
@@ -147,6 +150,13 @@ body {
   font-variant-numeric: tabular-nums;
   /* The app manages its own scroll regions; the window itself never scrolls. */
   overflow: hidden;
+}
+
+/* A primary button's light fill swallows the active inks' pale top, so there the spinner takes the label's colour. */
+.tk-button[data-variant="primary"] {
+  --tk-spinner-ink-1: color-mix(in oklab, currentColor 22%, transparent);
+  --tk-spinner-ink-2: color-mix(in oklab, currentColor 55%, transparent);
+  --tk-spinner-ink-3: currentColor;
 }
 
 /* The inline code chip's corners and edge (its colours are app tokens above). */

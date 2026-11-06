@@ -1,11 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ReactNode, type Ref, useEffect, useState } from "react";
-import { Icon, Logo, Menu, SceneryWindow } from "tk-design-system";
+import { Icon, Logo, Menu, SceneryWindow, SpinnerIcon } from "tk-design-system";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { useAppStore } from "../../store/appStore";
 import { type RecentRepo, readRecentRepos } from "../../store/history";
-import { Spinner } from "../Spinner/Spinner";
 import css from "./TitleBar.module.css";
 
 /**
@@ -71,7 +70,9 @@ function RepoSelect() {
         <span className={css.value} data-placeholder={repo ? undefined : ""}>
           {repo?.name ?? (loading ? "Opening…" : "Open a repository")}
         </span>
-        <span className={css.icon}>{loading ? <Spinner /> : <Icon name="chevron-updown" />}</span>
+        <span className={css.icon}>
+          {loading ? <SpinnerIcon /> : <Icon name="chevron-updown" />}
+        </span>
       </Menu.Trigger>
       <Menu.Popup className={css.popup}>
         {listed.length > 0 ? (

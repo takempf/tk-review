@@ -1,6 +1,5 @@
-import { Checkbox, Icon } from "tk-design-system";
+import { Checkbox, Icon, SpinnerIcon } from "tk-design-system";
 import { useTab } from "../../store/tabStore";
-import { Spinner } from "../Spinner/Spinner";
 import { BranchCombobox } from "./BranchCombobox";
 import css from "./BranchSelector.module.css";
 
@@ -57,7 +56,7 @@ export function BranchSelector() {
           disabled={fetching}
           title="git fetch --all --prune — pull in new and deleted branches from every remote"
         >
-          {fetching ? <Spinner /> : <Icon name="download" />}
+          {fetching ? <SpinnerIcon /> : <Icon name="download" />}
           {fetching ? "Fetching…" : "Fetch"}
         </button>
         <span

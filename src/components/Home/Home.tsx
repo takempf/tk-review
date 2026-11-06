@@ -1,7 +1,17 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Button, Eyebrow, Icon, Loading, Panel, SceneryWindow, Tabs } from "tk-design-system";
+import {
+  Button,
+  Eyebrow,
+  Icon,
+  Loading,
+  Panel,
+  SceneryWindow,
+  Spinner,
+  SpinnerIcon,
+  Tabs,
+} from "tk-design-system";
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
@@ -32,7 +42,6 @@ import { useOpening } from "../PrTable/carry";
 import { ColumnMenu, type PrRow, PrTable, useColumnVisibility } from "../PrTable/PrTable";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { useSearchDocuments } from "../Search/Search";
-import { Spinner } from "../Spinner/Spinner";
 import css from "./Home.module.css";
 
 type HomeTab = PrListFilter | "reviewed";
@@ -302,9 +311,7 @@ function MorePrs({ listing }: { listing: ReturnType<typeof usePrListings>["all"]
           </Button>
         </>
       ) : (
-        <>
-          <Spinner /> Loading more…
-        </>
+        <Spinner>Loading more…</Spinner>
       )}
     </div>
   );
@@ -470,7 +477,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
           <Button onClick={() => void invalidatePrLists(root)} disabled={refreshing}>
             {refreshing ? (
               <>
-                <Spinner /> {listing.data ? "Refreshing…" : "Loading…"}
+                <SpinnerIcon /> {listing.data ? "Refreshing…" : "Loading…"}
               </>
             ) : (
               <>
@@ -612,7 +619,7 @@ function Welcome() {
           <Button variant="primary" size="lg" onClick={() => void pick()} disabled={loading}>
             {loading ? (
               <>
-                <Spinner /> Opening…
+                <SpinnerIcon /> Opening…
               </>
             ) : (
               <>

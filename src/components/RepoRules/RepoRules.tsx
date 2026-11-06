@@ -1,10 +1,9 @@
 import { Tabs } from "@base-ui/react/tabs";
 import { Fragment, useEffect, useState } from "react";
-import { Button, Dialog, Icon } from "tk-design-system";
+import { Button, Dialog, Icon, Spinner, SpinnerIcon } from "tk-design-system";
 import { type AppError, gitApi, type RepoRules, type RuleSlot, toAppError } from "../../ipc/git";
 import { CommentEditor } from "../CommentEditor/CommentEditor";
 import { ErrorNotice } from "../ErrorNotice/ErrorNotice";
-import { Spinner } from "../Spinner/Spinner";
 import css from "./RepoRules.module.css";
 
 /**
@@ -186,9 +185,7 @@ function RulesForm({
           ))}
         </Tabs.Root>
       ) : error ? null : (
-        <p className={css.loading}>
-          <Spinner /> Reading the rules…
-        </p>
+        <Spinner className={css.loading}>Reading the rules…</Spinner>
       )}
 
       <div className={css.footer}>
@@ -199,7 +196,7 @@ function RulesForm({
         </span>
         <Dialog.Close render={<Button variant="ghost" size="sm" />}>Cancel</Dialog.Close>
         <Button size="sm" onClick={save} disabled={!rules || saving}>
-          {saving ? <Spinner /> : <Icon name="check" />}
+          {saving ? <SpinnerIcon /> : <Icon name="check" />}
           Save
         </Button>
       </div>

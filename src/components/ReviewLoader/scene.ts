@@ -23,7 +23,7 @@ import {
   smoothstep,
   type Tones,
   type Vec3,
-} from "./raster";
+} from "tk-design-system/raster/raster";
 
 interface Pose {
   position: Vec3;

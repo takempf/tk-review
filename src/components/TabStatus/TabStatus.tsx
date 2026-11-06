@@ -1,10 +1,9 @@
 import type { ComponentProps } from "react";
-import { cx, Icon } from "tk-design-system";
+import { cx, Icon, SpinnerIcon } from "tk-design-system";
 import { useStore } from "zustand";
 import type { ReviewVerdict } from "../../ipc/git";
 import { knownVerdict, REVIEWED_ICON, VERDICT_ICONS } from "../../lib/verdict";
 import { reviewsNewestFirst, type TabState, type TabStore } from "../../store/tabStore";
-import { Spinner } from "../Spinner/Spinner";
 import css from "./TabStatus.module.css";
 
 /** Where a tab's review stands, most pressing first. */
@@ -48,7 +47,7 @@ function Glyph({ status }: { status: TabStatusKind }) {
   switch (status) {
     case "opening":
     case "working":
-      return <Spinner />;
+      return <SpinnerIcon />;
     case "error":
       return <Icon name="warning" />;
     case "moved":

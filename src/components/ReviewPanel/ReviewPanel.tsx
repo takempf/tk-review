@@ -16,6 +16,8 @@ import {
   Radio,
   RadioGroup,
   Select,
+  Spinner,
+  SpinnerIcon,
   Tabs,
 } from "tk-design-system";
 import {
@@ -92,7 +94,6 @@ import { RunProgress } from "../RunProgress/RunProgress";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { useSearch } from "../Search/Search";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
-import { Spinner } from "../Spinner/Spinner";
 import css from "./ReviewPanel.module.css";
 
 const ENGINE_OPTIONS = (Object.keys(ENGINE_LABELS) as ReviewEngine[]).map((engine) => ({
@@ -239,7 +240,7 @@ function PrRefreshButton() {
     >
       {refreshingPr || loadingDiff ? (
         <>
-          <Spinner /> Refreshing…
+          <SpinnerIcon /> Refreshing…
         </>
       ) : (
         <>
@@ -530,7 +531,7 @@ function NewPrComment({
                 onClick={() => void send()}
                 disabled={posting || !draft.body.trim()}
               >
-                {posting ? <Spinner /> : <Icon name="send" />}
+                {posting ? <SpinnerIcon /> : <Icon name="send" />}
                 {posting ? "Posting…" : draft.location.replyTo ? "Reply" : "Comment"}
               </Button>
               <Button variant="ghost" size="sm" onClick={close} disabled={posting}>
@@ -871,9 +872,7 @@ function Thread({
           ))}
           {pending ? (
             <>
-              <p className={css.commentPending}>
-                <Spinner /> Waiting for {agent}…
-              </p>
+              <Spinner className={css.commentPending}>Waiting for {agent}…</Spinner>
               <RunProgress kind="reply" />
             </>
           ) : null}
@@ -976,7 +975,7 @@ function PostedThread({
         >
           {pending ? (
             <>
-              <Spinner /> {thread.resolved ? "Reopening…" : "Resolving…"}
+              <SpinnerIcon /> {thread.resolved ? "Reopening…" : "Resolving…"}
             </>
           ) : thread.resolved ? (
             "Reopen"
@@ -1122,7 +1121,7 @@ function PrCommentComposer({
           <Button variant="primary" size="sm" onClick={post} disabled={busy || !body.trim()}>
             {pending ? (
               <>
-                <Spinner /> Posting…
+                <SpinnerIcon /> Posting…
               </>
             ) : (
               <>
@@ -1881,7 +1880,7 @@ function Conclusion({ source, pr }: { source: StoredReview; pr: PrContext | null
           <Button variant="primary" size="sm" onClick={submit} disabled={!canSubmit}>
             {pending ? (
               <>
-                <Spinner /> Submitting…
+                <SpinnerIcon /> Submitting…
               </>
             ) : (
               <>
@@ -2779,7 +2778,7 @@ function ExplainTab() {
  * stays, being the part that says something.
  */
 function TabIcon({ name, running }: { name: "sparkle" | "info"; running: boolean }) {
-  return running ? <Spinner /> : <Icon name={name} className={css.tabIcon} />;
+  return running ? <SpinnerIcon /> : <Icon name={name} className={css.tabIcon} />;
 }
 
 export function ReviewPanel() {

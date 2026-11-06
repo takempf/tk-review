@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Icon } from "tk-design-system";
+import { Button, Icon, SpinnerIcon } from "tk-design-system";
 import css from "./App.module.css";
 import { githubHost } from "./components/Author/Author";
 import { CommitList } from "./components/CommitList/CommitList";
@@ -14,7 +14,6 @@ import { PrBranches } from "./components/PrBranches/PrBranches";
 import { ReviewPanel } from "./components/ReviewPanel/ReviewPanel";
 import { ReviewSearchIndex } from "./components/Search/ReviewSearchIndex";
 import { SearchProvider } from "./components/Search/Search";
-import { Spinner } from "./components/Spinner/Spinner";
 import { TabBar } from "./components/TabBar/TabBar";
 import { TitleBar } from "./components/TitleBar/TitleBar";
 import { gitApi } from "./ipc/git";
@@ -145,7 +144,7 @@ function ReviewScreen() {
             >
               {loadingDiff || refreshingPr ? (
                 <>
-                  <Spinner /> Refreshing…
+                  <SpinnerIcon /> Refreshing…
                 </>
               ) : (
                 <>

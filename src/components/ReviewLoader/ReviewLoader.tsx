@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { bayerMatrix, crispSize, Raster, TONES, type Vec4 } from "tk-design-system/raster/raster";
 import css from "./ReviewLoader.module.css";
-import { bayerMatrix, crispSize, Raster, TONES, type Vec4 } from "./raster";
 import { Scene } from "./scene";
 
 const MAX_WIDTH = 480;
