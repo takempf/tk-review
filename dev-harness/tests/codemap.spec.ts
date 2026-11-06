@@ -79,6 +79,36 @@ test("a file picked in the file list is found on the codemap, and Show diff open
   ).toBeInViewport();
 });
 
+test("Highlight affected files turns the change's marking off and back on in the map and navigator", async ({
+  page,
+}) => {
+  await openPr(page);
+  await views(page).getByRole("tab", { name: "Codemap" }).click();
+  const map = codemap(page).getByLabel("Codebase map canvas");
+  const overview = codemap(page).getByLabel("Overview");
+  await codemap(page).getByRole("button", { name: "Flat" }).click();
+  for (let step = 0; step < 3; step++) {
+    await codemap(page).getByRole("button", { name: "Zoom in" }).click();
+  }
+  const highlightedMap = await settledPixels(map);
+  const highlightedOverview = await settledPixels(overview);
+
+  await codemap(page).getByRole("button", { name: "Everything" }).click();
+  const highlight = codemap(page).getByRole("menuitemcheckbox", {
+    name: "Highlight affected files",
+  });
+  await expect(highlight).toHaveAttribute("aria-checked", "true");
+  await highlight.click();
+  await expect(highlight).toHaveAttribute("aria-checked", "false");
+  expect(changedShare(highlightedMap, await settledPixels(map))).toBeGreaterThan(0.008);
+  expect(changedShare(highlightedOverview, await settledPixels(overview))).toBeGreaterThan(0.008);
+
+  await highlight.click();
+  await expect(highlight).toHaveAttribute("aria-checked", "true");
+  expect(changedShare(highlightedMap, await settledPixels(map))).toBeLessThan(0.002);
+  expect(changedShare(highlightedOverview, await settledPixels(overview))).toBeLessThan(0.002);
+});
+
 test("a codemap that can't be drawn says why and can be tried again", async ({ page }) => {
   await openPr(page, "?fail=codemap");
   await views(page).getByRole("tab", { name: "Codemap" }).click();

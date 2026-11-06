@@ -196,6 +196,7 @@
     impact: null,
     show: 'all', // diff mode: 'radius' (changes + what depends on them), 'changes', 'all'
     depth: 1, // diff mode: how many import steps of dependents to show (99 = all)
+    highlightChange: true,
   };
   // diff blast radius, over the whole graph regardless of filters:
   // DD = import steps from the nearest changed file (0 = changed, -1 = unaffected), DP = the link it came through,
@@ -264,6 +265,11 @@
     }
     for (const e of E) if (e[4]) for (const u of [e[0], e[1]]) if (DD[u] < 0) DL[u] = 1;
   }
+  // Off, a diff draws like a plain map: type colours, no fading, rings, status tags or new and removed imports.
+  const highlightsChange = () => DIFF && S.highlightChange;
+  function refreshBlockColors() {
+    blockCol = highlightsChange() ? N.map((n, i) => diffColor(i)) : colorOf;
+  }
   function diffColor(i) {
     const n = N[i];
     if (n.st) return ST[n.st].c;
@@ -275,13 +281,13 @@
   const UNRELATED_FADE = 0.8;
   // How far a file sinks into the background in a diff: changed files not at all, the blast radius more with each step.
   function diffFade(i) {
-    if (!DIFF || DD[i] === 0) return 0;
+    if (!highlightsChange() || DD[i] === 0) return 0;
     if (DD[i] > 0) return Math.min(0.6, 0.3 + 0.1 * (DD[i] - 1));
     return DL[i] ? 0.5 : UNRELATED_FADE;
   }
   // A changed file is ringed in its status colour, the blast radius in a fainter blue.
   function diffRing(i) {
-    if (!DIFF) return null;
+    if (!highlightsChange()) return null;
     if (N[i].st) return ST[N[i].st].c;
     return DD[i] > 0 ? hexA(RADIUS, 0.6) : null;
   }
@@ -291,7 +297,7 @@
       rebuildAdj();
       lastThrough = S.through;
       computeDiffImpact();
-      blockCol = DIFF ? N.map((n, i) => diffColor(i)) : colorOf;
+      refreshBlockColors();
     }
     vis.fill(0);
     // changed files show even when tests or generated code are hidden
@@ -1786,14 +1792,14 @@
     }
     const [t, tw] = truncName(i),
       pw = Math.min(CW, tw + 36),
-      dc = DIFF && (n.st || DD[i] > 0) ? blockCol[i] : null;
+      dc = highlightsChange() && (n.st || DD[i] > 0) ? blockCol[i] : null;
     rr(x, y, pw, NAME_H, NAME_H / 2);
     ctx.fillStyle = dc ? mix(dc, PILL, 0.16) : PILL;
     ctx.fill();
     ctx.strokeStyle = dc || (i === hov ? C.borderStrong : PILL_LINE);
     ctx.lineWidth = dc ? Math.max(1.4, 1.2 / cam.s) : (1 / cam.s) * Math.min(1, cam.s);
     ctx.stroke();
-    if (DIFF && n.st && cardPx > 40) {
+    if (highlightsChange() && n.st && cardPx > 40) {
       // status tag just right of the pill
       const tx = x + pw + 4 + NAME_H / 2,
         ty = y + NAME_H / 2;
@@ -1803,7 +1809,7 @@
       ctx.fill();
       txt(n.st, tx, ty + 0.5, 11, C.canvas);
     }
-    if (DIFF && n.st === 'D' && cardPx > 70) {
+    if (highlightsChange() && n.st === 'D' && cardPx > 70) {
       ctx.fillStyle = DEL;
       ctx.fillRect(x + 26, y + NAME_H / 2 - 0.6, tw, 1.2);
     }
@@ -1837,7 +1843,7 @@
     const n = N[i],
       cy = y + H[i] - COUNT_H;
     let cx = x;
-    if (DIFF && n.st && n.k !== 'img') {
+    if (highlightsChange() && n.st && n.k !== 'img') {
       if (n.ad) cx += countPill(cx, cy, '+' + fmtN(n.ad), ADD) + 4;
       if (n.dl) cx += countPill(cx, cy, '−' + fmtN(n.dl), DEL) + 4;
     }
@@ -1925,7 +1931,7 @@
   // changed lines on a page that shows lines l0..l1: a gutter bar left of the page, and a wash over the rows
   // green = added lines, amber = changed lines, red notch = lines removed here
   function drawHunks(n, px, py, ph, l0, l1, rh, cardPx) {
-    if (!DIFF || !n.st || n.st === 'D' || cardPx < 16) return;
+    if (!highlightsChange() || !n.st || n.st === 'D' || cardPx < 16) return;
     const sc = n.s || 1,
       gx = px - 7,
       gw = 4;
@@ -2070,7 +2076,7 @@
       ctx.beginPath();
       for (const j of activeE) {
         const e = E[j];
-        if (e[4]) continue; // added / removed links get their own pass below
+        if (gone(e) || (e[4] && highlightsChange())) continue; // highlighted new and removed links get their own pass below
         const a = e[0],
           b = e[1];
         if (!edgeInView(a, b, v)) continue;
@@ -2083,7 +2089,7 @@
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
     }
-    if (DIFF && S.edges !== 'none') {
+    if (highlightsChange() && S.edges !== 'none') {
       // imports the change adds (green) or removes (red, dashed), drawn under the files
       const a0 = focusNode0 >= 0 ? 0.25 : 0.7;
       for (const [state, color] of [
@@ -2599,12 +2605,12 @@
             ctx.strokeStyle = sheet(0.15);
             ctx.lineWidth = 0.8;
             ctx.strokeRect(mx, my, MW, bh);
-            if (DIFF && n.st && n.st !== 'D') {
+            if (highlightsChange() && n.st && n.st !== 'D') {
               ctx.fillStyle = ST[n.st].c;
               ctx.fillRect(mx - 7, my, 4, bh);
             }
           } else drawPages(i, x, y, s, hi, cardPx);
-          if (DIFF && n.st === 'D') {
+          if (highlightsChange() && n.st === 'D') {
             // deleted: a red wash and a hatch over the old pages
             const bh = h - HEAD - FOOT;
             ctx.fillStyle = hexA(C.canvas, 0.45);
@@ -2658,7 +2664,7 @@
     // hovered / selected links go on top of the files
     const focusNode = sel >= 0 ? sel : hov;
     if (S.edges !== 'none' && focusNode >= 0 && vis[focusNode]) drawFocusEdges(focusNode, s, focusNode === sel, v);
-    if ((imp || DIFF) && S.edges !== 'none') drawChain(s, v);
+    if ((imp || highlightsChange()) && S.edges !== 'none') drawChain(s, v);
 
     // the selected file unfolds to its full length, on top of everything, at one row per line
     if (sel >= 0 && vis[sel] && cardPx >= 7) drawSpread(sel, s, cardPx, v);
@@ -2860,7 +2866,7 @@
       arrow: true,
     });
     // in diff mode, links the change adds or removes keep their green / red
-    if (DIFF)
+    if (highlightsChange())
       for (const g of groups.slice()) {
         if (!g.arrow) continue;
         for (const [state, color] of [
@@ -2872,6 +2878,7 @@
         }
         g.list = g.list.filter((j) => !E[j][4]);
       }
+    else for (const g of groups) g.list = g.list.filter((j) => !gone(E[j]));
     for (const g of groups)
       for (const dashed of [false, true]) {
         ctx.beginPath();
@@ -4046,6 +4053,22 @@
           recompute(false);
         }),
       );
+      if (changedCount)
+        rows.push(
+          { separator: true },
+          {
+            key: 'highlightChange',
+            text: 'Highlight affected files',
+            title: 'Colour changed files and what imports them, and fade the rest',
+            checked: S.highlightChange,
+            pick: () => {
+              S.highlightChange = !S.highlightChange;
+              refreshBlockColors();
+              buildNav();
+              invalidate();
+            },
+          },
+        );
       return rows;
     });
 
@@ -4159,7 +4182,7 @@
       },
     });
     const legend = $('#legend').content.cloneNode(true);
-    if (!DIFF) legend.querySelector('[data-diff]').remove();
+    if (!highlightsChange()) legend.querySelector('[data-diff]').remove();
     return [
       { group: 'Draw' },
       draw('focus', 'The selected file’s imports', 'Only the selected or hovered file'),
@@ -4290,7 +4313,7 @@
   rebuildAdj();
   lastThrough = S.through;
   computeDiffImpact();
-  blockCol = DIFF ? N.map((n, i) => diffColor(i)) : colorOf;
+  refreshBlockColors();
   if (DIFF) {
     let aff = 0;
     for (let i = 0; i < NN; i++) if (DD[i] > 0) aff++;
