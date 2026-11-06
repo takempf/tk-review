@@ -7,7 +7,7 @@ export interface SearchDocument {
   text: string;
   detail?: string;
   target?: string;
-  tab?: "pr" | "ai" | "explain";
+  tab?: "pr" | "ai";
   activate?: () => void;
 }
 

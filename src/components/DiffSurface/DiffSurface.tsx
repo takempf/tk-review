@@ -16,7 +16,7 @@ import { type CommentAnchor, inlineDiscussion } from "../../lib/prThreads";
 import { useScreenSettled } from "../../lib/screenTransition";
 import { HIGHLIGHTER } from "../../lib/warmHighlighter";
 import { type DiffLayout, useAppStore } from "../../store/appStore";
-import { reviewsWorkingTree, useTab } from "../../store/tabStore";
+import { explanationOnRecord, reviewsWorkingTree, useTab } from "../../store/tabStore";
 import { Author, githubHost } from "../Author/Author";
 import { ScrollArea } from "../ScrollArea/ScrollArea";
 import { Skeleton, SkeletonGroup } from "../Skeleton/Skeleton";
@@ -140,10 +140,7 @@ export function DiffSkeleton() {
   );
 }
 
-/**
- * A link to a file's explanation in the AI explain panel, placed like the
- * comment links. Deleted files put it on the old side of the diff.
- */
+/** A link to a file's note in the AI review panel, placed like the comment links (old side for deleted files). */
 function ExplanationMarker({ path, stale }: { path: string; stale: boolean }) {
   const showExplanation = useTab((state) => state.showExplanation);
   const label = `Show AI explanation for ${path}${stale ? ", from an older version of this diff" : ""}`;
@@ -163,23 +160,24 @@ function ExplanationMarker({ path, stale }: { path: string; stale: boolean }) {
 
 /** Each file's note from the explanation on record, by path; none while they're hidden. */
 function useFileNotes() {
-  const explanation = useTab((state) => state.explanation);
+  const reviews = useTab((state) => state.reviews);
+  const record = useMemo(() => explanationOnRecord(reviews), [reviews]);
   const mergeBase = useTab((state) => state.summary?.mergeBase ?? null);
   const shown = useAppStore((state) => state.fileNotes);
 
   const all = useMemo(() => {
     const byPath = new Map<string, string>();
-    for (const file of explanation?.explanation.files ?? []) {
+    for (const file of record?.explanation.files ?? []) {
       const note = file.explanation.trim();
       if (note) byPath.set(file.path, note);
     }
     return byPath;
-  }, [explanation]);
+  }, [record]);
 
   return {
     notes: shown ? all : NO_NOTES,
     hasNotes: all.size > 0,
-    stale: explanation != null && explanation.mergeBase !== mergeBase,
+    stale: record != null && record.listed.source.mergeBase !== mergeBase,
   };
 }
 

@@ -94,7 +94,7 @@ interface AppState {
    * Turning it off hides them without discarding them.
    */
   fileNotes: boolean;
-  /** Which agent CLI runs the next review or explanation. */
+  /** Which agent CLI runs the next review. */
   reviewEngine: ReviewEngine;
   /** Model override for the engine; empty means the CLI's configured default. */
   reviewModel: string;
@@ -568,7 +568,7 @@ export const useAppStore = create<AppState>((set, get, api) => {
       const tab = get().tabs.find((candidate) => candidate.id === id);
       if (!tab) return;
       // Nobody is left to read what they would write.
-      tab.store.getState().cancelAgentRuns(["review", "explain", "reply"]);
+      tab.store.getState().cancelAgentRuns(["review", "reply"]);
       void removeTab(id);
     },
 

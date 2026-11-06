@@ -619,10 +619,6 @@
   margin-left: auto;
 }
 
-.section {
-  padding: var(--space-4) var(--panel-inset) var(--panel-inset);
-}
-
 /* One review: a heading that folds it, then its posts. Open, it ends with the
    section's deeper inset; folded, the heading sits evenly in its row. */
 .review {
@@ -716,12 +712,6 @@
   padding: var(--space-4) var(--panel-inset);
 }
 
-.section + .section,
-.section + .notice,
-.notice + .section {
-  border-top: 1px solid var(--border);
-}
-
 /* Styled like the PR tab's subheadings, plus the chevron that folds it. */
 .sectionHeading {
   display: flex;
@@ -746,23 +736,6 @@
 .sectionCount {
   font-family: var(--font-mono);
   letter-spacing: 0;
-}
-
-.sectionBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
-
-.sectionBody[hidden] {
-  display: none;
-}
-
-.provenance {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-faint);
 }
 
 /* A review answered at the turn limit, or whose findings couldn't be
@@ -1129,7 +1102,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin-top: var(--space-2);
   border-radius: var(--radius);
 }
 

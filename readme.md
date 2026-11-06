@@ -1,6 +1,6 @@
 # tk-review
 
-A macOS app for reading code changes the way a pull request reads. Open a local git repository, pick one of its GitHub pull requests (or any two refs), and read every changed file in one scrolling view. Claude Code or Codex can review or explain the change, and you can send their findings back to the PR.
+A macOS app for reading code changes the way a pull request reads. Open a local git repository, pick one of its GitHub pull requests (or any two refs), and read every changed file in one scrolling view. Claude Code or Codex can review the change and explain it, and you can send their findings back to the PR.
 
 There are no API keys. Git work shells out to the system `git`, GitHub goes through `gh`, and the agents through `claude` and `codex`, so each uses the login you already have. Comparing branches works offline.
 
@@ -59,7 +59,7 @@ Each PR or comparison opens in its own tab, and tabs stay open until you close t
 
 ## Agent review
 
-**AI review** sends the whole comparison to an agent, which returns a summary and findings with severities. Pick the engine, model, and effort above the results. Each engine remembers its own, and a blank field uses the CLI's default.
+**AI review** sends the whole comparison to an agent, which returns a summary and findings with severities, then explains the change (see [Agent explanation](#agent-explanation)). Pick the engine, model, and effort above the results. Each engine remembers its own, and a blank field uses the CLI's default.
 
 | Engine | Runs as | Sandbox |
 | --- | --- | --- |
@@ -128,13 +128,17 @@ Reviews are kept in localStorage per repository, ref pair, engine, and `gh` acco
 
 ### Limits
 
-- Claude runs get 60 turns plus one per two files, up to 150. The check of a review's findings gets 12 plus three per finding it checks, up to 60. A re-review's budget counts only the files that changed since. A run that runs out is resumed once without tools (`--resume <id> --tools ""`) to answer from what it read, and the review is marked as cut short.
+- Claude runs get 60 turns plus one per two files, up to 150. The check of a review's findings gets 12 plus three per finding it checks, up to 60, and an explanation that resumes its review gets 20. A re-review's budget counts only the files that changed since. A run that runs out is resumed once without tools (`--resume <id> --tools ""`) to answer from what it read, and the review is marked as cut short.
 - A run that writes nothing for 15 minutes, or is still going after an hour, is stopped. **Cancel** stops one sooner.
 - A failure leads with one sentence on what went wrong, and keeps the CLI's raw output behind **Show details**.
 
 ## Agent explanation
 
-**AI explain** writes a walkthrough of the change for someone who hasn't seen it, using the same engine settings. It runs apart from the review, so both can go at once. It returns the walkthrough, in the tab, and a short note at the top of each file that needs one, which the **Notes** toggle hides. The voice lives in `src-tauri/src/voice.md`, so the tone can change without touching the prompt. One explanation is kept per comparison.
+Once a review's findings are checked, the same engine explains the change for someone who hasn't seen it: a walkthrough that reads on from the review's summary, and a short note on each file that needs one. The walkthrough shows under the summary, and the notes fold away under **File notes**, where the link at the top of each file in the diff leads. The **Explanations** toggle above the diff hides those links. The diff's links come from the newest review with an explanation, whichever engine wrote it.
+
+The explanation resumes the review's session (`claude --resume`, or `codex exec resume`), so it explains from everything the review read, and it's told which findings the check withdrew. Without a session, or when resuming fails, a fresh run is handed the review's summary and findings instead. A re-review brings the newest explanation up to date rather than starting over. If explaining fails, the review keeps its findings and says why it has no walkthrough; cancelling stops both.
+
+The voice lives in `src-tauri/src/voice.md`, so the tone can change without touching the prompt.
 
 ## Rendering
 

@@ -68,17 +68,3 @@ test("the review tab edits each reviewer's rules, and saving keeps them", async 
       .getByRole("textbox", { name: "Security rules" }),
   ).toHaveValue("The admin pool skips row-level security.");
 });
-
-test("the explain tab has no rules button, since explanations don't follow them", async ({
-  page,
-}) => {
-  await page.goto("/dev-harness/");
-  await page
-    .getByText("Render review findings in the PR workflow", { exact: true })
-    .first()
-    .click();
-  await page.getByRole("tab", { name: /^(AI explain|Explain)$/ }).click();
-  // The review tab stays mounted behind it, so look only at what shows.
-  await expect(page.getByTitle(/Choose the agent/).filter({ visible: true })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Rules", exact: true })).toBeHidden();
-});

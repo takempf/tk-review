@@ -415,6 +415,8 @@ export const REVIEW: ReviewResult = {
 /** Why a review's findings couldn't be double-checked, for `?fail=check`. */
 export const CHECK_FAILURE = "Claude was still going after 60 minutes, so it was stopped.";
 
+export const EXPLAIN_FAILURE = "Claude wrote nothing for 15 minutes, so it was stopped.";
+
 /**
  * Stand-in re-review of `REVIEW`: exercises every resolution status against
  * the five findings above, plus one new finding — the "fix that introduced

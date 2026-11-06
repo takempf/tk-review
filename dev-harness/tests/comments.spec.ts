@@ -29,7 +29,7 @@ test("conversation comment previews Markdown, preserves the draft, and posts onc
   await page.getByRole("button", { name: "Write", exact: true }).click();
   await editor(page).press("Enter");
   await expect.poll(() => requests(page)).toHaveLength(0);
-  await page.getByRole("tab", { name: /Explain/ }).click();
+  await page.getByRole("tab", { name: /^(AI review|Review)$/ }).click();
   await page.getByRole("tab", { name: "PR", exact: true }).click();
   await expect(editor(page)).toHaveValue(/A useful comment/);
   await editor(page).press("ControlOrMeta+Enter");
@@ -186,7 +186,7 @@ test("scenery pauses through resizing, resumes and releases interrupted transiti
   await expect.poll(held).toBe(false);
   await expect(trigger.locator("xpath=../..").locator(".tk-scenery")).toHaveCount(0);
   await trigger.evaluate((button) => (button as HTMLButtonElement).click());
-  await page.getByRole("tab", { name: /Explain/ }).click();
+  await page.getByRole("tab", { name: /^(AI review|Review)$/ }).click();
   await expect.poll(held).toBe(false);
 });
 
@@ -225,7 +225,7 @@ test("file comments open the PR panel from another tab and keep separate drafts"
   await openPr(page);
   await page.getByRole("button", { name: "Add comment", exact: true }).click();
   await editor(page).fill("Conversation draft");
-  await page.getByRole("tab", { name: /Explain/ }).click();
+  await page.getByRole("tab", { name: /^(AI review|Review)$/ }).click();
   await page.getByRole("button", { name: `Comment on file ${migration}`, exact: true }).click();
   await expect(page.getByRole("tab", { name: "PR", exact: true })).toHaveAttribute(
     "aria-selected",

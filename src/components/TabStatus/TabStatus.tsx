@@ -35,8 +35,8 @@ const LABELS: Record<TabStatusKind, string> = {
  */
 export function tabStatus(state: TabState): TabStatusKind {
   if (state.openingPr || (state.loadingDiff && !state.summary)) return "opening";
-  if (state.reviewing || state.reReviewing || state.explaining) return "working";
-  if (state.error || state.reviewError || state.explainError) return "error";
+  if (state.reviewing || state.reReviewing) return "working";
+  if (state.error || state.reviewError) return "error";
   if (state.prHeadMoved) return "moved";
   const [stored] = reviewsNewestFirst(state.reviews);
   if (!stored) return "none";

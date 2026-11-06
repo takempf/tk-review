@@ -229,7 +229,7 @@ pub async fn review_diff(
     blocking(move || {
         let root = PathBuf::from(root);
         let rules = rules::load(&rules_file, &root)?.rules;
-        review::review_diff(
+        let mut result = review::review_diff(
             &root,
             &merge_base,
             compare.as_deref(),
@@ -239,7 +239,21 @@ pub async fn review_diff(
             pr_context.as_ref(),
             &rules,
             &run,
-        )
+        )?;
+        let explained = review::explain_review(
+            &root,
+            &merge_base,
+            compare.as_deref(),
+            &engine,
+            model.as_deref(),
+            effort.as_deref(),
+            &result.to_explain(),
+            None,
+            pr_context.as_ref(),
+            &run,
+        );
+        (result.explanation, result.explain_failure) = explanation_or_failure(explained)?;
+        Ok(result)
     })
     .await
 }
@@ -269,7 +283,7 @@ pub async fn re_review_diff(
     blocking(move || {
         let root = PathBuf::from(root);
         let rules = rules::load(&rules_file, &root)?.rules;
-        review::re_review_diff(
+        let mut result = review::re_review_diff(
             &root,
             &merge_base,
             compare.as_deref(),
@@ -281,42 +295,34 @@ pub async fn re_review_diff(
             pr_context.as_ref(),
             &rules,
             &run,
-        )
-    })
-    .await
-}
-
-/// Explains the comparison in plain language: a walkthrough plus a note for
-/// each file that needs one. Runs the same agent CLIs as `review_diff`, and
-/// just as slowly.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn explain_diff(
-    app: AppHandle,
-    runs: State<'_, AgentRuns>,
-    run_id: String,
-    root: String,
-    merge_base: String,
-    compare: Option<String>,
-    engine: String,
-    model: Option<String>,
-    effort: Option<String>,
-    pr_context: Option<PrContext>,
-) -> Result<ExplainResult, GitError> {
-    let run = agent_run(&app, &runs, run_id);
-    blocking(move || {
-        review::explain_diff(
-            &PathBuf::from(root),
+        )?;
+        let explained = review::explain_review(
+            &root,
             &merge_base,
             compare.as_deref(),
             &engine,
             model.as_deref(),
             effort.as_deref(),
+            &result.to_explain(),
+            prior.explanation.as_ref(),
             pr_context.as_ref(),
             &run,
-        )
+        );
+        (result.explanation, result.explain_failure) = explanation_or_failure(explained)?;
+        Ok(result)
     })
     .await
+}
+
+/// A review keeps its findings when its explanation fails, and says why it has none; a cancel stops both.
+fn explanation_or_failure(
+    explained: Result<ExplainResult, GitError>,
+) -> Result<(Option<ExplainResult>, Option<String>), GitError> {
+    match explained {
+        Ok(explanation) => Ok((Some(explanation), None)),
+        Err(GitError::Cancelled) => Err(GitError::Cancelled),
+        Err(error) => Ok((None, Some(error.to_string()))),
+    }
 }
 
 /// Answers a follow-up comment on a stored review, in the reviewer's voice.

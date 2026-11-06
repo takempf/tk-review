@@ -195,6 +195,10 @@ export interface ReviewResult {
   scope?: string;
   scopeNote?: string | null;
   outside?: ReviewFinding[];
+  /** The walkthrough and file notes written once the review was done; absent on older reviews. */
+  explanation?: ExplainResult | null;
+  /** Why there is no explanation, when writing one failed. */
+  explainFailure?: string | null;
 }
 
 /** A finding the review wrote, then withdrew on a second look at the code. */
@@ -224,6 +228,8 @@ export interface PriorReview {
   setAside: SetAsideFinding[];
   /** The commit it read, which the re-review looks for new problems since. */
   head: string | null;
+  /** The newest explanation of the change, for the re-review to bring up to date. */
+  explanation: ExplainResult | null;
 }
 
 /** The re-review's verdict on one finding from the previous review. */
@@ -259,6 +265,9 @@ export interface ReReviewResult {
   scopeNote?: string | null;
   /** New findings outside what changed since, folded away and not double-checked. */
   outside?: ReviewFinding[];
+  /** As on `ReviewResult`, brought up to date from the explanation before it. */
+  explanation?: ExplainResult | null;
+  explainFailure?: string | null;
 }
 
 /** A short note on what one file's changes are for, shown at the top of it in the diff. */
@@ -269,7 +278,7 @@ export interface FileExplanation {
 }
 
 export interface ExplainResult {
-  /** The walkthrough of the whole change, for the explain panel. */
+  /** The walkthrough of the whole change, shown under the review's summary. */
   overall: string;
   /** Notes for the files that benefit from one; the rest are left out. */
   files: FileExplanation[];
@@ -671,32 +680,6 @@ export const gitApi = {
     whole: boolean;
     prContext: PrContext | null;
   }) => invoke<ReReviewResult>("re_review_diff", { ...args }),
-
-  /**
-   * Explains the comparison in plain language: a walkthrough of the whole
-   * change, plus a note for each file that benefits from one. An agent run of
-   * its own, independent of any review, and just as slow.
-   */
-  explainDiff: (
-    runId: string,
-    root: string,
-    mergeBase: string,
-    compare: string | null,
-    engine: ReviewEngine,
-    model: string | null,
-    effort: string | null,
-    prContext: PrContext | null,
-  ) =>
-    invoke<ExplainResult>("explain_diff", {
-      runId,
-      root,
-      mergeBase,
-      compare,
-      engine,
-      model,
-      effort,
-      prContext,
-    }),
 
   /**
    * Answers a follow-up comment on a stored review, in the reviewer's voice.

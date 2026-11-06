@@ -448,6 +448,15 @@ pub struct ReviewResult {
     /// are then as the review first wrote them. Set by the app.
     #[serde(default, skip_deserializing)]
     pub check_failure: Option<String>,
+    /// The walkthrough and file notes written once the review was done. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub explanation: Option<ExplainResult>,
+    /// Why there is no explanation, when writing one failed. Set by the app.
+    #[serde(default, skip_deserializing)]
+    pub explain_failure: Option<String>,
+    /// The CLI session that wrote the review, which the explanation resumes.
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 /// A finding the review wrote and then withdrew on a second look.
@@ -517,20 +526,15 @@ pub fn review_diff(
             turn_budget(&patch),
             panel.as_ref(),
             Some(schema.as_deref().unwrap_or(REVIEW_SCHEMA)),
+            None,
             run,
         )?
     } else {
-        AgentText::complete(codex_result_text(
-            root,
-            &prompt,
-            model,
-            effort,
-            Some(REVIEW_SCHEMA),
-            run,
-        )?)
+        codex_result_text(root, &prompt, model, effort, Some(REVIEW_SCHEMA), None, run)?
     };
     let mut result: ReviewResult = parse_agent_json(&answer.text)?;
     result.cut_short = answer.cut_short;
+    result.session = answer.session;
     for finding in &mut result.findings {
         finding.tidy_span();
         finding.settle_body();
@@ -623,6 +627,15 @@ pub struct ReReviewResult {
     /// wherever they are. Set by the app.
     #[serde(default, skip_deserializing)]
     pub outside: Vec<ReviewFinding>,
+    /// As on `ReviewResult`, brought up to date from the explanation before it.
+    #[serde(default, skip_deserializing)]
+    pub explanation: Option<ExplainResult>,
+    /// As on `ReviewResult`.
+    #[serde(default, skip_deserializing)]
+    pub explain_failure: Option<String>,
+    /// As on `ReviewResult`.
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 /// A finding taken off the table before a re-review: withdrawn on a second
@@ -666,6 +679,9 @@ pub struct PriorReview {
     /// The commit it read, which a re-review looks for new problems since.
     #[serde(default)]
     pub head: Option<String>,
+    /// The newest explanation of the change, whichever engine wrote it, for the re-review to update.
+    #[serde(default)]
+    pub explanation: Option<ExplainResult>,
 }
 
 /// Re-reviews the comparison against an earlier review: judges whether each
@@ -747,20 +763,23 @@ pub fn re_review_diff(
             turn_budget(since.as_ref().map_or(&patch, |since| &since.patch)),
             panel.as_ref(),
             Some(schema.as_deref().unwrap_or(RE_REVIEW_SCHEMA)),
+            None,
             run,
         )?
     } else {
-        AgentText::complete(codex_result_text(
+        codex_result_text(
             root,
             &prompt,
             model,
             effort,
             Some(RE_REVIEW_SCHEMA),
+            None,
             run,
-        )?)
+        )?
     };
     let mut result: ReReviewResult = parse_agent_json(&answer.text)?;
     result.cut_short = answer.cut_short;
+    result.session = answer.session;
     for finding in &mut result.findings {
         finding.tidy_span();
         finding.settle_body();
@@ -1124,11 +1143,12 @@ fn double_check(
             check_turn_budget(review.findings.len()),
             None,
             Some(CHECK_SCHEMA),
+            None,
             run,
         )?
         .text
     } else {
-        codex_result_text(root, &prompt, model, effort, Some(CHECK_SCHEMA), run)?
+        codex_result_text(root, &prompt, model, effort, Some(CHECK_SCHEMA), None, run)?.text
     };
     parse_agent_json(&text)
 }
@@ -1271,7 +1291,7 @@ pub struct FileExplanation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplainResult {
-    /// The walkthrough of the whole change, for the explain panel.
+    /// The walkthrough of the whole change, shown under the review's summary.
     pub overall: String,
     /// Notes for the files that benefit from one; the rest are left out.
     #[serde(default)]
@@ -1281,85 +1301,190 @@ pub struct ExplainResult {
     pub cut_short: bool,
 }
 
-/// Explains the comparison in plain language: a walkthrough of the whole
-/// change, plus a short note for each file that benefits from one. A reading
-/// aid rather than a judgement — see `build_explain_prompt`.
-///
-/// Deliberately a separate CLI run from `review_diff` rather than an extra
-/// field on the review: the two jobs want different framing, and a failure in
-/// one should not cost the other.
+/// What a finished review hands the explanation written after it.
+pub struct ReviewToExplain<'a> {
+    /// The summary the walkthrough is shown under.
+    pub summary: &'a str,
+    /// The findings that held, shown beside the walkthrough.
+    pub findings: &'a [ReviewFinding],
+    /// Findings the check withdrew, which the explanation mustn't rest on.
+    pub withdrawn: &'a [WithdrawnFinding],
+    /// Findings the check couldn't confirm, held apart as `withdrawn` is.
+    pub unconfirmed: &'a [WithdrawnFinding],
+    /// The review's CLI session, to resume with everything it read.
+    pub session: Option<&'a str>,
+}
+
+impl ReviewResult {
+    pub fn to_explain(&self) -> ReviewToExplain<'_> {
+        ReviewToExplain {
+            summary: &self.summary,
+            findings: &self.findings,
+            withdrawn: &self.withdrawn,
+            unconfirmed: &self.unconfirmed,
+            session: self.session.as_deref(),
+        }
+    }
+}
+
+impl ReReviewResult {
+    pub fn to_explain(&self) -> ReviewToExplain<'_> {
+        ReviewToExplain {
+            summary: &self.summary,
+            findings: &self.findings,
+            withdrawn: &self.withdrawn,
+            unconfirmed: &self.unconfirmed,
+            session: self.session.as_deref(),
+        }
+    }
+}
+
+/// Turns an explanation gets when it resumes its review, which has read the code already.
+const RESUMED_EXPLAIN_TURNS: usize = 20;
+
+/// Explains a reviewed change from the review's own session, falling back to a fresh run handed its results.
 #[allow(clippy::too_many_arguments)]
-pub fn explain_diff(
+pub fn explain_review(
     root: &Path,
     merge_base: &str,
     compare: Option<&str>,
     engine: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    review: &ReviewToExplain,
+    earlier: Option<&ExplainResult>,
     pr_context: Option<&PrContext>,
     run: &AgentRun,
 ) -> Result<ExplainResult, GitError> {
-    if !matches!(engine, "claude" | "codex") {
-        return Err(GitError::Command(format!(
-            "unknown review engine: {engine}"
-        )));
+    if let Some(session) = review.session {
+        let prompt = build_explain_prompt(review, earlier, None);
+        match explain_run(
+            root,
+            &prompt,
+            engine,
+            model,
+            effort,
+            RESUMED_EXPLAIN_TURNS,
+            Some(session),
+            run,
+        ) {
+            Err(GitError::Cancelled) => return Err(GitError::Cancelled),
+            Ok(explanation) => return Ok(explanation),
+            // Codex versions differ in whether `exec resume` exists, so a fresh run is the fallback.
+            Err(_) => {}
+        }
     }
 
     let patch = git::get_patch(root, merge_base, compare)?;
-    if patch.trim().is_empty() {
-        return Err(GitError::Command(
-            "There is nothing to explain: the diff is empty.".into(),
-        ));
-    }
-
-    let mut prompt = build_explain_prompt(compare, &patch, pr_context);
+    let fresh = FreshExplain {
+        compare,
+        patch: &patch,
+        pr_context,
+    };
+    let mut prompt = build_explain_prompt(review, earlier, Some(&fresh));
     add_repo_instructions(&mut prompt, &patch, root, engine);
+    explain_run(
+        root,
+        &prompt,
+        engine,
+        model,
+        effort,
+        turn_budget(&patch),
+        None,
+        run,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn explain_run(
+    root: &Path,
+    prompt: &str,
+    engine: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    turns: usize,
+    resume: Option<&str>,
+    run: &AgentRun,
+) -> Result<ExplainResult, GitError> {
     let answer = if engine == "claude" {
         claude_result_text(
             root,
-            &prompt,
+            prompt,
             model,
             effort,
-            turn_budget(&patch),
+            turns,
             None,
             Some(EXPLAIN_SCHEMA),
+            resume,
             run,
         )?
     } else {
-        AgentText::complete(codex_result_text(
+        codex_result_text(
             root,
-            &prompt,
+            prompt,
             model,
             effort,
             Some(EXPLAIN_SCHEMA),
+            resume,
             run,
-        )?)
+        )?
     };
-    let mut result: ExplainResult = parse_agent_json(&answer.text)?;
-    result.cut_short = answer.cut_short;
-    Ok(result)
+    let mut explanation: ExplainResult = parse_agent_json(&answer.text)?;
+    explanation.cut_short = answer.cut_short;
+    Ok(explanation)
 }
 
+/// What a fresh explanation run needs that a resumed one already has.
+struct FreshExplain<'a> {
+    compare: Option<&'a str>,
+    patch: &'a str,
+    pr_context: Option<&'a PrContext>,
+}
+
+/// A short prompt for the resumed review session, or with `fresh`, one carrying the diff and the review's results.
 fn build_explain_prompt(
-    compare: Option<&str>,
-    patch: &str,
-    pr_context: Option<&PrContext>,
+    review: &ReviewToExplain,
+    earlier: Option<&ExplainResult>,
+    fresh: Option<&FreshExplain>,
 ) -> String {
-    let target = match compare {
-        Some(compare) => format!("the `{compare}` ref"),
-        None => "the working tree, so it may include uncommitted work-in-progress".to_owned(),
+    let mut prompt = match fresh {
+        None => "Your review is done. Now explain the change for the person reading your review, drawing on everything you read for it. The pull request's description and discussion, where you were shown them, are sources to draw on too: correct them where the code disagrees. Read more of the code only where explaining needs it.\n\n".to_owned(),
+        Some(fresh) => {
+            let target = match fresh.compare {
+                Some(compare) => format!("the `{compare}` ref"),
+                None => "the working tree, so it may include uncommitted work-in-progress".to_owned(),
+            };
+            let mut intro = format!("A git diff has just been reviewed, and you are explaining it for the person reading that review. The compare side of the diff is {target}.\n\nYou are running inside the repository the diff belongs to. Use your file reading and search tools freely: when the diff alone does not explain what a file is for or why a change was needed, go read the surrounding code. That is exactly the gap you are filling.\n\n");
+            if !review.findings.is_empty() {
+                intro.push_str("The review raised these findings:\n\n");
+                for finding in review.findings {
+                    intro.push_str(&format!(
+                        "- [{}] {} — {}\n",
+                        finding.severity,
+                        finding.location(),
+                        finding.title
+                    ));
+                }
+                intro.push('\n');
+            }
+            intro
+        }
     };
-    let mut prompt = format!(
-        r#"You are helping a reviewer understand a git diff before they read it. The compare side of the diff is {target}.
-
-You are explaining this change, not judging it. No findings, no verdicts, no praise, no suggestions — your only job is to orient the reader so the code makes sense when they get to it.
-
-You are running inside the repository the diff belongs to. Use your file reading and search tools freely: when the diff alone does not explain what a file is for or why a change was needed, go read the surrounding code. That is exactly the gap you are filling.
+    prompt.push_str(&checked_away_note(review));
+    prompt.push_str(&format!(
+        "The review's summary, which your walkthrough is shown under:\n\n{}\n\n",
+        review.summary.trim()
+    ));
+    if let Some(earlier) = earlier {
+        prompt.push_str(&earlier_explanation_note(earlier));
+    }
+    prompt.push_str(&format!(
+        r#"You are explaining the change now, not judging it: no findings, no verdicts, no praise, no suggestions. The review's findings are shown beside your explanation, so don't repeat them. Your only job is to orient the reader so the code makes sense when they get to it.
 
 Respond with ONLY a JSON object — no markdown fences, no prose before or after — matching this shape:
 
 {{
-  "overall": "The walkthrough: what this change does, why, and how it is put together.",
+  "overall": "The walkthrough: how the change is put together, and why.",
   "files": [
     {{
       "path": "path/as/it/appears/in/the/diff",
@@ -1368,14 +1493,14 @@ Respond with ONLY a JSON object — no markdown fences, no prose before or after
   ]
 }}
 
-`overall` is the walkthrough, shown in a panel of its own. It is the reader's one stop for understanding the change: thorough enough that someone who reads only this knows what changed, why, and where to look, and skimmable enough that someone who reads only the first line of each part still gets the gist.
-- Open with the short version: a sentence or two on what the change does and why, in terms of what users or callers see before how the code does it.
-- Then walk through the parts in the order that makes them easiest to follow (usually cause before effect, data before UI), not in file order. Say which files are the heart of the change and which are fallout: renames, plumbing, test updates.
-- Give the why wherever the code doesn't make it obvious: the bug, constraint, or trade-off behind an approach. If the diff doesn't say, read the code around it. If you still can't tell, describe what it does rather than inventing a motive.
+`overall` is the walkthrough. It's shown directly under the review's summary, and the two read as one description of the change: thorough enough that someone who reads only that knows what changed, why, and where to look, and skimmable enough that someone who reads only the first line of each part still gets the gist.
+- Don't repeat the summary; carry on from it. If it doesn't say what the change does and why, in terms of what users or callers see, open with a sentence or two that does.
+- Walk through the parts in the order that makes them easiest to follow (usually cause before effect, data before UI), not in file order. Say which files are the heart of the change and which are fallout: renames, plumbing, test updates.
+- Give the why wherever the code doesn't make it obvious: the bug, constraint, or trade-off behind an approach. If the code doesn't tell you, describe what it does rather than inventing a motive.
 - Point out what a reader would trip over: a behavior change hiding in a refactor, an ordering that matters, a surprising dependency. Frame these as orientation ("heads up: ..."), not as findings.
 - Use a small table where it reads better than prose: before and after behavior, which file does what, a set of cases and what happens in each. Keep tables to a few columns of short cells.
 - It is a document rather than a comment, so short `###` headings are welcome when the walkthrough covers more than two or three parts. Never put a heading over a single paragraph, and don't open with a title.
-- Length follows the change. A one-line fix gets a few sentences; a large change can run to several short sections. Never pad.
+- Length follows the change. A one-line fix gets a sentence or two; a large change can run to several short sections. Never pad.
 
 Each entry in `files` is a note shown at the top of that file in the diff, so the reader sees it just before reading the code:
 - Write one only for files whose changes benefit from explaining. Leave out lockfiles that follow a manifest change, generated output, formatting-only edits, and pure renames. For a set of repetitive mechanical edits, explain the shared reason once on a representative file and name the others there.
@@ -1394,21 +1519,59 @@ The walkthrough's `###` headings are the one exception to "No headings" above.
 
 {voice}
 
-{JSON_MARKDOWN_NOTE}
-
-The diff:
-
-{patch}"#,
+{JSON_MARKDOWN_NOTE}"#,
         voice = EXPLAIN_VOICE.trim_end(),
-    );
-    if let Some(pr) = pr_context {
-        // The author's own framing belongs with the rest of the orienting
-        // instructions.
-        let mut context = String::new();
-        append_pr_intent(&mut context, pr);
-        insert_before_diff(&mut prompt, patch, &context);
+    ));
+    if let Some(fresh) = fresh {
+        if let Some(pr) = fresh.pr_context {
+            prompt.push_str("\n\n");
+            append_pr_intent(&mut prompt, pr);
+        }
+        prompt.push_str(&format!("\n\nThe diff:\n\n{}", fresh.patch));
     }
     prompt
+}
+
+/// The findings the review's check took out, which the explanation mustn't rest on.
+fn checked_away_note(review: &ReviewToExplain) -> String {
+    let lines: String = review
+        .withdrawn
+        .iter()
+        .map(|item| ("withdrawn", item))
+        .chain(
+            review
+                .unconfirmed
+                .iter()
+                .map(|item| ("not confirmed", item)),
+        )
+        .map(|(label, item)| {
+            format!(
+                "- [{label}] {} — {}\n  {}\n",
+                item.finding.location(),
+                item.finding.title,
+                item.reason.trim().replace('\n', " ")
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("Before the review was shown, its findings were checked again against the code. These didn't hold up, so nothing in your explanation should rest on them:\n\n{lines}\n")
+}
+
+/// An explanation of an earlier version of the change, for a re-review to bring up to date.
+fn earlier_explanation_note(earlier: &ExplainResult) -> String {
+    let mut note = String::from("An explanation was written for an earlier version of this change, and the code may have changed since. Bring it up to date rather than starting over: keep what's still true, rewrite what the changes since made wrong or incomplete, drop notes on files that have left the diff or no longer need one, and add notes for files that need one now. Answer with the whole walkthrough and every note, not only what changed.\n\n<earlier-walkthrough>\n");
+    note.push_str(earlier.overall.trim());
+    note.push_str("\n</earlier-walkthrough>\n\n");
+    for file in &earlier.files {
+        note.push_str(&format!(
+            "<earlier-file-note path=\"{}\">\n{}\n</earlier-file-note>\n\n",
+            file.path,
+            file.explanation.trim()
+        ));
+    }
+    note
 }
 
 /// The PR's own account of the change, as raw material for an explanation.
@@ -1491,11 +1654,12 @@ pub fn review_reply(
             turn_budget(&patch),
             None,
             None,
+            None,
             run,
         )?
         .text
     } else {
-        codex_result_text(root, &prompt, model, effort, None, run)?
+        codex_result_text(root, &prompt, model, effort, None, None, run)?.text
     };
     Ok(reply.trim().to_owned())
 }
@@ -2008,15 +2172,38 @@ struct AgentText {
     text: String,
     /// It hit the turn limit and was asked to answer from what it had read.
     cut_short: bool,
+    /// The CLI session that wrote it, which a later run can resume.
+    session: Option<String>,
 }
 
 impl AgentText {
-    fn complete(text: String) -> Self {
+    fn complete(text: String, session: Option<String>) -> Self {
         Self {
             text,
             cut_short: false,
+            session,
         }
     }
+}
+
+/// The session a claude run's result envelope names.
+fn claude_session(output: &Output) -> Option<String> {
+    result_envelope(&String::from_utf8_lossy(&output.stdout))
+        .and_then(|envelope| envelope["session_id"].as_str().map(str::to_owned))
+}
+
+/// The session `codex exec` names in the header it prints before it starts.
+fn codex_session(output: &Output) -> Option<String> {
+    [&output.stderr, &output.stdout]
+        .into_iter()
+        .find_map(|stream| {
+            String::from_utf8_lossy(stream).lines().find_map(|line| {
+                let (label, id) = line.split_once(':')?;
+                let id = id.trim();
+                (label.trim().eq_ignore_ascii_case("session id") && !id.is_empty())
+                    .then(|| id.to_owned())
+            })
+        })
 }
 
 /// What claude is told when a run stops at the turn limit. The pending tool
@@ -2038,6 +2225,8 @@ const WRAP_UP_PROMPT: &str = "You have run out of turns, so stop investigating: 
 ///
 /// When a `schema` is given, every one of these runs answers against it; see
 /// `push_schema`. Replies are plain text and pass `None`.
+///
+/// `resume` continues an earlier run's session, with all it read.
 #[allow(clippy::too_many_arguments)]
 fn claude_result_text(
     root: &Path,
@@ -2047,6 +2236,7 @@ fn claude_result_text(
     turns: usize,
     panel: Option<&Panel>,
     schema: Option<&str>,
+    resume: Option<&str>,
     run: &AgentRun,
 ) -> Result<AgentText, GitError> {
     let defaults = ClaudeDefaults::read();
@@ -2076,13 +2266,17 @@ fn claude_result_text(
     if let Some(agents_arg) = &agents_arg {
         args.extend(["--agents", agents_arg]);
     }
+    if let Some(session) = resume {
+        args.extend(["--resume", session]);
+    }
     push_model_and_effort(&mut args, model, effort);
     push_schema(&mut args, schema);
     let output = spawn_cli(root, "claude", &args, prompt, GitError::ClaudeNotFound, run)?;
     let stopped = match read_claude_output(&output) {
         ClaudeOutcome::Answer(text) => {
+            let answer = AgentText::complete(text, claude_session(&output));
             let (Some(panel), Some(agents_arg)) = (panel, &agents_arg) else {
-                return Ok(AgentText::complete(text));
+                return Ok(answer);
             };
             let launched = launched_subagents(&output);
             let skipped: Vec<&str> = panel
@@ -2092,12 +2286,12 @@ fn claude_result_text(
                 .filter(|name| !launched.iter().any(|launched| launched == name))
                 .collect();
             if skipped.is_empty() {
-                return Ok(AgentText::complete(text));
+                return Ok(answer);
             }
             let insisted = insist_on_specialists(
                 root, &output, &skipped, agents_arg, model, effort, schema, run,
             )?;
-            return Ok(AgentText::complete(insisted.unwrap_or(text)));
+            return Ok(insisted.unwrap_or(answer));
         }
         ClaudeOutcome::Failed(error) => return Err(error),
         ClaudeOutcome::OutOfTurns(stopped) => stopped,
@@ -2126,17 +2320,19 @@ fn claude_result_text(
         GitError::ClaudeNotFound,
         run,
     );
-    let failure = match wrap_up.map(|output| read_claude_output(&output)) {
+    let failure = match wrap_up.map(|output| (read_claude_output(&output), claude_session(&output)))
+    {
         // Stopping the run is not the wrap-up failing.
         Err(GitError::Cancelled) => return Err(GitError::Cancelled),
-        Ok(ClaudeOutcome::Answer(text)) => {
+        Ok((ClaudeOutcome::Answer(text), session)) => {
             return Ok(AgentText {
                 text,
                 cut_short: true,
+                session: session.or(Some(stopped.session_id)),
             });
         }
-        Ok(ClaudeOutcome::Failed(error)) => error,
-        Ok(ClaudeOutcome::OutOfTurns(again)) => again.error,
+        Ok((ClaudeOutcome::Failed(error), _)) => error,
+        Ok((ClaudeOutcome::OutOfTurns(again), _)) => again.error,
         Err(error) => error,
     };
     let mut message = "Claude used all its turns before it finished, and then could not answer from what it had read.".to_owned();
@@ -2172,10 +2368,8 @@ fn insist_on_specialists(
     effort: Option<&str>,
     schema: Option<&str>,
     run: &AgentRun,
-) -> Result<Option<String>, GitError> {
-    let Some(session_id) = result_envelope(&String::from_utf8_lossy(&output.stdout))
-        .and_then(|envelope| envelope["session_id"].as_str().map(str::to_owned))
-    else {
+) -> Result<Option<AgentText>, GitError> {
+    let Some(session_id) = claude_session(output) else {
         return Ok(None);
     };
     let names = skipped
@@ -2211,7 +2405,10 @@ fn insist_on_specialists(
     ) {
         Err(GitError::Cancelled) => Err(GitError::Cancelled),
         Ok(output) => match read_claude_output(&output) {
-            ClaudeOutcome::Answer(text) => Ok(Some(text)),
+            ClaudeOutcome::Answer(text) => Ok(Some(AgentText::complete(
+                text,
+                claude_session(&output).or(Some(session_id)),
+            ))),
             _ => Ok(None),
         },
         Err(_) => Ok(None),
@@ -2568,14 +2765,17 @@ const CHECK_SCHEMA: &str = r#"{
 /// fished out of the log. When a `schema` is given, `--output-schema` pins the
 /// message to it, so parsing is a formality rather than a gamble; replies are
 /// plain text and pass `None`.
+///
+/// `resume` continues an earlier run's session through `codex exec resume`.
 fn codex_result_text(
     root: &Path,
     prompt: &str,
     model: Option<&str>,
     effort: Option<&str>,
     schema: Option<&str>,
+    resume: Option<&str>,
     run: &AgentRun,
-) -> Result<String, GitError> {
+) -> Result<AgentText, GitError> {
     let unique = format!(
         "tk-review-codex-{}-{}",
         std::process::id(),
@@ -2612,6 +2812,9 @@ fn codex_result_text(
     if let Some(effort_arg) = &effort_arg {
         args.extend(["-c", effort_arg]);
     }
+    if let Some(session) = resume {
+        args.extend(["resume", session]);
+    }
     // Read the prompt from stdin.
     args.push("-");
 
@@ -2621,8 +2824,11 @@ fn codex_result_text(
     let _ = std::fs::remove_file(&out_path);
     let _ = std::fs::remove_file(&schema_path);
 
-    finished?;
-    message.map_err(|err| GitError::Command(format!("could not read codex output: {err}")))
+    let output = finished?;
+    let text =
+        message.map_err(|err| GitError::Command(format!("could not read codex output: {err}")))?;
+    let session = codex_session(&output).or(resume.map(str::to_owned));
+    Ok(AgentText::complete(text, session))
 }
 
 /// Parses an agent's JSON answer out of its final text, tolerating fences and
@@ -2657,7 +2863,29 @@ mod tests {
             findings: findings.to_vec(),
             set_aside: Vec::new(),
             head: None,
+            explanation: None,
         }
+    }
+
+    /// A finished review as its explanation is handed it, with nothing checked away.
+    fn reviewed<'a>(summary: &'a str, findings: &'a [ReviewFinding]) -> ReviewToExplain<'a> {
+        ReviewToExplain {
+            summary,
+            findings,
+            withdrawn: &[],
+            unconfirmed: &[],
+            session: None,
+        }
+    }
+
+    /// The prompt for an explanation that can't resume its review.
+    fn fresh_explain_prompt(patch: &str, pr_context: Option<&PrContext>) -> String {
+        let fresh = FreshExplain {
+            compare: Some("feature"),
+            patch,
+            pr_context,
+        };
+        build_explain_prompt(&reviewed("Adds a cache.", &[]), None, Some(&fresh))
     }
 
     /// What a finished claude run left behind: its exit status and stdout.
@@ -3076,7 +3304,7 @@ mod tests {
                 None,
                 None,
             ),
-            build_explain_prompt(Some("feature"), patch, None),
+            fresh_explain_prompt(patch, None),
         ];
         for prompt in &json_prompts {
             assert!(prompt.contains(WRITING_GUIDANCE), "{prompt}");
@@ -3378,10 +3606,6 @@ mod tests {
         .expect_err("unknown");
         assert!(err.to_string().contains("unknown review engine"), "{err}");
 
-        let err = explain_diff(dir.path(), "HEAD", None, "gemini", None, None, None, &run)
-            .expect_err("unknown");
-        assert!(err.to_string().contains("unknown review engine"), "{err}");
-
         let err = re_review_diff(
             dir.path(),
             "HEAD",
@@ -3651,13 +3875,13 @@ mod tests {
 
     #[test]
     fn the_explain_prompt_asks_for_orientation_rather_than_judgement() {
-        let prompt = build_explain_prompt(Some("feature"), "diff --git a/a b/a", None);
+        let prompt = fresh_explain_prompt("diff --git a/a b/a", None);
 
         assert!(
-            prompt.contains("explaining this change, not judging it"),
+            prompt.contains("explaining the change now, not judging it"),
             "{prompt}"
         );
-        assert!(prompt.contains("No findings, no verdicts"), "{prompt}");
+        assert!(prompt.contains("no findings, no verdicts"), "{prompt}");
         assert!(prompt.contains("diff --git a/a b/a"), "{prompt}");
     }
 
@@ -3665,7 +3889,7 @@ mod tests {
     /// they get different briefs: one thorough, one short and selective.
     #[test]
     fn the_explain_prompt_briefs_the_walkthrough_and_the_file_notes_apart() {
-        let prompt = build_explain_prompt(Some("feature"), "diff --git a/a b/a", None);
+        let prompt = fresh_explain_prompt("diff --git a/a b/a", None);
 
         assert!(prompt.contains("`overall` is the walkthrough"), "{prompt}");
         assert!(prompt.contains("Use a small table"), "{prompt}");
@@ -3687,7 +3911,7 @@ mod tests {
 
     #[test]
     fn the_explain_prompt_carries_the_voice_and_its_samples() {
-        let prompt = build_explain_prompt(Some("feature"), "diff --git a/a b/a", None);
+        let prompt = fresh_explain_prompt("diff --git a/a b/a", None);
 
         assert!(prompt.contains("How to sound:"), "{prompt}");
         assert!(prompt.contains("song and dance"), "{prompt}");
@@ -3700,13 +3924,147 @@ mod tests {
     #[test]
     fn the_explain_prompt_treats_the_pr_description_as_a_source() {
         let pr = sample_pr();
-        let prompt = build_explain_prompt(Some("tk-review/pr/7"), "diff --git a/a b/a", Some(&pr));
+        let prompt = fresh_explain_prompt("diff --git a/a b/a", Some(&pr));
 
         assert!(prompt.contains("pull request #7: \"Avoid duplicate widgets\" by @octo"));
         assert!(prompt.contains("treat this as a source for your explanation"));
         assert!(prompt.contains("The API should remain backward compatible."));
         assert!(prompt.contains("@reviewer (src/api.rs:12): Please keep the old endpoint."));
         assert!(!prompt.contains("do not repeat points already raised"));
+    }
+
+    #[test]
+    fn a_resumed_explanation_reads_on_from_the_summary_without_the_diff_again() {
+        let withdrawn = [WithdrawnFinding {
+            finding: ReviewFinding {
+                path: "src/cache.ts".into(),
+                line: Some(4),
+                end_line: None,
+                severity: "warning".into(),
+                title: "Stale entries outlive a logout.".into(),
+                failure: String::new(),
+                fix: String::new(),
+                body: String::new(),
+                reviewers: Vec::new(),
+                posted_url: None,
+            },
+            reason: "`logout` clears the cache first.".into(),
+        }];
+        let review = ReviewToExplain {
+            withdrawn: &withdrawn,
+            session: Some("session-1"),
+            ..reviewed("Adds a cache in front of the widget lookup.", &[])
+        };
+        let prompt = build_explain_prompt(&review, None, None);
+
+        assert!(prompt.starts_with("Your review is done."), "{prompt}");
+        assert!(
+            prompt.contains("Adds a cache in front of the widget lookup."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Don't repeat the summary"), "{prompt}");
+        // The check's verdicts are news to the review's session.
+        assert!(
+            prompt.contains("[withdrawn] src/cache.ts (line: 4) — Stale entries outlive a logout."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("`logout` clears the cache first."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("The diff:"), "{prompt}");
+    }
+
+    #[test]
+    fn a_fresh_explanation_is_handed_the_review_it_follows() {
+        let finding = ReviewFinding {
+            path: "src/cache.ts".into(),
+            line: Some(9),
+            end_line: None,
+            severity: "warning".into(),
+            title: "Two tabs race to fill the cache.".into(),
+            failure: String::new(),
+            fix: String::new(),
+            body: String::new(),
+            reviewers: Vec::new(),
+            posted_url: None,
+        };
+        let fresh = FreshExplain {
+            compare: Some("feature"),
+            patch: "diff --git a/a b/a",
+            pr_context: None,
+        };
+        let prompt = build_explain_prompt(
+            &reviewed("Adds a cache.", std::slice::from_ref(&finding)),
+            None,
+            Some(&fresh),
+        );
+
+        assert!(
+            prompt
+                .contains("- [warning] src/cache.ts (line: 9) — Two tabs race to fill the cache."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Adds a cache."), "{prompt}");
+        assert!(
+            prompt.ends_with("The diff:\n\ndiff --git a/a b/a"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_re_review_brings_the_earlier_explanation_up_to_date() {
+        let earlier = ExplainResult {
+            overall: "### The cache\nIt sits in front of the lookup.".into(),
+            files: vec![FileExplanation {
+                path: "src/cache.ts".into(),
+                explanation: "Holds the entries.".into(),
+            }],
+            cut_short: false,
+        };
+        let prompt = build_explain_prompt(&reviewed("Fixed.", &[]), Some(&earlier), None);
+
+        assert!(
+            prompt.contains("Bring it up to date rather than starting over"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("<earlier-walkthrough>\n### The cache\nIt sits in front of the lookup.\n</earlier-walkthrough>"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("<earlier-file-note path=\"src/cache.ts\">\nHolds the entries.\n</earlier-file-note>"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_claude_answer_names_the_session_to_resume() {
+        let output = claude_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"{}","session_id":"abc-123"}"#,
+            true,
+        );
+        assert_eq!(claude_session(&output).as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn codex_names_its_session_in_the_header() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"{}".to_vec(),
+            stderr: b"OpenAI Codex v0.146.1\n--------\nworkdir: /repo\nmodel: gpt-5\nsession id: 0199a213-81c0-7800-8aa1-bbab2a035a53\n--------\n".to_vec(),
+        };
+        assert_eq!(
+            codex_session(&output).as_deref(),
+            Some("0199a213-81c0-7800-8aa1-bbab2a035a53")
+        );
+
+        let without = Output {
+            stderr: b"OpenAI Codex v0.146.1\nmodel: gpt-5\n".to_vec(),
+            ..output
+        };
+        assert_eq!(codex_session(&without), None);
     }
 
     /// Trimmed from a real `codex exec` run with an unsupported model.

@@ -22,6 +22,7 @@ import {
 } from "tk-design-system";
 import {
   type DismissalKind,
+  type FileExplanation,
   gitApi,
   type PrComment,
   type PrContext,
@@ -63,6 +64,9 @@ import { useAppStore } from "../../store/appStore";
 import {
   type AgentRunKind,
   CONCLUSION_POST_KEY,
+  type ExplanationOnRecord,
+  explanationOnRecord,
+  fileNoteSearchId,
   findingThreadKey,
   isOpenVerdict,
   type ListedReview,
@@ -73,11 +77,11 @@ import {
   reviewedHead,
   reviewHistory,
   reviewsWorkingTree,
-  type StoredExplanation,
   type StoredReview,
   sourcedKey,
   type TabState,
   useTab,
+  walkthroughSearchId,
 } from "../../store/tabStore";
 import { Author, githubHost } from "../Author/Author";
 import { Combobox } from "../Combobox/Combobox";
@@ -216,7 +220,7 @@ const VERDICTS: { value: ReviewVerdict; label: string; noun: string; done: strin
 
 /** Stable fallback: a fresh `[]` from a selector re-renders forever. */
 const EMPTY_THREAD: ReviewComment[] = [];
-type PanelTab = "pr" | "ai" | "explain";
+type PanelTab = "pr" | "ai";
 
 /** The engine doing the tab's run of `kind`, if one is in flight. */
 function runningEngine(state: TabState, kind: AgentRunKind): ReviewEngine | undefined {
@@ -426,13 +430,16 @@ function useCommentFocus(ref: RefObject<HTMLElement | null>) {
 }
 
 /** Diff explanation links land on the file note, with the same cue as comments. */
-function useExplanationFocus(ref: RefObject<HTMLElement | null>, shown: StoredExplanation | null) {
+function useExplanationFocus(
+  ref: RefObject<HTMLElement | null>,
+  record: ExplanationOnRecord | null,
+) {
   const focus = useTab((state) => state.explanationFocus);
   const handled = useRef(focus?.tick ?? 0);
 
   useEffect(() => {
     const body = ref.current;
-    if (!focus || !shown || !body || focus.tick === handled.current) return;
+    if (!focus || !record || !body || focus.tick === handled.current) return;
     const file = [...body.querySelectorAll<HTMLElement>("[data-explain-path]")].find(
       (element) => element.dataset.explainPath === focus.path,
     );
@@ -450,7 +457,7 @@ function useExplanationFocus(ref: RefObject<HTMLElement | null>, shown: StoredEx
       file.setAttribute("data-focused", "");
     });
     return () => cancelAnimationFrame(frame);
-  }, [ref, focus, shown]);
+  }, [ref, focus, record]);
 }
 
 /** Replies expand at their own trigger; diff targets use the conversation's composer. */
@@ -606,34 +613,6 @@ function PrSection({ pr }: { pr: PrContext }) {
   );
 }
 
-/** Who wrote a review or explanation and when, for the small print under its heading. */
-function Provenance({
-  engine,
-  model,
-  effort,
-  createdAt,
-  note,
-}: {
-  engine: ReviewEngine;
-  model?: string | null;
-  effort?: string | null;
-  createdAt: string;
-  note?: string;
-}) {
-  const parts = [
-    ENGINE_LABELS[engine] ?? engine,
-    useModelLabel(engine, model),
-    effort ? `${effort} effort` : null,
-    shortTime(createdAt),
-    note,
-  ];
-  return (
-    <p className={css.provenance} title={absoluteTime(createdAt)}>
-      {parts.filter(Boolean).join(" · ")}
-    </p>
-  );
-}
-
 /**
  * Whether a folding block is open: `defaultOpen` at first, then the reader's
  * call. A search landing inside it opens it, as does a new `openTick`, without
@@ -665,139 +644,8 @@ function useFoldOpen(
   return [open, setOpen];
 }
 
-/**
- * A titled block of the explanation. Collapsible, because the column stacks
- * several long things and the one you want is often the last: folding the
- * walkthrough away is how you reach the file notes under it. Folded content
- * stays mounted.
- */
-function Section({
-  title,
-  count,
-  reveal = false,
-  openTick = 0,
-  searchId,
-  children,
-}: {
-  title: string;
-  count?: number;
-  /** Part of a run's result, so it takes part in `useRevealInOrder`. */
-  reveal?: boolean;
-  /** A new request opens a folded section without remounting its contents. */
-  openTick?: number;
-  searchId?: string;
-  children: ReactNode;
-}) {
-  const section = useRef<HTMLElement>(null);
-  const [open, setOpen] = useFoldOpen(section, true, openTick);
-  return (
-    <section
-      ref={section}
-      className={css.section}
-      data-search-id={searchId}
-      tabIndex={-1}
-      data-reveal-frame={reveal || undefined}
-    >
-      <button
-        type="button"
-        className={css.sectionHeading}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        data-reveal={reveal || undefined}
-      >
-        <Icon name={open ? "chevron-down" : "chevron-right"} />
-        {title}
-        {count != null ? <span className={css.sectionCount}>{count}</span> : null}
-      </button>
-      <div className={css.sectionBody} hidden={!open} data-reveal={reveal || undefined}>
-        {children}
-      </div>
-    </section>
-  );
-}
-
 /** Sorts last; `FindingLocation` gives it no jump link, having nowhere to jump. */
 const NOT_IN_DIFF = Number.MAX_SAFE_INTEGER;
-
-/**
- * An explanation of the change: the walkthrough, then an index of the notes it
- * left on files. Diff links lead here to read the full explanation.
- */
-function Explanation({ stored }: { stored: StoredExplanation }) {
-  const summary = useTab((state) => state.summary);
-  const focusTick = useTab((state) => state.explanationFocus?.tick ?? 0);
-  const { overall, cutShort } = stored.explanation;
-
-  // Diff order, so the notes read in the order the files are scrolled
-  // through. A path the model invented, or one that has since left the diff,
-  // sorts last and is shown without a link rather than being dropped — the
-  // text is still worth reading, it just has nowhere to jump.
-  const files = useMemo(() => {
-    const order = new Map((summary?.files ?? []).map((file, index) => [file.path, index]));
-    return stored.explanation.files
-      .filter((file) => file.explanation.trim())
-      .map((file) => ({ ...file, index: order.get(file.path) ?? NOT_IN_DIFF }))
-      .sort((a, b) => a.index - b.index);
-  }, [stored, summary]);
-
-  const stale = stored.mergeBase !== (summary?.mergeBase ?? null);
-  const fileMarkdown = (file: { path: string; explanation: string }) =>
-    `\`${file.path}\`\n\n${file.explanation.trim()}`;
-
-  return (
-    <>
-      <Section title="Walkthrough" searchId="explain:overall" reveal>
-        <div className={css.itemHead}>
-          <Provenance
-            engine={stored.engine}
-            model={stored.model}
-            effort={stored.effort}
-            createdAt={stored.createdAt}
-            note={stale ? "from an older version of this diff" : undefined}
-          />
-          <CopyButton text={overall} label="Copy walkthrough" />
-        </div>
-        {cutShort ? (
-          <p className={css.caveat}>
-            <Icon name="warning" />
-            <span>
-              {ENGINE_LABELS[stored.engine]} hit its turn limit partway through, so it explained
-              from what it had read by then. Some files may be covered thinly, or not at all.
-            </span>
-          </p>
-        ) : null}
-        <GitHubMarkdown markdown={overall} className={css.agentMarkdown} />
-      </Section>
-      {files.length > 0 ? (
-        <Section title="File notes" count={files.length} openTick={focusTick} reveal>
-          <div className={css.itemActions}>
-            <span className={css.provenance}>Linked from each file in the diff.</span>
-            <CopyButton
-              className={css.actionsEnd}
-              text={files.map(fileMarkdown).join("\n\n")}
-              label="Copy file notes"
-            />
-          </div>
-          {files.map((file) => (
-            <div
-              className={css.explainFile}
-              key={file.path}
-              data-explain-path={file.path}
-              data-search-id={`explain:${file.path}`}
-              tabIndex={-1}
-            >
-              <div className={css.itemHead}>
-                <FindingLocation path={file.path} lines={null} />
-                <CopyButton text={fileMarkdown(file)} label="Copy file note" />
-              </div>
-              <GitHubMarkdown markdown={file.explanation} className={css.agentMarkdown} />
-            </div>
-          ))}
-        </Section>
-      ) : null}
-    </>
-  );
-}
 
 /**
  * One conversation: its comments, a pending marker while the agent answers,
@@ -1417,14 +1265,17 @@ const isMinor = (finding: ReviewFinding): boolean =>
 function FoldedCards({
   heading,
   count,
+  openTick = 0,
   children,
 }: {
   heading: string;
   count: number;
+  /** A new request opens it, as on `useFoldOpen`. */
+  openTick?: number;
   children: ReactNode;
 }) {
   const fold = useRef<HTMLLIElement>(null);
-  const [open, setOpen] = useFoldOpen(fold, false);
+  const [open, setOpen] = useFoldOpen(fold, false, openTick);
   return (
     <li ref={fold} data-reveal>
       <button
@@ -1747,6 +1598,7 @@ function ReviewSummary({
         </p>
       ) : null}
       <GitHubMarkdown markdown={source.review.summary} className={css.agentMarkdown} />
+      <Walkthrough listed={listed} />
       <Thread
         listed={listed}
         threadKey={REVIEW_THREAD_KEY}
@@ -1768,6 +1620,84 @@ function ReviewSummary({
         }
       />
     </li>
+  );
+}
+
+/** The rest of the review's description: the walkthrough written once it was done, or why there isn't one. */
+function Walkthrough({ listed }: { listed: ListedReview }) {
+  const { source, key: review } = listed;
+  const { explanation, explainFailure } = source.review;
+  const agent = ENGINE_LABELS[source.engine];
+  if (!explanation) {
+    return explainFailure ? (
+      <p className={css.caveat}>
+        <Icon name="warning" />
+        <span>
+          {agent} couldn't write a walkthrough of the change. {explainFailure}
+        </span>
+      </p>
+    ) : null;
+  }
+  return (
+    <>
+      {explanation.cutShort ? (
+        <p className={css.caveat}>
+          <Icon name="warning" />
+          <span>
+            {agent} hit its turn limit partway through the walkthrough, so it explained from what it
+            had read by then. Some files may be covered thinly, or not at all.
+          </span>
+        </p>
+      ) : null}
+      <div data-search-id={walkthroughSearchId(review)} tabIndex={-1}>
+        <GitHubMarkdown markdown={explanation.overall} className={css.agentMarkdown} />
+      </div>
+    </>
+  );
+}
+
+/** Only the explanation on record answers the diff's links, so only its notes are marked for them. */
+function FileNotes({
+  files,
+  review,
+  onRecord,
+}: {
+  files: FileExplanation[];
+  review: string;
+  onRecord: boolean;
+}) {
+  const summary = useTab((state) => state.summary);
+  const focusTick = useTab((state) => (onRecord ? (state.explanationFocus?.tick ?? 0) : 0));
+  // A path the model invented, or one that has since left the diff, sorts last without a link.
+  const notes = useMemo(() => {
+    const order = new Map((summary?.files ?? []).map((file, index) => [file.path, index]));
+    return files
+      .filter((file) => file.explanation.trim())
+      .map((file) => ({ ...file, index: order.get(file.path) ?? NOT_IN_DIFF }))
+      .sort((a, b) => a.index - b.index);
+  }, [files, summary]);
+  if (notes.length === 0) return null;
+  return (
+    <FoldedCards heading="File notes" count={notes.length} openTick={focusTick}>
+      {notes.map((file) => (
+        <li
+          className={css.explainFile}
+          key={file.path}
+          data-explain-path={onRecord ? file.path : undefined}
+          data-search-id={fileNoteSearchId(review, file.path)}
+          tabIndex={-1}
+        >
+          <div className={css.itemHead}>
+            <FindingLocation path={file.path} lines={null} />
+            <CopyButton
+              text={`\`${file.path}\`\n\n${file.explanation.trim()}`}
+              label="Copy file note"
+            />
+          </div>
+          <GitHubMarkdown markdown={file.explanation} className={css.agentMarkdown} />
+        </li>
+      ))}
+    </FoldedCards>
   );
 }
 
@@ -2120,21 +2050,8 @@ function controlsInHead(state: TabState): boolean {
   return head != null && !reviewHistory(state.reviews).some(({ source }) => source.head === head);
 }
 
-/**
- * The agent, model and effort the next review or explanation runs with. Both
- * tabs share them, and a run in flight keeps whatever it started with, so they
- * can change at any time. `review` adds what only reviews have: the commit
- * the next one is listed under, and the repository's review rules. In that
- * commit's own section (`inCommit`), its bar names the commit, and the button
- * that runs the review joins the row.
- */
-function AgentSettings({
-  review = false,
-  inCommit = false,
-}: {
-  review?: boolean;
-  inCommit?: boolean;
-}) {
+/** In the next review's commit section (`inCommit`), the button that runs it joins the row. */
+function AgentSettings({ inCommit = false }: { inCommit?: boolean }) {
   const root = useTab((state) => state.repo.root);
   const reviewEngine = useAppStore((state) => state.reviewEngine);
   const reviewModel = useAppStore((state) => state.reviewModel);
@@ -2150,7 +2067,7 @@ function AgentSettings({
       <Popover.Root>
         <Popover.Trigger
           render={<Button variant="ghost" size="sm" className={css.settingsTrigger} />}
-          title="Choose the agent, model and effort for reviews and explanations"
+          title="Choose the agent, model and effort for reviews"
         >
           <Icon name="sliders" />
           <span className={css.settingsSummary}>
@@ -2164,7 +2081,7 @@ function AgentSettings({
           </span>
           <Icon name="chevron-down" />
         </Popover.Trigger>
-        {review && !inCommit ? <NextReviewCommit /> : null}
+        {inCommit ? null : <NextReviewCommit />}
         <Popover.Popup align="start" className={css.settingsPopup}>
           <Popover.Title className={css.settingsTitle}>Agent</Popover.Title>
           <div className={css.settingsField}>
@@ -2215,10 +2132,7 @@ function AgentSettings({
               onValueChange={(level) => setReviewEffort(level ?? "")}
             />
           </div>
-          <p className={css.settingsHint}>
-            Leave the model blank to use the CLI's own default. Reviews and explanations share
-            these.
-          </p>
+          <p className={css.settingsHint}>Leave the model blank to use the CLI's own default.</p>
         </Popover.Popup>
       </Popover.Root>
       {inCommit ? (
@@ -2226,12 +2140,12 @@ function AgentSettings({
           <RepoRulesButton root={root} />
           <ReviewButton />
         </span>
-      ) : review ? (
+      ) : (
         <span className={css.controlsEnd}>
           <WholeDiffButton />
           <RepoRulesButton root={root} />
         </span>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -2305,31 +2219,6 @@ function ReviewButton() {
   );
 }
 
-function ExplainButton() {
-  const reviewEngine = useAppStore((state) => state.reviewEngine);
-  const hasExplanation = useTab((state) => state.explanation != null);
-  const explaining = useTab((state) => state.explaining);
-  const hasDiff = useTab((state) => (state.summary?.files.length ?? 0) > 0 && !state.loadingDiff);
-  const runExplain = useTab((state) => state.runExplain);
-
-  return (
-    <Button
-      variant="primary"
-      size="sm"
-      onClick={() => void runExplain()}
-      disabled={explaining || !hasDiff}
-      title={
-        hasDiff
-          ? `Ask ${ENGINE_LABELS[reviewEngine]} to walk through this comparison, and leave a note on each file that needs one`
-          : "Nothing to explain until a comparison has changes"
-      }
-    >
-      {explaining ? null : <Icon name="sparkle" className={css.actionIcon} />}
-      {explaining ? "Explaining…" : hasExplanation ? "Re-explain" : "Explain"}
-    </Button>
-  );
-}
-
 const plural = (count: number, noun: string) =>
   `${count === 0 ? "No" : count} ${noun}${count === 1 ? "" : "s"}`;
 
@@ -2343,14 +2232,18 @@ function ReviewCard({
   listed,
   patch,
   pr,
+  onRecord,
 }: {
   listed: ListedReview;
   patch: string | null;
   pr: PrContext | null;
+  /** Its explanation is the one the diff's file links lead to. */
+  onRecord: boolean;
 }) {
   const { source, live } = listed;
   const section = useRef<HTMLElement>(null);
-  const [open, setOpen] = useFoldOpen(section, live);
+  const focusTick = useTab((state) => (onRecord ? (state.explanationFocus?.tick ?? 0) : 0));
+  const [open, setOpen] = useFoldOpen(section, live, focusTick);
   const setDismissed = useTab((state) => state.setDismissed);
   const restoreSetAside = useTab((state) => state.restoreSetAside);
   const findings = useMemo(
@@ -2470,11 +2363,23 @@ function ReviewCard({
               : plural(findings.length, "finding")}
           </span>
         </button>
-        <CopyButton text={source.review.summary} label="Copy summary" />
+        <CopyButton
+          text={[source.review.summary, source.review.explanation?.overall]
+            .filter(Boolean)
+            .join("\n\n")}
+          label="Copy description"
+        />
       </div>
       <div className={css.reviewBody} hidden={!open}>
         <ul className={css.findings}>
           <ReviewSummary listed={listed} patch={patch} pr={pr} />
+          {source.review.explanation ? (
+            <FileNotes
+              files={source.review.explanation.files}
+              review={listed.key}
+              onRecord={onRecord}
+            />
+          ) : null}
           {major.length === 0 ? (
             <li className={css.status} data-reveal>
               {reReview
@@ -2561,18 +2466,23 @@ function CommitReviews({
   reviews,
   patch,
   pr,
+  recordKey,
   children,
 }: {
   head: string | null;
   reviews: ListedReview[];
   patch: string | null;
   pr: PrContext | null;
+  /** The `ListedReview.key` of the review whose explanation is on record. */
+  recordKey: string | null;
   children?: ReactNode;
 }) {
   const commit = useTab((state) => state.commits?.commits.find((item) => item.sha === head));
   const worktree = useTab(reviewsWorkingTree);
   const section = useRef<HTMLElement>(null);
-  const [open, setOpen] = useFoldOpen(section, true);
+  const holdsRecord = reviews.some((listed) => listed.key === recordKey);
+  const focusTick = useTab((state) => (holdsRecord ? (state.explanationFocus?.tick ?? 0) : 0));
+  const [open, setOpen] = useFoldOpen(section, true, focusTick);
 
   return (
     <section
@@ -2611,6 +2521,7 @@ function CommitReviews({
             listed={listed}
             patch={patch}
             pr={pr}
+            onRecord={listed.key === recordKey}
           />
         ))}
       </div>
@@ -2634,12 +2545,14 @@ function ReviewTab() {
   const { handingOver, label, runId, shown, revealed, shapesLeft } = useRunHandover(
     running,
     reReviewing
-      ? `${agent} is checking whether its previous findings were addressed and reviewing the changed code for new issues, then double-checking what it finds.`
-      : `${agent} is reading the diff and the surrounding code, then double-checking what it finds.`,
+      ? `${agent} is checking whether its previous findings were addressed and reviewing the changed code for new issues, then double-checking what it finds and updating its walkthrough.`
+      : `${agent} is reading the diff and the surrounding code, then double-checking what it finds and writing a walkthrough of the change.`,
     reviews,
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   useRevealInOrder(bodyRef, revealed);
+  const record = useMemo(() => explanationOnRecord(shown), [shown]);
+  useExplanationFocus(bodyRef, running || handingOver ? null : record);
   const head = useTab(reviewedHead);
   const inHead = useTab(controlsInHead);
 
@@ -2679,7 +2592,8 @@ function ReviewTab() {
         className={css.notice}
       >
         <p className={css.status}>
-          Nothing runs until you press Review. Every engine's findings land here, kept per
+          Nothing runs until you press Review. Every engine's findings land here with a walkthrough
+          of the change, and a note at the top of each file in the diff that needs one, kept per
           comparison for when you come back.
         </p>
       </Fold>
@@ -2688,7 +2602,7 @@ function ReviewTab() {
 
   return (
     <>
-      {inHead ? null : <AgentSettings review />}
+      {inHead ? null : <AgentSettings />}
       {/* While a finished run hands over, the review it replaces fades out. */}
       <ScrollArea
         label="AI reviews"
@@ -2703,10 +2617,11 @@ function ReviewTab() {
             reviews={reviews}
             patch={patch}
             pr={pr}
+            recordKey={record?.listed.key ?? null}
           >
             {commit === head ? (
               <>
-                {inHead ? <AgentSettings review inCommit /> : null}
+                {inHead ? <AgentSettings inCommit /> : null}
                 {run}
               </>
             ) : null}
@@ -2718,66 +2633,11 @@ function ReviewTab() {
 }
 
 /**
- * The explanation: a walkthrough of the change for a reader who hasn't seen
- * it, written to be skimmed. Diff links jump to its notes on individual files.
- */
-function ExplainTab() {
-  const stored = useTab((state) => state.explanation);
-  const explaining = useTab((state) => state.explaining);
-  const explainError = useTab((state) => state.explainError);
-  const dismissExplainError = useTab((state) => state.dismissExplainError);
-  const reviewEngine = useAppStore((state) => state.reviewEngine);
-  const agent = ENGINE_LABELS[useTab((state) => runningEngine(state, "explain")) ?? reviewEngine];
-
-  const { handingOver, label, runId, shown, revealed, shapesLeft } = useRunHandover(
-    explaining,
-    `${agent} is reading the change and the code around it.`,
-    stored,
-  );
-  const bodyRef = useRef<HTMLDivElement>(null);
-  useRevealInOrder(bodyRef, revealed);
-  useExplanationFocus(bodyRef, shown === stored ? shown : null);
-
-  return (
-    <>
-      <AgentSettings />
-      <ScrollArea
-        label="AI explanation"
-        viewportRef={bodyRef}
-        viewportClassName={handingOver ? `${css.body} ${css.replacing}` : css.body}
-      >
-        {explainError ? (
-          <ErrorNotice error={explainError} onDismiss={dismissExplainError} className={css.error} />
-        ) : null}
-        {explaining || handingOver ? (
-          <RunLoader
-            kind="explain"
-            running={explaining}
-            handingOver={handingOver}
-            runId={runId}
-            caption={label}
-            onLeft={shapesLeft}
-          />
-        ) : null}
-        {/* Keyed so a fresh explanation starts with its sections as they open. */}
-        {shown ? <Explanation key={shown.createdAt} stored={shown} /> : null}
-        <Fold open={!shown && !explaining && !handingOver && !explainError} className={css.notice}>
-          <p className={css.status}>
-            Nothing runs until you press Explain. You get a walkthrough of the change here, and a
-            link to its explanation at the top of each file in the diff that needs one.
-          </p>
-        </Fold>
-      </ScrollArea>
-    </>
-  );
-}
-
-/**
  * A tab's icon, or a spinner while its run is going, so a run shows from the
  * other tabs too. The icon gives way when the panel is narrow; the spinner
  * stays, being the part that says something.
  */
-function TabIcon({ name, running }: { name: "sparkle" | "info"; running: boolean }) {
+function TabIcon({ name, running }: { name: "sparkle"; running: boolean }) {
   return running ? <SpinnerIcon /> : <Icon name={name} className={css.tabIcon} />;
 }
 
@@ -2787,7 +2647,6 @@ export function ReviewPanel() {
   // panel doesn't switch tabs under the reader when the PR arrives.
   const hasPr = useTab((state) => state.pr != null || state.pendingPr != null);
   const reviewing = useTab((state) => state.reviewing || state.reReviewing);
-  const explaining = useTab((state) => state.explaining);
   const reviewInHead = useTab(controlsInHead);
   // Every open tab has a panel of its own, so a PR opens on its PR tab and
   // keeps whichever tab the reader picks after that.
@@ -2810,7 +2669,7 @@ export function ReviewPanel() {
   }
   if (explanationTick !== explainedTick) {
     setExplainedTick(explanationTick);
-    setTab("explain");
+    setTab("ai");
   }
   if (composeTick !== composedTick) {
     setComposedTick(composeTick);
@@ -2840,22 +2699,9 @@ export function ReviewPanel() {
             <span className={css.tabLong}>AI review</span>
             <span className={css.tabShort}>Review</span>
           </Tabs.Tab>
-          <Tabs.Tab value="explain">
-            <TabIcon name="info" running={explaining} />{" "}
-            <span className={css.tabLong}>AI explain</span>
-            <span className={css.tabShort}>Explain</span>
-          </Tabs.Tab>
         </Tabs.List>
         <div className={css.tabActions}>
-          {activeTab === "pr" ? (
-            <PrRefreshButton />
-          ) : activeTab === "ai" ? (
-            reviewInHead ? null : (
-              <ReviewButton />
-            )
-          ) : (
-            <ExplainButton />
-          )}
+          {activeTab === "pr" ? <PrRefreshButton /> : reviewInHead ? null : <ReviewButton />}
         </div>
       </div>
       {/* All stay mounted so drafts, open composers and runs' loaders survive a tab switch. */}
@@ -2866,9 +2712,6 @@ export function ReviewPanel() {
       ) : null}
       <Tabs.Panel value="ai" keepMounted className={css.tabPanel}>
         <ReviewTab />
-      </Tabs.Panel>
-      <Tabs.Panel value="explain" keepMounted className={css.tabPanel}>
-        <ExplainTab />
       </Tabs.Panel>
     </Tabs.Root>
   );

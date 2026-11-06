@@ -207,6 +207,8 @@ fn run(args: &[String]) -> Result<(), String> {
             })
             .collect(),
         head: run.head.clone(),
+        // The bench measures findings, so its runs aren't explained.
+        explanation: None,
     });
     let kind = match (&prior, options.whole) {
         (None, _) => "review",

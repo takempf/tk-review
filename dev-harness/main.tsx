@@ -23,6 +23,7 @@ import {
   BRANCHES,
   CHECK_FAILURE,
   COMMITS,
+  EXPLAIN_FAILURE,
   EXPLANATION,
   GH_POST_ERROR,
   OUT_OF_TURNS_ERROR,
@@ -44,7 +45,7 @@ mockWindows("main");
  * seen without breaking a real CLI:
  * - `review`: reviews and re-reviews run out of turns and can't be rescued.
  * - `turns`: they run out of turns but answer from what they had read.
- * - `explain`: the explanation fails with a plain message and no detail.
+ * - `explain`: a review's explanation fails, so it lands without a walkthrough.
  * - `post`: sending to the PR fails the way `gh api` does.
  * - `list`: listing pull requests fails with git-style multi-line stderr.
  * - `refresh`: refreshing the PR fails, which shows in the banner under the header.
@@ -113,6 +114,12 @@ const scope = storageRoot(repo);
 
 /** Cancels for the agent runs in flight, by run id. */
 const cancels = new Map<string, () => void>();
+
+/** What a review's explanation step leaves on its result. */
+const explained = () =>
+  failing.has("explain")
+    ? { explanation: null, explainFailure: EXPLAIN_FAILURE }
+    : { explanation: EXPLANATION, explainFailure: null };
 
 /**
  * An agent run: settles after `ms` like `later`, reporting output as it goes
@@ -452,6 +459,7 @@ stdout:
           ...REVIEW,
           cutShort: failing.has("turns"),
           checkFailure: failing.has("check") ? CHECK_FAILURE : null,
+          ...explained(),
         },
         failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
       );
@@ -470,21 +478,11 @@ stdout:
           scope: whole ? "whole" : "since",
           scopeNote: failing.has("scope") ? SCOPE_NOTE : null,
           outside: whole ? [] : RE_REVIEW.outside,
+          ...explained(),
         },
         failing.has("review") ? OUT_OF_TURNS_ERROR : undefined,
       );
     }
-    // Slower than the review on purpose: the two run independently, and each
-    // tab has to stay usable while the other's run is still going.
-    case "explain_diff":
-      return agentRun(
-        payload,
-        2600,
-        EXPLANATION,
-        failing.has("explain")
-          ? { kind: "command", message: "There is nothing to explain: the diff is empty." }
-          : undefined,
-      );
     case "review_reply":
       return agentRun(
         payload,
@@ -549,27 +547,6 @@ localStorage.setItem(
       [`${scope}#118`]: reviewed(118, "Fix stale diffs after a force push", "118b", 4, 0),
       [`${scope}#47`]: reviewed(47, "Render review findings in the PR workflow", "old", 30, 3),
       [`${scope}#96`]: reviewed(96, "Split the review panel into tabs", "96z", 120, 2),
-    }),
-  );
-}
-
-// An explanation already on record, for PR #47 and for the same branches
-// compared directly, so the walkthrough and the file notes render on load
-// rather than only after a mocked agent run. Set `mergeBase` to anything else
-// here to see the "older version" note.
-for (const comparison of [
-  `${PR.baseRemote}/${PR.baseRef}...${PR.compareRef}`,
-  "main...feature/diff-viewer",
-]) {
-  localStorage.setItem(
-    `tk-review:explanations:${scope}:${comparison}`,
-    JSON.stringify({
-      explanation: EXPLANATION,
-      engine: "claude",
-      model: null,
-      effort: null,
-      mergeBase: SUMMARY.mergeBase,
-      createdAt: new Date().toISOString(),
     }),
   );
 }

@@ -216,23 +216,19 @@ export function reviewHistory(reviews: ReviewsByEngine): ListedReview[] {
     .sort((a, b) => b.source.createdAt.localeCompare(a.source.createdAt));
 }
 
-/**
- * An explanation as kept for a comparison.
- *
- * Only one is kept, whichever engine wrote it — unlike a review, which is an
- * opinion worth having twice, an explanation is a description of the same code.
- */
-export interface StoredExplanation {
+/** The explanation the diff's file notes come from, and the review that wrote it. */
+export interface ExplanationOnRecord {
   explanation: ExplainResult;
-  engine: ReviewEngine;
-  /** `null` means the CLI's configured default at the time. */
-  model: string | null;
-  /** Reasoning effort it ran at; `null` means the CLI's default. */
-  effort: string | null;
-  /** The commit the explained diff was anchored to. */
-  mergeBase: string;
-  /** ISO timestamp of when the explanation finished. */
-  createdAt: string;
+  listed: ListedReview;
+}
+
+/** The newest review's explanation, live or replaced, whichever engine wrote it: it describes the code, not an opinion of it. */
+export function explanationOnRecord(reviews: ReviewsByEngine): ExplanationOnRecord | null {
+  for (const listed of reviewHistory(reviews)) {
+    const explanation = listed.source.review.explanation;
+    if (explanation) return { explanation, listed };
+  }
+  return null;
 }
 
 /** Thread key for discussing the review as a whole rather than one finding. */
@@ -240,6 +236,11 @@ export const REVIEW_THREAD_KEY = "review";
 
 /** `postingTo` while the conclusion is being submitted as a GitHub review. */
 export const CONCLUSION_POST_KEY = "conclusion";
+
+export const walkthroughSearchId = (review: string): string => `review:${review}:walkthrough`;
+
+export const fileNoteSearchId = (review: string, path: string): string =>
+  `review:${review}:note:${path}`;
 
 /** Thread key for one finding; matches how the panel identifies finding cards. */
 export const findingThreadKey = (finding: ReviewFinding): string =>
@@ -279,7 +280,7 @@ const viewedKey = (root: string, base: string, compare: string) =>
   `tk-review:viewed:${root}:${base}...${compare}`;
 
 /** What an agent run is for. One of each runs at a time. */
-export type AgentRunKind = "review" | "explain" | "reply";
+export type AgentRunKind = "review" | "reply";
 
 /** An agent run in flight, as its progress line needs it. */
 export interface AgentRunInfo {
@@ -360,9 +361,7 @@ const NO_COMPARISON = {
   pr: null,
   prHeadMoved: false,
   reviews: {},
-  explanation: null,
   reviewError: null,
-  explainError: null,
   replyingTo: null,
   postingTo: null,
 } satisfies Partial<TabState>;
@@ -445,11 +444,6 @@ export interface TabState {
   /** A re-review is in flight; kept apart so the button can say which. */
   reReviewing: boolean;
   reviewError: AppError | null;
-  /** The explanation on record for this comparison, whichever engine wrote it. */
-  explanation: StoredExplanation | null;
-  explaining: boolean;
-  /** Kept apart from `reviewError`: either agent can fail without the other. */
-  explainError: AppError | null;
   /** The thread waiting on an agent reply, as a `sourcedKey`, or `null`. */
   replyingTo: string | null;
   /** Agent runs in flight, by the id the backend knows each by. */
@@ -506,12 +500,6 @@ export interface TabState {
   expandFile: (path: string) => void;
   runReview: () => Promise<void>;
   /**
-   * Explains the comparison: a walkthrough for the panel and a note for each
-   * file that needs one. Independent of the review; either can run while the
-   * other does.
-   */
-  runExplain: () => Promise<void>;
-  /**
    * Follows up on the stored review: one agent run that judges whether each
    * prior finding was addressed, and looks for new issues in what changed
    * since that review, or with `whole`, in the whole diff again.
@@ -560,7 +548,6 @@ export interface TabState {
   /** Stops the agent runs of these kinds; each ends as if it never ran. */
   cancelAgentRuns: (kinds: AgentRunKind[]) => void;
   dismissReviewError: () => void;
-  dismissExplainError: () => void;
   dismissError: () => void;
 }
 
@@ -618,37 +605,6 @@ function writeReviews(
     localStorage.setItem(reviewsKey(root, base, compareScope), JSON.stringify(reviews));
   } catch {
     // A full or unavailable localStorage should never break reviewing.
-  }
-}
-
-const explanationKey = (root: string, base: string, compareScope: string) =>
-  `tk-review:explanations:${root}:${base}...${compareScope}`;
-
-function readExplanation(
-  root: string,
-  base: string,
-  compareScope: string,
-): StoredExplanation | null {
-  try {
-    const raw = localStorage.getItem(explanationKey(root, base, compareScope));
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as StoredExplanation) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeExplanation(
-  root: string,
-  base: string,
-  compareScope: string,
-  explanation: StoredExplanation,
-): void {
-  try {
-    localStorage.setItem(explanationKey(root, base, compareScope), JSON.stringify(explanation));
-  } catch {
-    // A full or unavailable localStorage should never break explaining.
   }
 }
 
@@ -781,9 +737,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           loadingDiff: false,
           // Reviews belong to one comparison; load what this one has on record.
           reviews: readReviews(storageRoot(repo), base, viewedScope(compare, worktree)),
-          explanation: readExplanation(storageRoot(repo), base, viewedScope(compare, worktree)),
           reviewError: null,
-          explainError: null,
           replyingTo: null,
           postingTo: null,
           // Keep the open file across a refresh when it is still part of the diff.
@@ -809,9 +763,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           selectedLines: null,
           expanded: new Set(),
           reviews: {},
-          explanation: null,
           reviewError: null,
-          explainError: null,
           replyingTo: null,
           postingTo: null,
           pr: null,
@@ -889,9 +841,6 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
       reviewing: false,
       reReviewing: false,
       reviewError: null,
-      explanation: null,
-      explaining: false,
-      explainError: null,
       replyingTo: null,
       agentRuns: {},
       postingTo: null,
@@ -1182,55 +1131,6 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         }
       },
 
-      async runExplain() {
-        const { repo, base, compare, summary, explaining, pr } = get();
-        if (!base || !compare || !summary || explaining) return;
-
-        const { engine, model, effort } = env.settings();
-        const worktree = reviewsWorkingTree(get());
-        const scope = viewedScope(compare, worktree);
-        const stillCurrent = () =>
-          get().summary?.mergeBase === summary.mergeBase &&
-          get().compare === compare &&
-          reviewsWorkingTree(get()) === worktree;
-
-        const runId = beginRun("explain", engine);
-        set({ explaining: true, explainError: null });
-        try {
-          const result = await gitApi.explainDiff(
-            runId,
-            repo.root,
-            summary.mergeBase,
-            worktree ? null : compare,
-            engine,
-            model,
-            effort,
-            pr,
-          );
-          const stored: StoredExplanation = {
-            explanation: result,
-            engine,
-            model,
-            effort,
-            mergeBase: summary.mergeBase,
-            createdAt: new Date().toISOString(),
-          };
-          writeExplanation(storageRoot(repo), base, scope, stored);
-          set(stillCurrent() ? { explanation: stored, explaining: false } : { explaining: false });
-        } catch (error) {
-          set(
-            stillCurrent()
-              ? {
-                  explaining: false,
-                  explainError: runFailure(error, "Could not explain the change"),
-                }
-              : { explaining: false },
-          );
-        } finally {
-          endRun(runId);
-        }
-      },
-
       async runReReview({ whole = false } = {}) {
         const { repo, base, compare, summary, reviews, reviewing, reReviewing, pr } = get();
         const { engine: reviewEngine, model, effort } = env.settings();
@@ -1267,6 +1167,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
               findings: open,
               setAside: setAsideAfter(prior),
               head: prior.head ?? null,
+              explanation: explanationOnRecord(reviews)?.explanation ?? null,
             },
             whole,
             prContext: pr,
@@ -1314,6 +1215,8 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
               scope: result.scope,
               scopeNote: result.scopeNote,
               outside: result.outside,
+              explanation: result.explanation,
+              explainFailure: result.explainFailure,
             },
             resolutions,
             setAside,
@@ -1688,10 +1591,6 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
 
       dismissReviewError() {
         set({ reviewError: null });
-      },
-
-      dismissExplainError() {
-        set({ explainError: null });
       },
 
       dismissError() {

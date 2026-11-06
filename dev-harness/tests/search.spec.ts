@@ -85,9 +85,9 @@ test("conversation search switches tabs, unfolds notes, and reveals a hidden pan
   page,
 }) => {
   await openPr(page);
-  await page.getByRole("tab", { name: /Explain/ }).click();
+  await page.getByRole("tab", { name: /^(AI review|Review)$/ }).click();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   const notes = page.getByRole("button", { name: /^File notes/ });
-  await notes.click();
   await expect(notes).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "Hide review panel", exact: true }).click();
   await page.keyboard.press("Meta+f");
@@ -97,7 +97,7 @@ test("conversation search switches tabs, unfolds notes, and reveals a hidden pan
   await input(page).press("Enter");
   await expect(page.getByRole("button", { name: "Hide review panel", exact: true })).toBeVisible();
   await expect(notes).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator(`[data-search-id="explain:${migration}"]`)).toBeInViewport();
+  await expect(page.locator(`[data-search-id="review:claude:note:${migration}"]`)).toBeInViewport();
   await page.keyboard.press("Meta+f");
   await input(page).fill("intentionally on a line");
   await input(page).press("Enter");
@@ -201,7 +201,7 @@ test("search has working case controls and transitions with motion enabled", asy
   await expect(dialog(page).getByText("No matches found")).toBeVisible();
   await dialog(page).getByRole("button", { name: "Match case", exact: true }).click();
   await input(page).fill("merge_base");
-  await expect(dialog(page).getByRole("option")).toHaveCount(4);
+  await expect(dialog(page).getByRole("option")).toHaveCount(2);
   const backdrop = page.locator(".tk-backdrop");
   await expect(backdrop).toHaveCSS("backdrop-filter", "none");
   await expect(backdrop).toHaveCSS("background-color", "rgba(0, 0, 0, 0.25)");

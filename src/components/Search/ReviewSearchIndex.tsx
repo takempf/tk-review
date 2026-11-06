@@ -5,12 +5,14 @@ import { WHOLE_CHANGE } from "../../lib/lineSpan";
 import { useScreenSettled } from "../../lib/screenTransition";
 import type { SearchDocument } from "../../lib/textSearch";
 import {
+  fileNoteSearchId,
   findingThreadKey,
   REVIEW_THREAD_KEY,
   resolutionThreadKey,
   reviewHistory,
   useTab,
   useTabStore,
+  walkthroughSearchId,
 } from "../../store/tabStore";
 import { useSearchDocuments } from "./Search";
 
@@ -22,7 +24,6 @@ export function ReviewSearchIndex() {
   const pr = useTab((state) => state.pr);
   const commits = useTab((state) => state.commits);
   const reviews = useTab((state) => state.reviews);
-  const explanation = useTab((state) => state.explanation);
 
   const settled = useScreenSettled();
   const code = useMemo<SearchDocument[]>(() => {
@@ -125,6 +126,29 @@ export function ReviewSearchIndex() {
         tab: "ai",
         target: `review:${review}:${REVIEW_THREAD_KEY}`,
       });
+      const explanation = source.review.explanation;
+      if (explanation) {
+        docs.push({
+          id: walkthroughSearchId(review),
+          scope: "conversations",
+          title: `${agent} walkthrough`,
+          text: explanation.overall,
+          detail: `${kind} walkthrough`,
+          tab: "ai",
+          target: walkthroughSearchId(review),
+        });
+        for (const file of explanation.files) {
+          docs.push({
+            id: fileNoteSearchId(review, file.path),
+            scope: "conversations",
+            title: file.path,
+            text: file.explanation,
+            detail: `${agent} file note`,
+            tab: "ai",
+            target: fileNoteSearchId(review, file.path),
+          });
+        }
+      }
       if (live) {
         docs.push({
           id: `conclusion:${source.engine}`,
@@ -178,30 +202,8 @@ export function ReviewSearchIndex() {
         });
       }
     }
-    if (explanation) {
-      docs.push({
-        id: "explain:overall",
-        scope: "conversations",
-        title: "Walkthrough",
-        text: explanation.explanation.overall,
-        detail: "AI explanation",
-        tab: "explain",
-        target: "explain:overall",
-      });
-      for (const file of explanation.explanation.files) {
-        docs.push({
-          id: `explain:${file.path}`,
-          scope: "conversations",
-          title: file.path,
-          text: file.explanation,
-          detail: "File explanation",
-          tab: "explain",
-          target: `explain:${file.path}`,
-        });
-      }
-    }
     return docs;
-  }, [summary, code, pr, commits, reviews, explanation, store]);
+  }, [summary, code, pr, commits, reviews, store]);
 
   useSearchDocuments(documents);
   return null;

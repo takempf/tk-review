@@ -102,7 +102,6 @@ pub fn run() {
             commands::get_repo_rules,
             commands::set_repo_rules,
             commands::re_review_diff,
-            commands::explain_diff,
             commands::review_reply,
             commands::list_agent_models,
             commands::cancel_agent_run,
