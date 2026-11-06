@@ -150,7 +150,8 @@
 .number {
   display: inline-block;
   font-family: var(--tk-font-mono);
-  color: var(--tk-fg-subtle);
+  font-weight: var(--pr-number-weight);
+  color: var(--pr-number);
 }
 
 .labels {

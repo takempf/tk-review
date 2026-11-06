@@ -152,7 +152,8 @@
   flex: none;
   font-family: var(--tk-font-mono);
   font-size: var(--tk-text-sm);
-  color: var(--tk-fg-subtle);
+  font-weight: var(--pr-number-weight);
+  color: var(--pr-number);
 }
 
 .branch {

@@ -153,6 +153,12 @@
   align-items: center;
 }
 
+.prNumber {
+  font-family: var(--tk-font-mono);
+  font-weight: var(--pr-number-weight);
+  color: var(--pr-number);
+}
+
 .prSkeleton {
   display: flex;
   flex-direction: column;

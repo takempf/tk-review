@@ -102,6 +102,9 @@
   --tk-code-inline-fg: var(--tk-fg-bright);
 
   --accent: var(--tk-accent);
+  /* A PR is known by its number, so it reads brighter and heavier than the title beside it. */
+  --pr-number: var(--tk-fg-bright);
+  --pr-number-weight: var(--tk-weight-bold);
   /* Work under way: the spinner, and the shape the review loader is looking
      at. The three inks are for those dithered drawings, dimmest to brightest,
      and each matches the lightness of the text ink it stands in for (the text

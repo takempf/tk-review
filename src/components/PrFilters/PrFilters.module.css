@@ -38,6 +38,8 @@
   margin-right: var(--tk-space-2);
   font-family: var(--tk-font-mono);
   font-size: var(--tk-text-xs);
+  font-weight: var(--pr-number-weight);
+  color: var(--pr-number);
 }
 
 .prBranch {
