@@ -131,6 +131,26 @@
   }
 }
 
+.placeholder:nth-child(even) > td {
+  background: var(--row-stripe);
+}
+
+.placeholder > td[data-column="size"] > * {
+  margin-inline-start: auto;
+}
+
+/* At the title's own size, so a placeholder row is as tall as the row that replaces it. */
+.placeholderTitle {
+  font-size: var(--tk-text-lg);
+  line-height: var(--tk-leading-tight);
+}
+
+.placeholderAuthor {
+  display: flex;
+  gap: 0.4em;
+  align-items: center;
+}
+
 .number {
   display: inline-block;
   font-family: var(--tk-font-mono);

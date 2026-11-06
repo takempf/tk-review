@@ -19,11 +19,16 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) {
     await title.getByRole("button").click();
     await expect(title).toHaveAttribute("aria-sort", "ascending");
 
-    // Mine has no cached data yet; its first fetch must keep the table mounted.
+    // Mine has no cached data yet: its first fetch keeps the table mounted, with skeleton rows.
     await page.getByRole("tab", { name: /^Mine/ }).click();
-    await expect(page.getByText("Loading pull requests…", { exact: true })).toBeVisible();
+    const loading = page.getByRole("status").filter({ hasText: "Loading pull requests" });
+    const skeletons = table.locator("tbody .tk-skeleton");
+    await expect(loading).toBeAttached();
+    await expect(skeletons.first()).toBeVisible();
     expect(await retained.evaluate((nodes) => nodes.every((node) => node?.isConnected))).toBe(true);
     await expect(rows).toHaveCount(3);
+    await expect(loading).toHaveCount(0);
+    await expect(skeletons).toHaveCount(0);
     await expect(title).toHaveAttribute("aria-sort", "ascending");
 
     await page.getByRole("tab", { name: /^Review requested/ }).click();

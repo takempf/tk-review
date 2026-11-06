@@ -12,7 +12,7 @@ import {
   useTable,
 } from "@tanstack/react-table";
 import { createContext, useContext, useMemo, useState } from "react";
-import { Badge, Button, Icon, Menu } from "tk-design-system";
+import { Badge, Button, Icon, Menu, Skeleton } from "tk-design-system";
 import type { PrLabel, PrSummary, ReviewEngine } from "../../ipc/git";
 import { prStatus, STATUS_LABELS, STATUSES } from "../../lib/prStatus";
 import { prMorphKey, ScreenMorph } from "../../lib/screenTransition";
@@ -441,6 +441,45 @@ function sizeSlots(rows: PrRow[]): React.CSSProperties {
   } as React.CSSProperties;
 }
 
+/** Varied, so a column of placeholder titles reads as titles rather than a block. */
+const PLACEHOLDER_TITLE_WIDTHS = ["72%", "55%", "64%", "48%", "80%", "60%", "68%", "52%"];
+
+function PlaceholderCell({ columnId, rowIndex }: { columnId: string; rowIndex: number }) {
+  switch (columnId) {
+    case "number":
+      return <Skeleton width="2.5em" />;
+    case "title":
+      return (
+        <Skeleton
+          className={css.placeholderTitle}
+          width={PLACEHOLDER_TITLE_WIDTHS[rowIndex % PLACEHOLDER_TITLE_WIDTHS.length]}
+        />
+      );
+    case "author":
+      return (
+        <span className={css.placeholderAuthor}>
+          <Skeleton shape="circle" width="1.5em" />
+          <Skeleton width="5em" />
+        </span>
+      );
+    default:
+      return <Skeleton width="4em" />;
+  }
+}
+
+function PlaceholderRows({ count, columnIds }: { count: number; columnIds: string[] }) {
+  return Array.from({ length: count }, (_, rowIndex) => (
+    // biome-ignore lint/suspicious/noArrayIndexKey: identical rows, in order
+    <tr key={rowIndex} className={css.placeholder}>
+      {columnIds.map((columnId) => (
+        <td key={columnId} data-column={columnId}>
+          <PlaceholderCell columnId={columnId} rowIndex={rowIndex} />
+        </td>
+      ))}
+    </tr>
+  ));
+}
+
 /**
  * The pull requests as a table: every column sorts (shift-click to add a
  * second), and a sort clicked off returns the list to its own order, with
@@ -450,11 +489,14 @@ export function PrTable({
   rows,
   visibility,
   onOpen,
+  placeholderRows = 0,
   ...context
 }: Omit<TableContext, "grouped"> & {
   rows: PrRow[];
   visibility: ColumnVisibilityState;
   onOpen: (row: PrRow) => void;
+  /** Skeleton rows that hold the list's place while it has none of its own yet. */
+  placeholderRows?: number;
 }) {
   const [sorting, setSorting] = useState<SortingState>(() => readStored(SORT_KEY, isSorting, []));
 
@@ -513,6 +555,12 @@ export function PrTable({
           ))}
         </thead>
         <tbody>
+          {rows.length === 0 ? (
+            <PlaceholderRows
+              count={placeholderRows}
+              columnIds={table.getVisibleLeafColumns().map((visible) => visible.id)}
+            />
+          ) : null}
           {table.getRowModel().rows.map((row) => {
             const { url } = row.original;
             // The title's button is the row's keyboard route; the row widens its pointer target.

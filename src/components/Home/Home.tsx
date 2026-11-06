@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Button, Eyebrow, Icon, Panel, SceneryWindow, Tabs } from "tk-design-system";
+import { Button, Eyebrow, Icon, Loading, Panel, SceneryWindow, Tabs } from "tk-design-system";
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { invalidatePrLists, prListQuery } from "../../lib/queries";
@@ -57,6 +57,9 @@ function readTab(): HomeTab {
 
 /** Something the search box can hand straight to `open_pr`. */
 const PR_REFERENCE = /(?:\/pulls?\/\d+)|(?:^[\w.-]+\/[\w.-]+#\d+$)/;
+
+/** About a screenful of skeleton rows while a tab's first page loads. */
+const PLACEHOLDER_ROWS = 8;
 
 /**
  * One `gh pr list` per filter, from the query cache (queries.ts): each shows
@@ -337,6 +340,9 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   // Refresh button says so, and a failed refetch leaves them where they are.
   const refreshing = listing.isFetching || all.isFetching;
   const refreshFailed = listing.isError && !listing.isFetching && listing.data != null;
+  const listFailed = listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed";
+  // Only with nothing cached: no earlier visit or launch has listed this tab.
+  const awaitingFirstPage = !listFailed && tab !== "reviewed" && !listing.data;
 
   // Once the list is up, spend the idle time compiling the highlighter's
   // grammars, so the first diff opened doesn't pay for it (warmHighlighter.ts).
@@ -532,20 +538,24 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
             </p>
           ) : null}
 
-          <PrTable rows={rows} root={root} listed={listed} visibility={columns} onOpen={openRow} />
+          <PrTable
+            rows={rows}
+            root={root}
+            listed={listed}
+            visibility={columns}
+            onOpen={openRow}
+            placeholderRows={awaitingFirstPage ? PLACEHOLDER_ROWS : 0}
+          />
 
-          {listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed" ? (
+          {listFailed ? (
             <ErrorNotice
               error={toAppError(listing.error, "Could not list pull requests")}
               className={css.listError}
             >
               Pasting a PR link above still works.
             </ErrorNotice>
-          ) : tab !== "reviewed" && !listing.data ? (
-            // Only with nothing cached: no earlier visit or launch has listed this tab.
-            <ListMessage>
-              <Spinner /> Loading pull requests…
-            </ListMessage>
+          ) : awaitingFirstPage ? (
+            <Loading label="Loading pull requests" />
           ) : (
             <>
               {rows.length > 0 ? null : filtering ? (
