@@ -1337,6 +1337,19 @@
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
+  // The toolbar's folder glyph, on the design system's 16-unit icon grid.
+  const FOLDER_GLYPH = new Path2D('M2.25 3.75h4.25l1.5 1.5h5.75v7H2.25z');
+  const isFolder = (f) => !f.tier && !f.band;
+  function drawFolderIcon(x, y, size, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(size / 16, size / 16);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = 'round';
+    ctx.stroke(FOLDER_GLYPH);
+    ctx.restore();
+  }
   function drawIcon(n, x, y, S2) {
     const c = TYPES[n.k].color,
       cx = x + S2 / 2,
@@ -2043,18 +2056,23 @@
           fs = Math.min(f.depth <= 1 ? 34 : 26, 17 / s),
           ms = Math.min(16, 11.5 / s),
           ty = f.y + band * 0.62;
-        let lx = f.x + (!imp ? folderPad(f.depth) : FP);
+        const x0 = f.x + (!imp ? folderPad(f.depth) : FP);
+        let lx = x0;
         if (f.color) {
           ctx.fillStyle = f.color;
           ctx.beginPath();
           ctx.arc(lx + fs * 0.3, ty - fs * 0.32, fs * 0.3, 0, 7);
           ctx.fill();
           lx += fs * 0.85;
+        } else if (isFolder(f)) {
+          drawFolderIcon(lx - fs * 0.15, ty - fs * 0.92, fs * 1.2, C.dim);
+          lx += fs * 1.15;
         }
+        const nameRoom = f.w - FP * 2 - (lx - x0);
         ctx.font = `600 ${fs}px "Geist Variable", system-ui, sans-serif`;
         ctx.fillStyle = C.text;
-        ctx.fillText(f.name, lx, ty, f.w - FP * 2);
-        const tw = Math.min(ctx.measureText(f.name).width, f.w - FP * 2);
+        ctx.fillText(f.name, lx, ty, nameRoom);
+        const tw = Math.min(ctx.measureText(f.name).width, nameRoom);
         ctx.font = `400 ${ms}px "Geist Mono Variable", monospace`;
         ctx.fillStyle = C.faint;
         const meta = `${f.count.toLocaleString()} files · ${fmtL(f.lines)} lines${f.sub ? ' · ' + f.sub : ''}`;
@@ -2915,8 +2933,9 @@
         sh = f.h * s * (is3D() ? T.ct : 1);
       if (sw < 60 || sh < 30 || sx > VW || sy > VH || sx + sw < 0 || sy + sh < 0) continue;
       const label = f.name.length > 40 ? '…' + f.name.slice(-39) : f.name,
-        dot = f.color ? 12 : 0;
-      const tw = f.tier ? ctx.measureText(label).width + 14 : Math.min(ctx.measureText(label).width + 14 + dot, sw - 6),
+        dot = f.color ? 12 : 0,
+        mark = dot || (isFolder(f) ? 14 : 0);
+      const tw = f.tier ? ctx.measureText(label).width + 14 : Math.min(ctx.measureText(label).width + 14 + mark, sw - 6),
         lx = f.tier ? Math.max(4, sx - tw - 16) : Math.max(sx + 4, 4),
         ly = f.tier ? (is3D() ? proj(f.x, f.y + 440)[1] : sy + 440 * s) - 10 : Math.max(sy + 4, 4);
       const r = [lx, ly, lx + tw, ly + 20];
@@ -2930,13 +2949,13 @@
         ctx.beginPath();
         ctx.arc(lx + 10, ly + 10, 4, 0, 7);
         ctx.fill();
-      }
+      } else if (mark) drawFolderIcon(lx + 5, ly + 4.5, 12, C.dim);
       ctx.fillStyle = f.depth <= 1 ? C.text : C.dim;
       ctx.save();
       ctx.beginPath();
       ctx.rect(lx, ly, tw, 20);
       ctx.clip();
-      ctx.fillText(label, lx + 7 + dot, ly + 10.5);
+      ctx.fillText(label, lx + 7 + mark, ly + 10.5);
       ctx.restore();
       if (++n > 160) break;
     }
