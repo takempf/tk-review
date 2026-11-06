@@ -61,18 +61,14 @@
 }
 
 .sort {
+  composes: tk-type-label from global;
   display: inline-flex;
   gap: var(--tk-space-1);
   align-items: center;
   margin: 0 calc(var(--tk-space-1) * -1);
   padding: var(--tk-space-1);
   color: var(--tk-accent-2);
-  font-family: var(--tk-label-font);
   font-size: var(--tk-text-xs);
-  font-weight: var(--tk-label-weight);
-  font-stretch: var(--tk-label-stretch);
-  letter-spacing: var(--tk-label-tracking);
-  text-transform: var(--tk-label-transform);
   background: none;
   border: 0;
   border-radius: var(--tk-radius-sm);

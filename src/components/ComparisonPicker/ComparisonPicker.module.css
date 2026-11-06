@@ -63,16 +63,9 @@
   border-top: 1px solid var(--border);
 }
 
-.heading,
-.disclosure {
+.heading {
+  composes: tk-type-label tk-ink-label from global;
   margin: 0;
-  color: var(--tk-label);
-  font-family: var(--tk-label-font);
-  font-size: var(--tk-label-size);
-  font-weight: var(--tk-label-weight);
-  font-stretch: var(--tk-label-stretch);
-  letter-spacing: var(--tk-label-tracking);
-  text-transform: var(--tk-label-transform);
 }
 
 .prField {
@@ -81,7 +74,9 @@
 
 /* Styled like the heading so the two sections read as peers. */
 .disclosure {
+  composes: tk-type-label tk-ink-label from global;
   display: flex;
+  margin: 0;
   gap: var(--space-1);
   align-items: center;
   padding: 0;

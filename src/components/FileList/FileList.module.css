@@ -7,19 +7,13 @@
 }
 
 .heading {
+  composes: tk-type-label tk-ink-label from global;
   display: flex;
   flex: none;
   align-items: center;
   justify-content: space-between;
   min-height: var(--bar-height);
   padding: 0 var(--space-3);
-  color: var(--tk-label);
-  font-family: var(--tk-label-font);
-  font-size: var(--tk-label-size);
-  font-weight: var(--tk-label-weight);
-  font-stretch: var(--tk-label-stretch);
-  letter-spacing: var(--tk-label-tracking);
-  text-transform: var(--tk-label-transform);
   border-bottom: 1px solid var(--border);
 }
 

@@ -478,13 +478,7 @@
 }
 
 .settingsTitle {
-  color: var(--tk-label);
-  font-family: var(--tk-label-font);
-  font-size: var(--tk-label-size);
-  font-weight: var(--tk-label-weight);
-  font-stretch: var(--tk-label-stretch);
-  letter-spacing: var(--tk-label-tracking);
-  text-transform: var(--tk-label-transform);
+  composes: tk-type-label tk-ink-label from global;
 }
 
 .settingsField {
