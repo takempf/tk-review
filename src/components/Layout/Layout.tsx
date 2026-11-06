@@ -42,9 +42,10 @@ function useWidth<T extends HTMLElement>() {
   return { ref, width };
 }
 
-/** Whether a side panel is showing, remembered across launches like its width. */
-function useStoredShown(storageKey: string) {
+/** Whether a side panel is showing; with a `storageKey`, remembered across launches like its width. */
+function useShown(storageKey: string | null) {
   const [shown, setShown] = useState(() => {
+    if (!storageKey) return true;
     try {
       return localStorage.getItem(storageKey) !== "false";
     } catch {
@@ -54,6 +55,7 @@ function useStoredShown(storageKey: string) {
 
   const show = (next: boolean) => {
     setShown(next);
+    if (!storageKey) return;
     try {
       localStorage.setItem(storageKey, String(next));
     } catch {
@@ -210,8 +212,9 @@ export function Layout({
   useSearchReveal(appRef);
   const sidebarWidth = useStoredSize(SIDEBAR);
   const asideWidth = useStoredSize(ASIDE);
-  const sidebarShown = useStoredShown("tk-review:sidebar-shown");
-  const asideShown = useStoredShown("tk-review:aside-shown");
+  const sidebarShown = useShown("tk-review:sidebar-shown");
+  // Every review opens with its review panel; hiding it is for that review alone.
+  const asideShown = useShown(null);
   const sidebarLaidOut = useLaidOut(sidebarShown.shown);
   const asideLaidOut = useLaidOut(asideShown.shown);
   const body = useWidth<HTMLDivElement>();

@@ -109,3 +109,22 @@ test("a PR's number and title glide between its tab and the review's header, bot
   await expect(heading(firstNumber)).toBeVisible();
   expect(await glidedPrs(page, 5)).toEqual([firstNumber, secondNumber].sort((a, b) => a - b));
 });
+
+test("each review opens with its review panel shown, even after another review hid its own", async ({
+  page,
+}) => {
+  // Reviews kept out of sight stay mounted but `inert`, and WebKit still lists their buttons.
+  const panelToggle = (label: string) =>
+    page.locator(`button[aria-label="${label} review panel"]:not([inert] *)`);
+  await page.goto("/dev-harness/");
+  await rows(page).nth(0).click();
+  await panelToggle("Hide").click();
+  await expect(panelToggle("Show")).toBeVisible();
+
+  await page.getByRole("button", { name: "Pull requests", exact: true }).click();
+  await rows(page).nth(1).click();
+  await expect(panelToggle("Hide")).toBeVisible();
+
+  await page.reload();
+  await expect(panelToggle("Hide")).toBeVisible();
+});
