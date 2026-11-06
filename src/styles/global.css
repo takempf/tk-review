@@ -5,15 +5,22 @@
 @import "tk-design-system/styles.css";
 @import "@fontsource-variable/archivo/wdth.css";
 
-/* Geist and Geist Mono from Vercel's own build (the `geist` package, 1.7.2),
-   under the names the theme asks for. Fontsource's builds drop the stylistic
-   sets, ss09 among them (see `body`). Upright only, as before. */
+/* Vercel's own Geist build (`geist` 1.7.2), since Fontsource's drops the stylistic sets, ss09 among them (see `body`). */
 @font-face {
   font-family: "Geist Variable";
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
   src: url("./fonts/Geist-Variable.woff2") format("woff2");
+}
+
+/* The reset turns off font synthesis, so without this face italic Geist draws upright. */
+@font-face {
+  font-family: "Geist Variable";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/Geist-Italic-Variable.woff2") format("woff2");
 }
 
 @font-face {
