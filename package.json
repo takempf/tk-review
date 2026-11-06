@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "tauri dev",
+    "app:prod": "tauri build --bundles app && open \"src-tauri/target/release/bundle/macos/TK Review.app\"",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "check": "biome check --write .",

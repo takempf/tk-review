@@ -26,6 +26,8 @@ pnpm install
 pnpm app        # builds the Rust side and opens the window
 ```
 
+`pnpm app:prod` builds the release app instead, to `src-tauri/target/release/bundle/macos/TK Review.app`, and opens it.
+
 The first `pnpm app` downloads CEF (about 1 GB, into `~/Library/Caches/tauri-cef`) and compiles the whole Rust side, so give it a few minutes. The app runs on [Tauri 3's Chromium runtime](https://v3.tauri.app/develop/cef/), not the system's WebKit. Design system edits show up live.
 
 ## Development
