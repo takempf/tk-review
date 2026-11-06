@@ -174,25 +174,30 @@ fn run_git_with_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8
             _ => GitError::Command(err.to_string()),
         })?;
 
-    // Taking the handle here also closes it at the end of this statement, which
-    // is what tells git the input is finished.
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| GitError::Command("could not open git stdin".into()))?
-        .write_all(input)
-        .map_err(|err| GitError::Command(err.to_string()))?;
+        .ok_or_else(|| GitError::Command("could not open git stdin".into()))?;
+    // Written alongside the read, since git can fill its output pipe before it has read all its input.
+    let (written, output) = std::thread::scope(|scope| {
+        // Dropping `stdin` when the write ends is what tells git the input is finished.
+        let writer = scope.spawn(move || stdin.write_all(input));
+        let output = child.wait_with_output();
+        (writer.join(), output)
+    });
+    let output = output.map_err(|err| GitError::Command(err.to_string()))?;
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| GitError::Command(err.to_string()))?;
-
+    // Checked first: a git that fails early breaks the pipe, and its stderr says why.
     if !output.status.success() {
         return Err(GitError::Command(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    Ok(output.stdout)
+    match written {
+        Ok(Ok(())) => Ok(output.stdout),
+        Ok(Err(err)) => Err(GitError::Command(err.to_string())),
+        Err(_) => Err(GitError::Command("writing to git stdin panicked".into())),
+    }
 }
 
 fn run_git_text(root: &Path, args: &[&str]) -> Result<String, GitError> {
@@ -1137,6 +1142,29 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+
+    #[test]
+    fn feeds_git_more_input_than_a_pipe_holds_while_reading_its_output() {
+        let repo = TestRepo::new();
+        repo.write("blob.txt", &"x".repeat(1024));
+        repo.commit("blob");
+        let sha = repo.git(&["rev-parse", "HEAD:blob.txt"]);
+        let input = format!("{sha}\n").repeat(5000);
+        let root = repo.path().to_owned();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(run_git_with_stdin(
+                &root,
+                &["cat-file", "--batch"],
+                input.as_bytes(),
+            ));
+        });
+        let output = received
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("git finished instead of deadlocking")
+            .expect("cat-file succeeds");
+        assert!(output.len() > 5000 * 1024);
     }
 
     /// Everything downstream depends on the exact byte layout of `-z` output, so
