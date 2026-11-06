@@ -1,6 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Icon, SpinnerIcon } from "tk-design-system";
 import css from "./App.module.css";
 import { CommitList } from "./components/CommitList/CommitList";
 import { ComparisonPicker } from "./components/ComparisonPicker/ComparisonPicker";
@@ -94,10 +93,6 @@ function ReviewScreen() {
   const error = useTab((state) => state.error);
   const summary = useTab((state) => state.summary);
   const loadingDiff = useTab((state) => state.loadingDiff);
-  // With a PR open, refreshing re-reads it from GitHub before the diff reloads;
-  // the button stays busy for that leg too, not only for the diff.
-  const refreshingPr = useTab((state) => state.refreshingPr);
-  const refresh = useTab((state) => state.refresh);
   const dismissError = useTab((state) => state.dismissError);
   // Diff links reveal the review panel for comments or file explanations.
   const panelFocus = useTab(
@@ -119,21 +114,6 @@ function ReviewScreen() {
             </div>
             <span className={css.spacer} />
             <DiffStats />
-            <Button
-              size="sm"
-              onClick={() => void refresh()}
-              disabled={loadingDiff || refreshingPr || openingPr}
-            >
-              {loadingDiff || refreshingPr ? (
-                <>
-                  <SpinnerIcon /> Refreshing…
-                </>
-              ) : (
-                <>
-                  <Icon name="refresh" /> Refresh
-                </>
-              )}
-            </Button>
           </>
         }
         sidebar={

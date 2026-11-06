@@ -5,6 +5,7 @@ import { Icon, Logo, Menu, SceneryWindow, SpinnerIcon } from "tk-design-system";
 import { chooseFolder } from "../../lib/chooseFolder";
 import { useAppStore } from "../../store/appStore";
 import { type RecentRepo, readRecentRepos } from "../../store/history";
+import { RefreshButton } from "../RefreshButton/RefreshButton";
 import css from "./TitleBar.module.css";
 
 /**
@@ -136,7 +137,11 @@ export function TitleBar({
         </span>
         <span className={css.divider} />
         <RepoSelect />
-        <div ref={actionsRef} className={css.actions} />
+        <div className={css.actions}>
+          <RefreshButton />
+          {/* The screen on show puts its search button here. */}
+          <div ref={actionsRef} className={css.searchSlot} />
+        </div>
       </div>
       {children}
     </header>

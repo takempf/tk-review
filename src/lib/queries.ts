@@ -4,6 +4,7 @@ import {
   type InfiniteData,
   infiniteQueryOptions,
   QueryClient,
+  useIsFetching,
 } from "@tanstack/react-query";
 import type { PersistQueryClientProviderProps } from "@tanstack/react-query-persist-client";
 import { gitApi, type PrListFilter, type PrPage, type PrSummary } from "../ipc/git";
@@ -126,4 +127,8 @@ export function prListQuery(root: string, login: string | null, filter: PrListFi
  */
 export function invalidatePrLists(root: string): Promise<void> {
   return queryClient.invalidateQueries({ queryKey: prListsKey(root) });
+}
+
+export function usePrListsFetching(root: string): boolean {
+  return useIsFetching({ queryKey: prListsKey(root) }) > 0;
 }

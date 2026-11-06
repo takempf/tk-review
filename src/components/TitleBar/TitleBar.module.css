@@ -73,7 +73,12 @@
   top: 50%;
   transform: translateY(-50%);
   display: flex;
+  gap: var(--tk-space-1);
   align-items: center;
+}
+
+.searchSlot {
+  display: contents;
 }
 
 .brand {

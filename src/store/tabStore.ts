@@ -484,7 +484,6 @@ export interface TabState {
    * set, when it could not be opened.
    */
   openPr: (url: string) => Promise<boolean>;
-  refreshPr: () => Promise<void>;
   /**
    * For a tab brought back from what it had loaded: checks its PR against
    * GitHub, and reloads the diff only if the head has moved since.
@@ -925,23 +924,6 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
         }
       },
 
-      async refreshPr() {
-        const { repo, pr, refreshingPr, loadingDiff } = get();
-        if (!pr || refreshingPr || loadingDiff) return;
-
-        set({ refreshingPr: true, error: null });
-        try {
-          await syncPr(repo.root, pr);
-          set({ refreshingPr: false });
-          await loadDiff();
-        } catch (error) {
-          set({
-            refreshingPr: false,
-            error: toAppError(error, "Could not refresh the pull request"),
-          });
-        }
-      },
-
       async revalidatePr() {
         const { repo, pr, refreshingPr, loadingDiff } = get();
         if (!pr || refreshingPr || loadingDiff) return;
@@ -972,10 +954,7 @@ export function createTabStore(init: TabInit, env: TabEnv): TabStore {
           return;
         }
         if (pr) {
-          // Re-reading the PR is a network round-trip through `gh`, and nothing
-          // else is marked busy until `loadDiff` starts — so hold `refreshingPr`
-          // across it. Both Refresh buttons watch that flag, so neither can be
-          // pressed into a second concurrent run while this one talks to GitHub.
+          // Held across the `gh` round-trip, so the Refresh button stays busy until `loadDiff` takes over.
           set({ refreshingPr: true, error: null });
           try {
             await syncPr(repo.root, pr);

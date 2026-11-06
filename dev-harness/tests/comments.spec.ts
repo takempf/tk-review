@@ -389,7 +389,7 @@ test("a GitHub reply beside an AI finding expands at that trigger", async ({ pag
   await page.getByRole("button", { name: "Post", exact: true }).click();
   await expect(page.getByRole("link", { name: "Posted to PR", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "PR", exact: true }).click();
-  await page.getByRole("button", { name: "Refresh", exact: true }).last().click();
+  await page.getByRole("button", { name: "Refresh pull request", exact: true }).click();
   await aiTab.click();
   const reply = page.getByText("Fixed — moved it as suggested, and added a test that covers it.", {
     exact: true,

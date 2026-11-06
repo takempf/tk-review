@@ -227,34 +227,6 @@ function runningEngine(state: TabState, kind: AgentRunKind): ReviewEngine | unde
   return Object.values(state.agentRuns).find((run) => run.kind === kind)?.engine;
 }
 
-function PrRefreshButton() {
-  const refreshPr = useTab((state) => state.refreshPr);
-  const refreshingPr = useTab((state) => state.refreshingPr);
-  // The header's Refresh does the same work when a PR is open; don't offer a
-  // second run while either one is still going.
-  const loadingDiff = useTab((state) => state.loadingDiff);
-  const openingPr = useTab((state) => state.openingPr);
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => void refreshPr()}
-      disabled={refreshingPr || loadingDiff || openingPr}
-      title="Refresh pull request details and discussion"
-    >
-      {refreshingPr || loadingDiff ? (
-        <>
-          <SpinnerIcon /> Refreshing…
-        </>
-      ) : (
-        <>
-          <Icon name="refresh" /> Refresh
-        </>
-      )}
-    </Button>
-  );
-}
-
 /**
  * One comment from GitHub: who wrote it and when, then what they said. `meta`
  * is small print for the byline, such as a thread's state.
@@ -2698,7 +2670,7 @@ export function ReviewPanel() {
           </Tabs.Tab>
         </Tabs.List>
         <div className={css.tabActions}>
-          {activeTab === "pr" ? <PrRefreshButton /> : reviewInHead ? null : <ReviewButton />}
+          {activeTab === "pr" || reviewInHead ? null : <ReviewButton />}
         </div>
       </div>
       {/* All stay mounted so drafts, open composers and runs' loaders survive a tab switch. */}

@@ -14,7 +14,7 @@ import {
 } from "tk-design-system";
 import { errorMessage, type PrListFilter, type PrSummary, toAppError } from "../../ipc/git";
 import { chooseFolder } from "../../lib/chooseFolder";
-import { invalidatePrLists, prListQuery } from "../../lib/queries";
+import { prListQuery } from "../../lib/queries";
 import {
   ScreenMorph,
   screenSettling,
@@ -343,9 +343,7 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
   const listings = usePrListings(root, login, needed, shown);
   const listing = listings[needed];
   const all = listings.all;
-  // Rows already on screen stay up while their lists refetch; only the
-  // Refresh button says so, and a failed refetch leaves them where they are.
-  const refreshing = listing.isFetching || all.isFetching;
+  // Rows already on screen stay up while their lists refetch, and a failed refetch leaves them.
   const refreshFailed = listing.isError && !listing.isFetching && listing.data != null;
   const listFailed = listing.isError && !listing.isFetching && !listing.data && tab !== "reviewed";
   // Only with nothing cached: no earlier visit or launch has listed this tab.
@@ -473,17 +471,6 @@ function PrBrowser({ root, login }: { root: string; login: string | null }) {
         <div className={css.headerActions}>
           <Button variant="ghost" onClick={() => void compareBranches()}>
             <Icon name="branch" /> Compare branches
-          </Button>
-          <Button onClick={() => void invalidatePrLists(root)} disabled={refreshing}>
-            {refreshing ? (
-              <>
-                <SpinnerIcon /> {listing.data ? "Refreshing…" : "Loading…"}
-              </>
-            ) : (
-              <>
-                <Icon name="refresh" /> Refresh
-              </>
-            )}
           </Button>
         </div>
       </header>
