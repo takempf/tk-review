@@ -7,13 +7,10 @@ import css from "./TabBar.module.css";
 
 function Tab({
   tab,
-  active,
   onShow,
   onClose,
 }: {
   tab: ReviewTab;
-  /** The tab whose review is on screen. */
-  active: boolean;
   onShow: () => void;
   onClose: () => void;
 }) {
@@ -22,23 +19,17 @@ function Tab({
   const base = useStore(tab.store, (state) => state.base);
   const compare = useStore(tab.store, (state) => state.compare);
   const title = pr ? pr.title : `${base ?? "…"} … ${compare ?? "…"}`;
-  // Named only for a change that moves them: when the tabs shift, every tab and
-  // its text (so a tab resizing doesn't stretch its text with it); otherwise
-  // only the number and title gliding to or from the list. A closing tab's
-  // text folds away with it instead.
   const shifting = useAppStore((state) => state.screenChange?.shifting ?? false);
-  const carried = useAppStore((state) => {
-    const change = state.screenChange;
-    if (!change || change.folding === tab.id) return false;
-    return change.shifting || change.carrying === tab.morphKey;
-  });
+  // Named apart from the tab so resizing doesn't stretch it; a closing tab's text folds away with it.
+  const textShifting = useAppStore(
+    (state) => state.screenChange?.shifting === true && state.screenChange.folding !== tab.id,
+  );
   const name = pr ? `#${pr.number} ${pr.title}` : title;
 
   return (
     <ScreenMorph id={tab.morphKey} part="tab" active={shifting}>
       <li
         className={css.tab}
-        data-active={active || undefined}
         // A middle click closes, as it does a browser's tab.
         onMouseDown={(event) => {
           if (event.button === 1) event.preventDefault();
@@ -53,23 +44,17 @@ function Tab({
             which scales as the tab comes and goes while this fades. */}
         <ScreenMorph id={tab.morphKey} part="content" active={shifting}>
           <div className={css.content}>
-            <button
-              type="button"
-              className={css.show}
-              onClick={onShow}
-              title={name}
-              aria-current={active ? "page" : undefined}
-            >
+            <button type="button" className={css.show} onClick={onShow} title={name}>
               <TabStatus store={tab.store} />
               <span className={css.label}>
                 {pr ? (
-                  <ScreenMorph id={tab.morphKey} part="number" active={carried}>
+                  <ScreenMorph id={tab.morphKey} part="number" active={textShifting}>
                     <span className={css.number}>#{pr.number}</span>
                   </ScreenMorph>
                 ) : (
                   <Icon name="branch" className={css.branch} />
                 )}
-                <ScreenMorph id={tab.morphKey} part="title" active={carried}>
+                <ScreenMorph id={tab.morphKey} part="title" active={textShifting}>
                   <span className={css.title}>{title}</span>
                 </ScreenMorph>
               </span>
@@ -90,20 +75,13 @@ function Tab({
   );
 }
 
-/**
- * The title bar's second row: in a review, the way back to the list, and every
- * open tab, the one on screen marked as such. A tab stays until its close
- * button (or a middle click) closes it.
- *
- * Each tab shows its number, title and status. Opening a PR carries its number
- * and title up from its row on the list into its tab. The back button's label
- * is the list's "Pull requests" heading, scaled down on the way in.
- */
+/** The way back to the list and every open tab but the one on screen, whose header names it. */
 export function TabBar({ className }: { className?: string }) {
-  const tabs = useAppStore((state) => state.tabs);
+  const allTabs = useAppStore((state) => state.tabs);
   const visible = useAppStore(tabBarShown);
   const inReview = useAppStore((state) => state.view === "review");
   const shown = useAppStore((state) => shownTab(state)?.id ?? null);
+  const tabs = allTabs.filter((tab) => tab.id !== shown);
   const showTab = useAppStore((state) => state.showTab);
   const closeTab = useAppStore((state) => state.closeTab);
   const goHome = useAppStore((state) => state.goHome);
@@ -135,7 +113,6 @@ export function TabBar({ className }: { className?: string }) {
             <Tab
               key={tab.id}
               tab={tab}
-              active={tab.id === shown}
               onShow={() => void showTab(tab.id)}
               onClose={() => closeTab(tab.id)}
             />

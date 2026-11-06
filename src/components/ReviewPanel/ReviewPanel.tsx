@@ -574,13 +574,10 @@ function PrSection({ pr }: { pr: PrContext }) {
     >
       <div data-search-id="pr:description" tabIndex={-1}>
         <div className={css.prHeader}>
-          <div className={`${css.itemHead} ${css.titleHead}`}>
-            <p className={css.prName}>{pr.title}</p>
+          <div className={css.itemHead}>
+            <p className={css.subheading}>Description</p>
             {pr.body ? <CopyButton text={pr.body} label="Copy description" /> : null}
           </div>
-          <a className={css.prLink} href={pr.url} target="_blank" rel="noreferrer">
-            <span className={css.prNumber}>#{pr.number}</span> on GitHub <Icon name="external" />
-          </a>
           {prHeadMoved ? (
             <p className={css.prMoved}>PR has new commits; the comparison was refreshed.</p>
           ) : null}

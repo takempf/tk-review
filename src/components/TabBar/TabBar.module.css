@@ -81,17 +81,6 @@
   &:hover {
     background: color-mix(in oklab, var(--bg) 75%, transparent);
   }
-
-  /* The one on screen is the review's own panel, reaching up into the bar:
-     the header's colour, standing over the bar's bottom rule. Off the
-     scenery, its text needs no shadow to read. */
-  &[data-active],
-  &[data-active]:hover {
-    position: relative;
-    z-index: 1;
-    background: var(--bg);
-    text-shadow: none;
-  }
 }
 
 /* Marks the tab's parts in a screen change, for global.css to scale its
@@ -127,8 +116,7 @@
   background: none;
   border: 0;
 
-  .tab:hover &,
-  .tab[data-active] & {
+  .tab:hover & {
     color: var(--text);
   }
 
@@ -139,8 +127,6 @@
   }
 }
 
-/* Number and title glide here from the PR's row on the list, and back to it
-   when the tab closes on the way there. */
 .label {
   display: flex;
   gap: var(--tk-space-3);
@@ -172,9 +158,7 @@
   white-space: nowrap;
 }
 
-/* Out of the way until the tab is pointed at, keeping its room so the title
-   doesn't reflow under the pointer. The tab on screen always shows it: it is
-   the one way to close the review in front of you. */
+/* Hidden until the tab is pointed at, keeping its room so the title doesn't reflow. */
 .close {
   display: flex;
   flex: none;
@@ -194,7 +178,6 @@
     background-color var(--tk-duration-1) var(--tk-ease-fade);
 
   .tab:hover &,
-  .tab[data-active] &,
   &:focus-visible {
     opacity: 1;
   }

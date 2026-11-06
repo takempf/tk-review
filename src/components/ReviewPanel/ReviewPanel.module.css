@@ -122,7 +122,6 @@
   overflow-y: auto;
 }
 
-.prName,
 .subheading,
 .muted,
 .prMoved {
@@ -135,28 +134,7 @@
   flex-direction: column;
   gap: var(--space-2);
   align-items: flex-start;
-  padding: var(--panel-inset);
-  border-bottom: 1px solid var(--border);
-}
-
-/* Above the description's own headings (18px), so it reads as the page's title. */
-.prName {
-  font-size: var(--tk-text-xl);
-  font-weight: 600;
-  line-height: var(--tk-leading-tight);
-}
-
-/* Its look is every link's (global.css). */
-.prLink {
-  display: inline-flex;
-  gap: var(--space-1);
-  align-items: center;
-}
-
-.prNumber {
-  font-family: var(--tk-font-mono);
-  font-weight: var(--pr-number-weight);
-  color: var(--pr-number);
+  padding: var(--panel-inset) var(--panel-inset) 0;
 }
 
 .prSkeleton {

@@ -11,15 +11,15 @@ test("tabs stay open after they are left, until their close button closes them",
   await expect(rows(page)).toHaveCount(4);
 
   await rows(page).nth(0).click();
-  await expect(tabs(page)).toHaveCount(1);
+  await expect(tabs(page)).toHaveCount(0);
   await page.getByRole("button", { name: "Pull requests", exact: true }).click();
   await expect(rows(page)).toHaveCount(4);
   await expect(tabs(page)).toHaveCount(1);
 
   await rows(page).nth(1).click();
-  await expect(tabs(page)).toHaveCount(2);
+  await expect(tabs(page)).toHaveCount(1);
   await tabs(page).nth(0).getByRole("button").first().click();
-  await expect(tabs(page)).toHaveCount(2);
+  await expect(tabs(page)).toHaveCount(1);
   await page.getByRole("button", { name: "Pull requests", exact: true }).click();
   await expect(tabs(page)).toHaveCount(2);
 

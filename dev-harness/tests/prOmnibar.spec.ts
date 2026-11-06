@@ -3,6 +3,8 @@ import { expect, type Page, test } from "@playwright/test";
 const input = (page: Page) =>
   page.getByRole("combobox", { name: "Filter pull requests, or paste a pull request link" });
 const rows = (page: Page) => page.locator("tr[data-pr]");
+const reviewHeading = (page: Page, number: number) =>
+  page.getByRole("link", { name: new RegExp(`^#${number} `) });
 const remove = (page: Page, name: string) =>
   page.getByRole("button", { name: `Remove ${name}`, exact: true });
 
@@ -202,9 +204,7 @@ test("title matches offer multiple PRs and clicking opens the selected review ta
   const prs = page.getByRole("option", { name: /^Open pull request / });
   await expect(prs).toHaveCount(2);
   await page.getByRole("option", { name: /^Open pull request #131 / }).click();
-  await expect(
-    page.getByRole("navigation", { name: "Open reviews" }).getByTitle(/^#131 Show where/),
-  ).toHaveAttribute("aria-current", "page");
+  await expect(reviewHeading(page, 131)).toContainText("Show where");
   await expect(page.getByRole("listbox")).not.toBeVisible();
 });
 
@@ -216,9 +216,7 @@ for (const branch of ["feature/diff-viewer", "reviews-migration"]) {
     await expect(pr).toHaveAttribute("data-highlighted", "");
     await expect(pr).toContainText(branch);
     await input(page).press("Enter");
-    await expect(
-      page.getByRole("navigation", { name: "Open reviews" }).getByTitle(new RegExp(`^#${number} `)),
-    ).toHaveAttribute("aria-current", "page");
+    await expect(reviewHeading(page, number)).toBeVisible();
   });
 }
 
@@ -238,7 +236,7 @@ test("PR results coexist with filter suggestions and respect existing chips", as
   await expect(page.getByRole("option", { name: /^Open pull request / })).toHaveCount(1);
   await page.getByRole("option", { name: /^Open pull request #47 / }).click();
   const tabs = page.getByRole("navigation", { name: "Open reviews" });
-  await expect(tabs.getByTitle(/^#47 Render review/)).toHaveAttribute("aria-current", "page");
+  await expect(reviewHeading(page, 47)).toContainText("Render review");
   await tabs.getByRole("button", { name: "Pull requests", exact: true }).click();
   await expect(remove(page, "author @octocat")).toBeVisible();
   await expect(
@@ -247,8 +245,9 @@ test("PR results coexist with filter suggestions and respect existing chips", as
   await expect(input(page)).toHaveValue("");
   await input(page).fill("feature/diff-viewer");
   await page.getByRole("option", { name: /^Open pull request #47 / }).click();
+  await expect(reviewHeading(page, 47)).toContainText("Render review");
+  await tabs.getByRole("button", { name: "Pull requests", exact: true }).click();
   await expect(tabs.getByTitle(/^#47 Render review/)).toHaveCount(1);
-  await expect(tabs.getByTitle(/^#47 Render review/)).toHaveAttribute("aria-current", "page");
 });
 
 test("chips wrap inside the field and suggestions stay within a narrow viewport", async ({
