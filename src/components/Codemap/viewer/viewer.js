@@ -1669,7 +1669,7 @@
     ctx.fill();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
-  // An import's curve as its ends, two handles and arriving direction, in one shared buffer: x0 y0 h1 h2 x1 y1 ox oy.
+  // An import's curve as its ends, two handles and direction, in one shared buffer: x0 y0 h1 h2 x1 y1 ox oy.
   const CURVE = new Float64Array(10);
   function edgeCurve(a, b) {
     const c = CURVE;
@@ -1737,12 +1737,17 @@
     edgeCurve(a, b);
     return curvePath();
   }
+  // The arrowhead sits on the importing file, pointing the way the imported code flows.
+  function curveHead() {
+    const c = CURVE;
+    return [c[0], c[1], -c[8], -c[9]];
+  }
   // The curve last worked out, onto the current path.
   function curvePath() {
     const c = CURVE;
     ctx.moveTo(c[0], c[1]);
     ctx.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
-    return [c[6], c[7], c[8], c[9]];
+    return curveHead();
   }
 
   function arrow(x, y, dx, dy, size) {
@@ -1860,8 +1865,8 @@
       if (n.ad) cx += countPill(cx, cy, '+' + fmtN(n.ad), ADD) + 4;
       if (n.dl) cx += countPill(cx, cy, '−' + fmtN(n.dl), DEL) + 4;
     }
-    if (fout[i]) cx += countPill(cx, cy, '→ ' + fout[i], C.imports) + 4;
-    if (fin[i]) cx += countPill(cx, cy, '← ' + fin[i], C.importedBy) + 4;
+    if (fout[i]) cx += countPill(cx, cy, '← ' + fout[i], C.imports) + 4;
+    if (fin[i]) cx += countPill(cx, cy, '→ ' + fin[i], C.importedBy) + 4;
     if (cyc[i]) cx += countPill(cx, cy, '↻ ' + cyc[i], AMBER) + 4;
     if (n.k === 'img')
       countPill(cx, cy, fmtB(n.b) + (THUMBS && THUMBS[n.p] ? ` · ${THUMBS[n.p].w}×${THUMBS[n.p].h}` : ''), C.dim);
@@ -2456,7 +2461,7 @@
           const mx = (a[0] + c[0]) / 2,
             my = Math.min(a[1], c[1]) - Math.hypot(c[0] - a[0], c[1] - a[1]) * 0.18;
           ctx.quadraticCurveTo(mx, my, c[0], c[1]);
-          heads.push([c[0], c[1], c[0] - mx, c[1] - my]);
+          heads.push([a[0], a[1], a[0] - mx, a[1] - my]);
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = f === sel ? 1.8 : 1.3;
