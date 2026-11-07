@@ -508,6 +508,7 @@ fn invalid_pr_ref(value: &str) -> GitError {
 pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitError> {
     let reference = parse_pr_ref(url)?;
     let pr = read_pr(&reference)?;
+    let reference = parse_pr_ref(&pr.url)?;
     let base_remote = find_remote(root, &reference)?;
     let (compare_ref, head_sha) = git::fetch_pr_head(
         root,
@@ -543,6 +544,7 @@ pub fn open_pr(root: &Path, url: &str, keep: &[u64]) -> Result<PrContext, GitErr
 pub fn read_pr_context(root: &Path, url: &str) -> Result<PrContext, GitError> {
     let reference = parse_pr_ref(url)?;
     let pr = read_pr(&reference)?;
+    let reference = parse_pr_ref(&pr.url)?;
     let base_remote = find_remote(root, &reference)?;
     let (comments, threads) = read_discussion(&reference)?;
     Ok(PrContext {
@@ -1391,14 +1393,61 @@ fn github_error_reasons(body: &str) -> Vec<String> {
 }
 
 fn find_remote(root: &Path, reference: &PrRef) -> Result<String, GitError> {
-    git::remote_urls(root)?
-        .into_iter()
-        .find(|(_, remote_url)| remote_matches(remote_url, reference))
-        .map(|(name, _)| name)
-        .ok_or_else(|| GitError::Command(format!(
-            "This repository has no remote for {}/{}/{}. Add a remote for {}/{} before opening this pull request.",
-            reference.host, reference.owner, reference.repo, reference.owner, reference.repo
-        )))
+    find_remote_with(&git::remote_urls(root)?, reference, |host, owner, repo| {
+        let raw = run_gh(&[
+            "api",
+            "--hostname",
+            host,
+            &format!("repos/{owner}/{repo}"),
+            "--jq",
+            ".full_name",
+        ])?;
+        Ok(String::from_utf8_lossy(&raw).trim().to_owned())
+    })
+}
+
+/// GitHub redirects remotes after an account, repository, or owner changes.
+/// Listing PRs follows that redirect and returns their current URLs, so when
+/// no remote matches directly, ask GitHub where each same-host remote leads.
+/// The original remote name is still what git must fetch and track locally.
+fn find_remote_with(
+    remotes: &[(String, String)],
+    reference: &PrRef,
+    mut canonical_name: impl FnMut(&str, &str, &str) -> Result<String, GitError>,
+) -> Result<String, GitError> {
+    if let Some((name, _)) = remotes
+        .iter()
+        .find(|(_, url)| remote_matches(url, reference))
+    {
+        return Ok(name.clone());
+    }
+
+    let target = format!("{}/{}", reference.owner, reference.repo);
+    let mut lookup_error = None;
+    for (name, url) in remotes {
+        let Some((host, owner, repo)) = remote_repo(url) else {
+            continue;
+        };
+        if !host.eq_ignore_ascii_case(&reference.host) {
+            continue;
+        }
+        match canonical_name(&host, &owner, &repo) {
+            Ok(canonical) if canonical.eq_ignore_ascii_case(&target) => return Ok(name.clone()),
+            Ok(_) => {}
+            Err(error) => {
+                lookup_error.get_or_insert(error);
+            }
+        }
+    }
+    // A failed lookup does not prove that no remote matches. Keep the API's
+    // error rather than telling the reader to add a remote they may have.
+    if let Some(error) = lookup_error {
+        return Err(error);
+    }
+    Err(GitError::Command(format!(
+        "This repository has no remote for {}/{}/{}. Add a remote for {}/{} before opening this pull request.",
+        reference.host, reference.owner, reference.repo, reference.owner, reference.repo
+    )))
 }
 
 /// The `host/owner/repo` a Git remote points at, for normal HTTPS and SSH
@@ -1433,8 +1482,8 @@ pub fn remote_repo(remote: &str) -> Option<(String, String, String)> {
 pub fn remote_matches(remote: &str, reference: &PrRef) -> bool {
     remote_repo(remote).is_some_and(|(host, owner, repo)| {
         host.eq_ignore_ascii_case(&reference.host)
-            && owner == reference.owner
-            && repo == reference.repo
+            && owner.eq_ignore_ascii_case(&reference.owner)
+            && repo.eq_ignore_ascii_case(&reference.repo)
     })
 }
 
@@ -1781,10 +1830,111 @@ mod tests {
             "https://github.com/acme/widgets.git",
             "git@github.com:acme/widgets.git",
             "ssh://git@github.com/acme/widgets",
+            "git@GitHub.com:Acme/Widgets.git",
         ] {
             assert!(remote_matches(remote, &reference), "{remote} should match");
         }
         assert!(!remote_matches("git@github.com:acme/other.git", &reference));
+    }
+
+    #[test]
+    fn a_direct_remote_match_needs_no_github_lookup() {
+        let reference = parse_pr_ref("acme/widgets#7").expect("reference");
+        let remotes = [
+            ("fork".into(), "git@github.com:someone/widgets.git".into()),
+            ("upstream".into(), "git@github.com:Acme/Widgets.git".into()),
+        ];
+        let remote = find_remote_with(&remotes, &reference, |_, _, _| {
+            panic!("direct matches must not contact GitHub")
+        })
+        .expect("direct remote");
+        assert_eq!(remote, "upstream");
+    }
+
+    #[test]
+    fn a_redirected_remote_matches_the_canonical_pr_repository() {
+        let reference = parse_pr_ref("takempf/kempf.dev#7").expect("reference");
+        for (old_owner, old_repo) in [("Fauntleroy", "kempf.dev"), ("takempf", "old-site")] {
+            let remotes = [(
+                "origin".into(),
+                format!("git@github.com:{old_owner}/{old_repo}.git"),
+            )];
+            let remote = find_remote_with(&remotes, &reference, |host, owner, repo| {
+                assert_eq!((host, owner, repo), ("github.com", old_owner, old_repo));
+                Ok("takempf/kempf.dev".into())
+            })
+            .expect("redirected remote");
+            assert_eq!(remote, "origin");
+        }
+    }
+
+    #[test]
+    fn an_unrelated_repository_is_not_a_redirect_match() {
+        let reference = parse_pr_ref("acme/widgets#7").expect("reference");
+        let remotes = [("origin".into(), "git@github.com:someone/widgets.git".into())];
+        let error = find_remote_with(&remotes, &reference, |_, _, _| Ok("someone/widgets".into()))
+            .expect_err("a fork is a different repository");
+        assert!(error
+            .to_string()
+            .contains("no remote for github.com/acme/widgets"));
+    }
+
+    #[test]
+    fn redirect_lookups_skip_other_hosts_and_local_remotes() {
+        let reference = parse_pr_ref("acme/widgets#7").expect("reference");
+        let remotes = [
+            (
+                "enterprise".into(),
+                "git@ghe.example:acme/widgets.git".into(),
+            ),
+            ("local".into(), "/srv/git/widgets.git".into()),
+        ];
+        assert!(find_remote_with(&remotes, &reference, |_, _, _| {
+            panic!("do not look up remotes on another host")
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn a_failed_redirect_lookup_does_not_hide_a_later_match() {
+        let reference = parse_pr_ref("acme/widgets#7").expect("reference");
+        let remotes = [
+            (
+                "origin".into(),
+                "git@github.com:unavailable/widgets.git".into(),
+            ),
+            (
+                "upstream".into(),
+                "git@github.com:old-owner/widgets.git".into(),
+            ),
+        ];
+        let remote = find_remote_with(&remotes, &reference, |_, owner, _| {
+            if owner == "unavailable" {
+                Err(GitError::Command("Not Found".into()))
+            } else {
+                Ok("acme/widgets".into())
+            }
+        })
+        .expect("redirected upstream");
+        assert_eq!(remote, "upstream");
+    }
+
+    #[test]
+    fn a_failed_redirect_lookup_keeps_the_api_error() {
+        let reference = parse_pr_ref("acme/widgets#7").expect("reference");
+        let remotes = [(
+            "origin".into(),
+            "git@github.com:old-owner/widgets.git".into(),
+        )];
+        let error = find_remote_with(&remotes, &reference, |_, _, _| {
+            Err(GitError::detailed(
+                "Could not connect to GitHub",
+                "connection refused",
+            ))
+        })
+        .expect_err("a failed lookup cannot establish a mismatch");
+        assert_eq!(error.to_string(), "Could not connect to GitHub");
+        assert_eq!(error.detail(), Some("connection refused"));
     }
 
     /// Listing pull requests has no PR reference to match against — it has to
