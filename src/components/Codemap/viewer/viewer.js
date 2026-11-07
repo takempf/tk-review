@@ -3123,24 +3123,26 @@
       nctx.fillStyle = C.bright;
       nctx.fillRect(TX[sel] * s + ox - 1.5, TY[sel] * s + oy - 1.5, 4, 4);
     }
-    if (is3D()) {
-      const [cx3, cy3] = toWorld(VW / 2, VH / 2);
-      nctx.strokeStyle = C.imports;
-      nctx.lineWidth = 1.5;
-      nctx.beginPath();
-      nctx.arc(cx3 * s + ox, cy3 * s + oy, 6, 0, 7);
-      nctx.stroke();
-      return;
-    }
-    const x = (-cam.x / cam.s) * s + ox,
-      y = (-cam.y / cam.s) * s + oy,
-      w = (VW / cam.s) * s,
-      h = (VH / cam.s) * s;
+    // The screen's corners on the ground: a rectangle when flat, a parallelogram once the view tilts and turns.
+    const footprint = [toWorld(0, 0), toWorld(VW, 0), toWorld(VW, VH), toWorld(0, VH)].map(([wx, wy]) => [
+      wx * s + ox,
+      wy * s + oy,
+    ]);
+    nctx.beginPath();
+    for (const [x, y] of footprint) nctx.lineTo(x, y);
+    nctx.closePath();
+    nctx.fillStyle = hexA(C.imports, 0.07);
+    nctx.fill();
     nctx.strokeStyle = C.imports;
     nctx.lineWidth = 1.2;
-    nctx.strokeRect(x, y, w, h);
-    nctx.fillStyle = hexA(C.imports, 0.07);
-    nctx.fillRect(x, y, w, h);
+    nctx.stroke();
+    if (!is3D()) return;
+    // A heavier near edge (the screen's bottom) shows which way the camera faces as it orbits.
+    nctx.lineWidth = 2.5;
+    nctx.beginPath();
+    nctx.moveTo(footprint[2][0], footprint[2][1]);
+    nctx.lineTo(footprint[3][0], footprint[3][1]);
+    nctx.stroke();
   }
   function navTo(e) {
     const r = nav.getBoundingClientRect(),
