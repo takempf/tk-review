@@ -2106,6 +2106,22 @@
     }
     linesPill(n, mx, my, MW, ph, cardPx);
   }
+  // Frame labels are sized to the zoom, but set at their largest size and scaled: a new font size every frame misses the browser's text-shaping cache.
+  const TIER_TYPE = { font: '700 150px "Geist Variable", system-ui, sans-serif', px: 150 },
+    TIER_META_TYPE = { font: '400 63px "Geist Mono Variable", monospace', px: 63 },
+    FOLDER_TYPE = { font: '600 34px "Geist Variable", system-ui, sans-serif', px: 34 },
+    FOLDER_META_TYPE = { font: '400 16px "Geist Mono Variable", monospace', px: 16 };
+  function labelText(type, text, x, y, px, maxWidth) {
+    const k = px / type.px;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(k, k);
+    ctx.font = type.font;
+    if (maxWidth === undefined) ctx.fillText(text, 0, 0);
+    else ctx.fillText(text, 0, 0, maxWidth / k);
+    ctx.restore();
+  }
+  const labelWidth = (type, text, px) => (textWidth(type.font, text) * px) / type.px;
   function drawFrames(s, v, fAlpha) {
     // frames
     ctx.globalAlpha = fAlpha;
@@ -2122,16 +2138,16 @@
         ctx.lineTo(f.x + f.w, f.y + 440);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.font = `700 ${fs}px "Geist Variable", system-ui, sans-serif`;
         ctx.fillStyle = C.dim;
-        ctx.fillText(f.name, f.x, f.y + 440 - fs * 0.9);
-        const tw = ctx.measureText(f.name).width;
-        ctx.font = `400 ${fs * 0.42}px "Geist Mono Variable", monospace`;
+        labelText(TIER_TYPE, f.name, f.x, f.y + 440 - fs * 0.9, fs);
+        const tw = labelWidth(TIER_TYPE, f.name, fs);
         ctx.fillStyle = C.faint;
-        ctx.fillText(
-          `${f.sub} · ${f.count.toLocaleString()} files · ${fmtL(f.lines)} lines`,
+        labelText(
+          TIER_META_TYPE,
+          `${f.sub} · ${fmtN(f.count)} files · ${fmtL(f.lines)} lines`,
           f.x + tw + fs * 0.5,
           f.y + 440 - fs * 0.9,
+          fs * 0.42,
         );
         continue;
       }
@@ -2162,14 +2178,13 @@
           lx += fs * 1.15;
         }
         const nameRoom = f.w - FP * 2 - (lx - x0);
-        ctx.font = `600 ${fs}px "Geist Variable", system-ui, sans-serif`;
         ctx.fillStyle = C.text;
-        ctx.fillText(f.name, lx, ty, nameRoom);
-        const tw = Math.min(ctx.measureText(f.name).width, nameRoom);
-        ctx.font = `400 ${ms}px "Geist Mono Variable", monospace`;
+        labelText(FOLDER_TYPE, f.name, lx, ty, fs, nameRoom);
+        const tw = Math.min(labelWidth(FOLDER_TYPE, f.name, fs), nameRoom);
         ctx.fillStyle = C.faint;
-        const meta = `${f.count.toLocaleString()} files · ${fmtL(f.lines)} lines${f.sub ? ' · ' + f.sub : ''}`;
-        if (lx - f.x + tw + fs + ctx.measureText(meta).width < f.w - FP) ctx.fillText(meta, lx + tw + fs * 0.6, ty);
+        const meta = `${fmtN(f.count)} files · ${fmtL(f.lines)} lines${f.sub ? ' · ' + f.sub : ''}`;
+        if (lx - f.x + tw + fs + labelWidth(FOLDER_META_TYPE, meta, ms) < f.w - FP)
+          labelText(FOLDER_META_TYPE, meta, lx + tw + fs * 0.6, ty, ms);
       }
     }
     ctx.globalAlpha = 1;
