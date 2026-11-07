@@ -74,10 +74,28 @@ pub(super) fn read_changes(
     })
 }
 
+/// Reads a `-U0` patch, whose hunks hold only `-` and `+` lines.
 fn parse_hunks(patch: &str) -> HashMap<String, Vec<Hunk>> {
     let mut hunks: HashMap<String, Vec<Hunk>> = HashMap::new();
     let mut current: Option<String> = None;
+    // Lines still to come in the open hunk, counted so a changed line that reads like a header stays a line.
+    let (mut old_left, mut new_left) = (0u32, 0u32);
     for line in patch.lines() {
+        if old_left + new_left > 0 {
+            match line.as_bytes().first() {
+                Some(b'-') if old_left > 0 => {
+                    old_left -= 1;
+                    continue;
+                }
+                Some(b'+') if new_left > 0 => {
+                    new_left -= 1;
+                    continue;
+                }
+                // "\ No newline at end of file"
+                Some(b'\\') => continue,
+                _ => (old_left, new_left) = (0, 0),
+            }
+        }
         if line.starts_with("diff --git ") {
             current = None;
         } else if let Some(path) = line.strip_prefix("+++ ") {
@@ -85,9 +103,10 @@ fn parse_hunks(patch: &str) -> HashMap<String, Vec<Hunk>> {
             current = path
                 .strip_prefix("b/")
                 .map(|path| path.trim_end_matches('\t').to_owned());
-        } else if let (Some(path), Some(header)) = (&current, line.strip_prefix("@@ -")) {
-            if let Some(hunk) = parse_hunk_header(header) {
-                hunks.entry(path.clone()).or_default().push(hunk);
+        } else if let Some(range) = line.strip_prefix("@@ -").and_then(parse_hunk_header) {
+            (old_left, new_left) = (range[3], range[1]);
+            if let Some(path) = &current {
+                hunks.entry(path.clone()).or_default().push(range);
             }
         }
     }
@@ -120,5 +139,14 @@ mod tests {
         let hunks = parse_hunks(patch);
         assert_eq!(hunks["x.ts"], vec![[3, 2, 3, 1]]);
         assert!(!hunks.contains_key("gone.ts"));
+    }
+
+    #[test]
+    fn reads_changed_lines_that_look_like_file_headers_as_lines() {
+        let patch = "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1 +1 @@\n\
+                     --- old comment\n+++ b/elsewhere.sql\n@@ -9 +9 @@\n-a\n+b\n";
+        let hunks = parse_hunks(patch);
+        assert_eq!(hunks["q.sql"], vec![[1, 1, 1, 1], [9, 1, 9, 1]]);
+        assert!(!hunks.contains_key("elsewhere.sql"));
     }
 }
