@@ -66,7 +66,14 @@ pub fn run() {
     let context = tauri::generate_context!();
     let profile = chromium_profile(&context.config().identifier);
     tauri::Builder::default()
-        .runtime(tauri_runtime_cef::Cef::default().root_cache_path(profile))
+        .runtime(
+            tauri_runtime_cef::Cef::default()
+                .root_cache_path(profile)
+                // TK Review restores its own tabs. Chromium's session restore can
+                // reopen hidden windows after a forced quit and prevent exit.
+                // Backport tauri-runtime-cef alpha.6's startup preference.
+                .profile_preference_value("session.restore_on_startup", 5),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentRuns::default())
