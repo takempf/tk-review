@@ -1749,6 +1749,92 @@
     ctx.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
     return curveHead();
   }
+  // Dashes are laid along a stroke's whole length, on screen or off, so a dashed curve adds only its stretch in view.
+  function dashedCurvePath(dash) {
+    const c = CURVE,
+      onScreen = curveOnScreen(c),
+      t0 = viewBound(onScreen, 0, 1, false);
+    if (t0 >= 0) {
+      const t1 = viewBound(onScreen, 0, 1, true),
+        period = dash.reduce((sum, length) => sum + length, 0),
+        p = cubicPart(c, wholeDashesBefore(c, t0, period), t1);
+      ctx.moveTo(p[0], p[1]);
+      ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
+    }
+    return curveHead();
+  }
+  // The ground turns and tilts linearly, so a curve's control points on screen are those of the curve on screen.
+  function curveOnScreen(c) {
+    const s = cam.s,
+      p = [];
+    for (let k = 0; k < 8; k += 2) {
+      const x = c[k],
+        y = c[k + 1];
+      if (in3D) p.push((x * T.cy - y * T.sy) * s + cam.x, (x * T.sy + y * T.cy) * T.ct * s + cam.y);
+      else p.push(x * s + cam.x, y * s + cam.y);
+    }
+    return p;
+  }
+  // The first parameter at which a curve on screen comes within EDGE_PAD of the view (the last, with `last`), or -1, by halving it to pixel-sized pieces.
+  function viewBound(p, from, to, last) {
+    const left = Math.min(p[0], p[2], p[4], p[6]),
+      right = Math.max(p[0], p[2], p[4], p[6]),
+      top = Math.min(p[1], p[3], p[5], p[7]),
+      bottom = Math.max(p[1], p[3], p[5], p[7]);
+    if (left - EDGE_PAD > VW || right + EDGE_PAD < 0 || top - EDGE_PAD > VH || bottom + EDGE_PAD < 0) return -1;
+    if (right - left < 2 && bottom - top < 2) return last ? to : from;
+    const mid = (from + to) / 2,
+      [head, tail] = splitCubic(p, 0.5),
+      near = last ? viewBound(tail, mid, to, true) : viewBound(head, from, mid, false);
+    if (near >= 0) return near;
+    return last ? viewBound(head, from, mid, true) : viewBound(tail, mid, to, false);
+  }
+  // The parameter at or just before t a whole number of dash periods along the curve, so a cut curve's dashes hold still as the view pans.
+  function wholeDashesBefore(c, t, period) {
+    if (t <= 0) return 0;
+    // To a fiftieth of a dash, so the cut lands within a fraction of a pixel of where the full curve's dashes fall.
+    const length = cubicLength(splitCubic(c, t)[0], period / 50);
+    return Math.max(0, t - (length % period) / cubicSpeed(c, t));
+  }
+  // A cubic's control points (x0 y0 x1 y1 x2 y2 x3 y3) split at t into its two halves', by de Casteljau.
+  function splitCubic(p, t) {
+    const lerp = (a, b) => a + (b - a) * t,
+      ax = lerp(p[0], p[2]),
+      ay = lerp(p[1], p[3]),
+      bx = lerp(p[2], p[4]),
+      by = lerp(p[3], p[5]),
+      cx = lerp(p[4], p[6]),
+      cy = lerp(p[5], p[7]),
+      dx = lerp(ax, bx),
+      dy = lerp(ay, by),
+      ex = lerp(bx, cx),
+      ey = lerp(by, cy),
+      fx = lerp(dx, ex),
+      fy = lerp(dy, ey);
+    return [
+      [p[0], p[1], ax, ay, dx, dy, fx, fy],
+      [fx, fy, ex, ey, cx, cy, p[6], p[7]],
+    ];
+  }
+  function cubicPart(p, t0, t1) {
+    const head = t1 < 1 ? splitCubic(p, t1)[0] : p;
+    return t0 > 0 ? splitCubic(head, t0 / t1)[1] : head;
+  }
+  // A cubic's length, halving it until each piece's control polygon is within `tolerance` of its chord, then averaging the two.
+  function cubicLength(p, tolerance) {
+    const chord = Math.hypot(p[6] - p[0], p[7] - p[1]),
+      polygon =
+        Math.hypot(p[2] - p[0], p[3] - p[1]) + Math.hypot(p[4] - p[2], p[5] - p[3]) + Math.hypot(p[6] - p[4], p[7] - p[5]);
+    if (polygon - chord <= tolerance) return (chord + polygon) / 2;
+    const [head, tail] = splitCubic(p, 0.5);
+    return cubicLength(head, tolerance) + cubicLength(tail, tolerance);
+  }
+  function cubicSpeed(p, t) {
+    const u = 1 - t,
+      dx = 3 * (u * u * (p[2] - p[0]) + 2 * u * t * (p[4] - p[2]) + t * t * (p[6] - p[4])),
+      dy = 3 * (u * u * (p[3] - p[1]) + 2 * u * t * (p[5] - p[3]) + t * t * (p[7] - p[5]));
+    return Math.hypot(dx, dy);
+  }
 
   function arrow(x, y, dx, dy, size) {
     const l = Math.hypot(dx, dy) || 1,
@@ -1761,10 +1847,12 @@
   }
   // Handles reach at most this far past an import's two files, so most imports are ruled out before any curve is worked out.
   const EDGE_REACH = 400;
+  // An import's stroke and arrowhead reach this far past its curve, in screen pixels.
+  const EDGE_PAD = 12;
   // A curve stays within its control points, so their box, padded for its stroke and arrowhead, says whether it can show; it leaves them in CURVE.
   function edgeInView(a, b, v) {
     const s = cam.s,
-      reach = EDGE_REACH + 12 / s;
+      reach = EDGE_REACH + EDGE_PAD / s;
     if (
       Math.min(X[a], X[b]) - reach > v[2] ||
       Math.max(X[a], X[b]) + CW + reach < v[0] ||
@@ -1774,7 +1862,7 @@
       return false;
     const c = edgeCurve(a, b);
     if (!in3D) {
-      const pad = 12 / s;
+      const pad = EDGE_PAD / s;
       return !(
         Math.min(c[0], c[2], c[4], c[6]) - pad > v[2] ||
         Math.max(c[0], c[2], c[4], c[6]) + pad < v[0] ||
@@ -1795,7 +1883,7 @@
       top = Math.min(top, y);
       bottom = Math.max(bottom, y);
     }
-    return !(left - 12 > VW || right + 12 < 0 || top - 12 > VH || bottom + 12 < 0);
+    return !(left - EDGE_PAD > VW || right + EDGE_PAD < 0 || top - EDGE_PAD > VH || bottom + EDGE_PAD < 0);
   }
 
 
@@ -2119,19 +2207,21 @@
         [1, ADD],
         [2, DEL],
       ]) {
+        const dash = state === 2 ? [8 / s, 6 / s] : [];
         ctx.beginPath();
         let any = false;
         for (const j of activeE) {
           const e = E[j];
           if (e[4] !== state) continue;
           if (!edgeInView(e[0], e[1], v)) continue;
-          curvePath();
+          if (dash.length) dashedCurvePath(dash);
+          else curvePath();
           any = true;
         }
         if (!any) continue;
         ctx.strokeStyle = hexA(color, a0);
         ctx.lineWidth = Math.max(1.4, 1.6 / s);
-        ctx.setLineDash(state === 2 ? [8 / s, 6 / s] : []);
+        ctx.setLineDash(dash);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -2904,17 +2994,18 @@
     else for (const g of groups) g.list = g.list.filter((j) => !gone(E[j]));
     for (const g of groups)
       for (const dashed of [false, true]) {
+        const dash = dashed ? [5 / s, 4 / s] : [];
         ctx.beginPath();
         const heads = [];
         for (const j of g.list) {
           const e = E[j];
           if ((g.state === 2 || e[2] === 1) !== dashed || !edgeInView(e[0], e[1], v)) continue;
-          heads.push(edgeGeom(e[0], e[1]));
+          heads.push(dashed ? dashedCurvePath(dash) : curvePath());
         }
         if (!heads.length) continue;
         ctx.strokeStyle = g.color;
         ctx.lineWidth = g.w / s;
-        ctx.setLineDash(dashed ? [5 / s, 4 / s] : []);
+        ctx.setLineDash(dash);
         ctx.stroke();
         ctx.setLineDash([]);
         if (g.arrow) {
