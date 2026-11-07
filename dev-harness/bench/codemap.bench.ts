@@ -55,6 +55,7 @@ function instrument() {
 type Gesture =
   | { kind: "pan"; frames: number }
   | { kind: "pinch"; frames: number }
+  | { kind: "zoom in"; frames: number }
   | { kind: "hover"; frames: number };
 
 /** Plays a gesture into the map, one input event per frame, as a trackpad delivers them. */
@@ -91,6 +92,9 @@ function play(gesture: Gesture) {
         // Out, in twice as far, then out again: it ends where it started.
         const deltaY = t < 0.25 || t >= 0.75 ? 4 : -4;
         send(new WheelEvent("wheel", { ...wheel, deltaY, ctrlKey: true }));
+      } else if (gesture.kind === "zoom in") {
+        // Each step zooms in 2.7%.
+        send(new WheelEvent("wheel", { ...wheel, deltaY: -3, ctrlKey: true }));
       } else {
         const across = t < 0.5 ? t * 2 : 2 - t * 2;
         const x = width * (0.1 + 0.8 * across);
@@ -180,8 +184,8 @@ async function zoomLevel(frame: Frame) {
   return Number.parseFloat((await frame.textContent("#zl")) ?? "0");
 }
 
-/** Flies to a file in the biggest folder, lets it go, and zooms to `percent` around it. */
-async function zoomInto(frame: Frame, percent: number) {
+/** A component in the biggest folder. */
+async function component(frame: Frame) {
   const path = await frame.evaluate(() => {
     const nodes = (window as unknown as BenchWindow).codemapBench.nodes ?? [];
     return nodes.find(
@@ -189,7 +193,22 @@ async function zoomInto(frame: Frame, percent: number) {
     )?.p;
   });
   if (!path) throw new Error("the synthetic map has no component in apps/web");
-  await select(frame, path);
+  return path;
+}
+
+/** The generated GraphQL client the change regenerates: the longest changed file, imported across the map. */
+async function generatedClient(frame: Frame) {
+  const path = await frame.evaluate(() => {
+    const nodes = (window as unknown as BenchWindow).codemapBench.nodes ?? [];
+    return nodes.filter((node) => node.st).sort((a, b) => b.l - a.l)[0]?.p;
+  });
+  if (!path) throw new Error("the synthetic map has no changed files");
+  return path;
+}
+
+/** Flies to a file, a component unless told otherwise, lets it go, and zooms to `percent` around it. */
+async function zoomInto(frame: Frame, percent: number, file = component) {
+  await select(frame, await file(frame));
   await key(frame, "Escape");
   // Each key zooms by 1.4, so the steps are counted from one settled reading rather than re-read between keys.
   const steps = Math.round(Math.log((await zoomLevel(frame)) / percent) / Math.log(1.4));
@@ -224,6 +243,7 @@ interface Scenario {
   snapshot?: string;
 }
 
+const FAR = 4;
 const MID = 50;
 const CLOSE = 120;
 const PAN: Gesture = { kind: "pan", frames: 150 };
@@ -292,6 +312,12 @@ const SCENARIOS: Scenario[] = [
     gesture: PAN,
     snapshot: "flat-all-imports",
   },
+  {
+    // From about 4% to 600%, with the pointer on a file hundreds of others import, as zooming into a schema change goes.
+    name: "Flat · zoom in on the generated client",
+    setup: then(flat, (frame) => zoomInto(frame, FAR, generatedClient)),
+    gesture: { kind: "zoom in", frames: 190 },
+  },
 ];
 
 const quantile = (values: number[], q: number) => {
@@ -309,27 +335,30 @@ interface Result {
   inputP95: number;
   /** GPU-process time per painted frame spent rastering canvas commands. */
   gpuPerFrame: number;
+  /** The same, for the slowest frames the display drew: one gesture's worst stretch shows here, not in the mean. */
+  gpuP95: number;
   /** Canvas 2D method calls per frame that drew. */
   callsPerFrame: number;
-  /** Time from one painted frame to the next, at 60Hz: 16.7 unless a frame ran over. */
+  /** Time from one painted frame to the next, at 60Hz: 16.7 unless the page's own frame ran over, even while the GPU falls behind. */
   frameP95: number;
   /** Viewer frames that drew something during the gesture. */
   drawn: number;
   seconds: number;
 }
 
-/** Time the GPU process spent rastering canvas commands in a trace, in ms; its other tasks include waiting on the display. */
 const RASTER_TASKS = new Set([
   "RasterDecoderImpl::DoRasterCHROMIUM",
   "RasterDecoderImpl::DoEndRasterCHROMIUM",
 ]);
 
-function gpuMainTime(trace: Buffer) {
+/** Time the GPU process spent rastering canvas commands in a trace, in ms, in all and for each frame the display drew; its other tasks include waiting on the display. */
+function gpuRaster(trace: Buffer) {
   const events: {
     name: string;
     ph: string;
     pid: number;
     tid: number;
+    ts: number;
     dur?: number;
     args?: { name?: string };
   }[] = JSON.parse(trace.toString("utf8")).traceEvents;
@@ -338,10 +367,20 @@ function gpuMainTime(trace: Buffer) {
       .filter((event) => event.name === "thread_name" && event.args?.name === "CrGpuMain")
       .map((event) => `${event.pid}:${event.tid}`),
   );
-  return events
+  const raster = events
     .filter((event) => event.ph === "X" && RASTER_TASKS.has(event.name))
-    .filter((event) => gpuThreads.has(`${event.pid}:${event.tid}`))
-    .reduce((sum, event) => sum + (event.dur ?? 0) / 1000, 0);
+    .filter((event) => gpuThreads.has(`${event.pid}:${event.tid}`));
+  const swaps = events
+    .filter((event) => event.ph === "X" && event.name === "Display::DrawAndSwap")
+    .map((event) => event.ts)
+    .sort((a, b) => a - b);
+  const byFrame = swaps.map(() => 0);
+  for (const event of raster) {
+    // A frame's canvas is rastered before the swap that shows it.
+    const shown = swaps.findIndex((swap) => swap >= event.ts);
+    if (shown >= 0) byFrame[shown] = (byFrame[shown] ?? 0) + (event.dur ?? 0) / 1000;
+  }
+  return { total: raster.reduce((sum, event) => sum + (event.dur ?? 0) / 1000, 0), byFrame };
 }
 
 /** Counts every canvas 2D call while a few more frames of the gesture play; installed only then, so timings stay clean. */
@@ -386,7 +425,8 @@ async function canvasCallsPerFrame(frame: Frame, gesture: Gesture) {
 async function measure(page: Page, frame: Frame, gesture: Gesture, name: string): Promise<Result> {
   const browser = page.context().browser();
   if (!browser) throw new Error("the bench needs a browser to trace");
-  await browser.startTracing(page, { categories: ["gpu"] });
+  // `viz` marks each frame the display draws, to split the GPU's raster time by frame.
+  await browser.startTracing(page, { categories: ["gpu", "viz"] });
   const since = await frame.evaluate(() => {
     const samples = (window as unknown as BenchWindow).codemapBench;
     samples.inputs.length = 0;
@@ -401,7 +441,7 @@ async function measure(page: Page, frame: Frame, gesture: Gesture, name: string)
     (window as unknown as BenchWindow).codemapBench.recording = false;
     return { draws, inputs, beats };
   });
-  const gpu = gpuMainTime(await browser.stopTracing());
+  const gpu = gpuRaster(await browser.stopTracing());
   const until = since + elapsed;
   const drawn = samples.draws
     .filter(([start]) => start >= since && start <= until)
@@ -413,7 +453,8 @@ async function measure(page: Page, frame: Frame, gesture: Gesture, name: string)
     drawP50: quantile(drawn, 0.5),
     drawP95: quantile(drawn, 0.95),
     inputP95: quantile(samples.inputs, 0.95),
-    gpuPerFrame: gpu / Math.max(1, beats.length),
+    gpuPerFrame: gpu.total / Math.max(1, beats.length),
+    gpuP95: quantile(gpu.byFrame, 0.95),
     callsPerFrame: await canvasCallsPerFrame(frame, gesture),
     frameP95: quantile(intervals, 0.95),
     drawn: drawn.length,
@@ -470,29 +511,40 @@ const change = (before: number, after: number) =>
     ? ""
     : ` (${after <= before ? "−" : "+"}${Math.abs(Math.round((1 - after / before) * 100))}%)`;
 
-type Column = "drawP50" | "drawP95" | "inputP95" | "gpuPerFrame" | "callsPerFrame" | "frameP95";
+type Column =
+  | "drawP50"
+  | "drawP95"
+  | "inputP95"
+  | "gpuPerFrame"
+  | "gpuP95"
+  | "callsPerFrame"
+  | "frameP95";
 
 const COLUMNS: [Column, string, number][] = [
   ["drawP50", "Draw p50 ms", 2],
   ["drawP95", "Draw p95 ms", 2],
   ["inputP95", "Input p95 ms", 2],
   ["gpuPerFrame", "GPU raster ms/frame", 2],
+  ["gpuP95", "GPU raster p95 ms", 2],
   ["callsPerFrame", "Canvas calls/frame", 0],
   ["frameP95", "Frame p95 ms", 1],
 ];
 
-function table(results: Result[], baseline?: Result[]) {
+function table(results: Result[], baseline?: Partial<Result>[]) {
   const rows = results.map((result) => {
     const before = baseline?.find((entry) => entry.name === result.name);
     const cells = COLUMNS.map(([key, , digits]) => {
       const value = result[key];
-      if (!before) return fixed(value, digits);
-      return `${fixed(before[key], digits)} → ${fixed(value, digits)}${change(before[key], value)}`;
+      const was = before?.[key];
+      // A baseline saved before a column existed has no value for it.
+      if (was === undefined) return fixed(value, digits);
+      return `${fixed(was, digits)} → ${fixed(value, digits)}${change(was, value)}`;
     });
     return `| ${result.name} | ${cells.join(" | ")} |`;
   });
   return [
-    "Draw: the viewer's script per frame that drew. Input: per event. GPU raster: the GPU process rastering the canvas, per painted frame.",
+    "Draw: the viewer's script per frame that drew. Input: per event. GPU raster: the GPU process rastering the canvas, per painted frame, and its p95 per displayed frame.",
+    "Frame p95 times the page's frames, which headless Chromium keeps at 16.7 even while the GPU falls behind: GPU raster p95 over 16.7 means the app drops frames.",
     "",
     `| Scenario | ${COLUMNS.map(([, title]) => title).join(" | ")} |`,
     `| --- | ${COLUMNS.map(() => "---").join(" | ")} |`,
@@ -515,7 +567,7 @@ test(`codemap frame times, ${FILES} files`, async ({ page }) => {
 
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, `${LABEL}.json`), JSON.stringify({ files: FILES, results }, null, 2));
-  let baseline: Result[] | undefined;
+  let baseline: Partial<Result>[] | undefined;
   const lines = [`Codemap bench "${LABEL}", ${FILES} files`];
   if (BASELINE) {
     baseline = JSON.parse(readFileSync(join(OUT, `${BASELINE}.json`), "utf8")).results;

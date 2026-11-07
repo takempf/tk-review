@@ -187,8 +187,11 @@ function pickKind(random: Random) {
   return KINDS[0] as (typeof KINDS)[number];
 }
 
-function markChanged(random: Random, node: SyntheticNode) {
-  const status = pick(random, ["M", "M", "M", "M", "A", "A", "D", "R"] as const);
+function markChanged(
+  random: Random,
+  node: SyntheticNode,
+  status = pick(random, ["M", "M", "M", "M", "A", "A", "D", "R"] as const),
+) {
   node.st = status;
   if (status === "R") node.op = `${node.p}.old`;
   if (status === "M" || status === "R") {
@@ -202,6 +205,43 @@ function markChanged(random: Random, node: SyntheticNode) {
   }
   node.ad = status === "A" ? node.l : 0;
   node.dl = status === "D" ? node.l : 0;
+}
+
+/** Appends a regenerated GraphQL client as long as a real one, imported by about 430 files, a few dozen of them for types only. */
+function addGeneratedClient(
+  files: number,
+  nodes: SyntheticNode[],
+  edges: [number, number, number, number, number][],
+  bytes: number[],
+  byProject: number[][],
+) {
+  // Its own generator, so the rest of the map stays the same as without it.
+  const random = seeded(files + 1);
+  const lines = 49_000;
+  const offset = bytes.length;
+  const shape = pushShape(random, bytes, lines);
+  const client: SyntheticNode = {
+    p: "packages/shared/src/gql/graphql.ts",
+    k: "ts",
+    b: lines * 34 + 120,
+    l: lines,
+    x: [],
+    o: offset,
+    r: shape.rows,
+    s: shape.linesPerRow,
+  };
+  markChanged(random, client, "M");
+  const at = nodes.length;
+  nodes.push(client);
+  const shared = PROJECTS.findIndex(([path]) => path === "packages/shared");
+  byProject.forEach((local, project) => {
+    if (project !== shared && !PROJECTS[project]?.[1].includes(shared)) return;
+    for (const from of local) {
+      const node = nodes[from];
+      if (!node || (node.k !== "ts" && node.k !== "tsx") || random() >= 0.095) continue;
+      edges.push([from, at, random() < 0.08 ? 1 : 0, -1, 0]);
+    }
+  });
 }
 
 /** A deterministic monorepo of `files` files, about 3% of them changed, for benchmarking the viewer. */
@@ -269,6 +309,8 @@ export async function syntheticCodemap(files: number): Promise<Codemap> {
       }
     });
   });
+
+  addGeneratedClient(files, nodes, edges, bytes, byProject);
 
   const svgs: Record<string, string> = {};
   for (const node of nodes) if (node.k === "svg") svgs[node.p] = SVG;
