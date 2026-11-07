@@ -3163,6 +3163,14 @@
   nav.addEventListener('pointerup', () => {
     navDrag = false;
   });
+  const overview = $('#br'),
+    overviewToggle = $('#navtoggle');
+  overviewToggle.onclick = () => {
+    const collapsed = overview.toggleAttribute('data-collapsed');
+    overviewToggle.setAttribute('aria-expanded', String(!collapsed));
+    overviewToggle.title = collapsed ? 'Show overview' : 'Hide overview';
+    invalidate();
+  };
 
   // ---------- input ----------
   function toWorld(px, py) {

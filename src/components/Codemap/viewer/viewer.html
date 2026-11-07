@@ -10,7 +10,8 @@
 <style>
 /* A full-bleed canvas under one toolbar, with panels pinned to its corners, drawn from the review's design-system tokens, which the host sets on :root. */
 [hidden]{display:none!important}
-:root{color-scheme:dark;--bar-h:2.5rem}
+:root{color-scheme:dark;--bar-h:2.5rem;--zoom-h:1.5rem;--overview-h:calc(150px + var(--zoom-h) + 3px)}
+:root:has(#br[data-collapsed]){--overview-h:calc(var(--zoom-h) + 2px)}
 html,body{height:100%}
 body{margin:0;overflow:hidden;background:var(--bg-code);color:var(--text);font-family:var(--tk-font-sans);font-size:var(--tk-text-sm);font-feature-settings:"ss09";font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
 #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:default}
@@ -69,15 +70,21 @@ button.tk-list-item{width:100%;border:0;background:none;font:inherit;text-align:
 .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11.5px;color:var(--text-dim)}
 .legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
 
-/* bottom-right: navigator */
-#br{right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(12px + env(safe-area-inset-bottom,0px));padding:6px;display:flex;flex-direction:column;gap:6px}
-#nav{width:220px;height:150px;display:block;cursor:crosshair;background:var(--bg-sunken)}
-.zoom{display:flex;align-items:center;gap:4px}
+/* bottom-right: the overview map over a strip of zoom controls, resting on a contact shadow that stays under its bottom edge */
+#br{position:fixed;right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;overflow:hidden;background:var(--bg);border:1px solid var(--border);border-radius:var(--tk-radius);box-shadow:0 2px 0 -1px rgb(0 0 0 / .35),0 4px 6px -3px rgb(0 0 0 / .5)}
+#nav{box-sizing:content-box;width:220px;height:150px;display:block;cursor:crosshair;background:var(--bg-sunken);border-bottom:1px solid var(--border)}
+#br[data-collapsed] #nav{display:none}
+.zoom{display:flex;align-items:center}
+.zoom .tk-button{--_h:var(--zoom-h)}
 #zl{font-family:var(--tk-font-mono);font-size:11px;color:var(--text-dim);min-width:44px;text-align:center}
+#zfit{margin-left:auto;padding-inline:var(--tk-space-2)}
+#br:not([data-collapsed]) #navtoggle{position:absolute;top:0;right:0;--_h:1.25rem;background:var(--bg);border-color:transparent transparent var(--border) var(--border)}
+#br:not([data-collapsed]) #navtoggle:hover{background:var(--bg-hover)}
+#br[data-collapsed] #navtoggle .tk-icon{rotate:180deg}
 #stat{position:fixed;left:50%;bottom:calc(12px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);font-family:var(--tk-font-mono);font-size:10.5px;color:var(--text-dim);text-align:center;line-height:1.3;white-space:nowrap;pointer-events:none}
 
 /* detail drawer */
-#detail{top:calc(var(--bar-h) + 12px);right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(196px + env(safe-area-inset-bottom,0px));width:360px;display:flex;flex-direction:column;overflow:hidden}
+#detail{top:calc(var(--bar-h) + 12px);right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(var(--overview-h) + 24px + env(safe-area-inset-bottom,0px));width:360px;display:flex;flex-direction:column;overflow:hidden}
 .dh{padding:14px 14px 10px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
 .dh-top{display:flex;align-items:flex-start;gap:10px}
 .dh-top canvas{flex:none}
@@ -130,8 +137,8 @@ button.tk-list-item{width:100%;border:0;background:none;font:inherit;text-align:
 #bar.compact .bar-label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 #bar.compact .bar-value{max-width:12ch}
 @media (max-width:760px){
-  #br{top:calc(var(--bar-h) + 12px);bottom:auto;padding:4px}
-  #nav{display:none}
+  #br{top:calc(var(--bar-h) + 12px);bottom:auto}
+  #nav,#navtoggle{display:none}
   #detail{left:calc(8px + env(safe-area-inset-left,0px));right:calc(8px + env(safe-area-inset-right,0px));width:auto;top:auto;bottom:calc(8px + env(safe-area-inset-bottom,0px));height:58vh;z-index:15}
   #impact{flex-wrap:wrap}
 }
@@ -190,13 +197,16 @@ button.tk-list-item{width:100%;border:0;background:none;font:inherit;text-align:
   <div class="legend" data-diff><span><i style="background:var(--added)"></i>new import</span><span><i style="background:repeating-linear-gradient(90deg,var(--deleted) 0 3px,transparent 3px 5px)"></i>removed import</span><span><i style="background:var(--tk-purple)"></i>blast radius</span><span><i style="background:var(--text-faint)"></i>linked</span></div>
 </template>
 
-<div id="br" class="panel">
+<div id="br">
   <canvas id="nav" aria-label="Overview"></canvas>
   <div class="zoom">
-    <button class="zb tk-button" data-size="sm" data-square id="zout" aria-label="Zoom out">−</button>
+    <button class="tk-button" data-variant="ghost" data-size="sm" data-square id="zout" aria-label="Zoom out">−</button>
     <span id="zl">100%</span>
-    <button class="zb tk-button" data-size="sm" data-square id="zin" aria-label="Zoom in">+</button>
-    <button class="zb tk-button" data-size="sm" id="zfit" title="Fit everything (F)">Fit</button>
+    <button class="tk-button" data-variant="ghost" data-size="sm" data-square id="zin" aria-label="Zoom in">+</button>
+    <button class="tk-button" data-variant="ghost" data-size="sm" id="zfit" title="Fit everything (F)">Fit</button>
+    <button class="tk-button" data-variant="ghost" data-size="sm" data-square id="navtoggle" aria-controls="nav" aria-expanded="true" title="Hide overview">
+      <svg class="tk-icon" width="1em" height="1em" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+    </button>
   </div>
 </div>
 
