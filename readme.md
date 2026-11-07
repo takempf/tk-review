@@ -14,7 +14,7 @@ You'll need:
 - `git` on your PATH
 - Optionally, [`gh`](https://cli.github.com/) for pull requests, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) for agent reviews, each logged in
 
-The UI is built on [tk-design-system](https://github.com/takempf/tk-design-system), read from source in a checkout beside this one:
+The UI is built on [tk-design-system](https://github.com/takempf/tk-design-system), read from source in a checkout beside this one. A nested app checkout (such as `tk-review/tk-review`) can also use a design-system checkout beside its parent. Both Vite and TypeScript check `../tk-design-system` first, then `../../tk-design-system`:
 
 ```bash
 git clone https://github.com/takempf/tk-review.git

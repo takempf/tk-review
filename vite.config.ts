@@ -1,9 +1,19 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
-// tk-design-system is consumed from source in a sibling checkout, the way its
-// own playground does: no build step, and edits there show up here live.
-const designSystem = decodeURIComponent(new URL("../tk-design-system", import.meta.url).pathname);
+// Consume source from a sibling checkout, or one beside the parent of a nested
+// tk-review checkout. Keep these candidates in sync with tsconfig.json's paths.
+// No build step is needed, and design-system edits show up here live.
+const designSystem = ["../tk-design-system", "../../tk-design-system"]
+  .map((path) => fileURLToPath(new URL(path, import.meta.url)))
+  .find((path) => existsSync(`${path}/src/index.ts`));
+if (!designSystem) {
+  throw new Error(
+    "tk-design-system checkout not found. Place it at ../tk-design-system or ../../tk-design-system and install its dependencies.",
+  );
+}
 const designSystemSrc = `${designSystem}/src`;
 
 // The HMR socket drops whenever macOS takes a network interface down, as it does on sleep.

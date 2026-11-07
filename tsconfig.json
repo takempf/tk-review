@@ -18,8 +18,11 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
-      "tk-design-system": ["../tk-design-system/src/index.ts"],
-      "tk-design-system/*": ["../tk-design-system/src/*"]
+      "tk-design-system": [
+        "../tk-design-system/src/index.ts",
+        "../../tk-design-system/src/index.ts"
+      ],
+      "tk-design-system/*": ["../tk-design-system/src/*", "../../tk-design-system/src/*"]
     }
   },
   "include": ["src", "dev-harness", "vite.config.ts"],
