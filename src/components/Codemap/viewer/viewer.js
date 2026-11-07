@@ -1021,7 +1021,7 @@
     invalidate();
   });
   const MINS = 0.002,
-    MAXS = 8;
+    MAXS = 12;
   function fitRect(r, animate, pad = 60, maxS = 1.6) {
     let rx = r.x,
       ry = r.y,
@@ -1226,6 +1226,214 @@
       loadMinimaps.failed = true;
       updateStat();
     }
+  }
+
+  // ---------- code text ----------
+  // A changed file carries its lines (tx), which take over from its shape once they're legible.
+  const TEXT_FROM_FONT_PX = 7,
+    TEXT_FULL_FONT_PX = 9,
+    CODE_EM = 0.72, // font size as a share of the row height
+    CONTEXT_ALPHA = 0.5;
+  // Set at one size and scaled, so zooming doesn't reshape every line each frame.
+  const CODE_FONT_PX = 20,
+    CODE_FONT = `400 ${CODE_FONT_PX}px "Geist Mono Variable", ui-monospace, monospace`;
+  const codeAdvance = () => textWidth(CODE_FONT, '0'.repeat(64)) / 64;
+  const textColumnW = (rh) => (codeAdvance() * rh * CODE_EM) / CODE_FONT_PX;
+  function codeTextAlpha(n, rh, s) {
+    if (!n.tx) return 0;
+    const fontPx = rh * s * CODE_EM;
+    return Math.max(0, Math.min(1, (fontPx - TEXT_FROM_FONT_PX) / (TEXT_FULL_FONT_PX - TEXT_FROM_FONT_PX)));
+  }
+  const readsAsText = (i) => codeTextAlpha(N[i], rowHOf(N[i]), cam.s) > 0;
+  // As the text comes in, the shape's columns narrow to the text's, so its blocks settle into letters.
+  function codeColumnW(n, rh, s) {
+    const textAlpha = codeTextAlpha(n, rh, s);
+    return textAlpha > 0 ? COLW + (textColumnW(rh) - COLW) * textAlpha : COLW;
+  }
+  const rowStartsCache = new Map();
+  function shapeRowStarts(i) {
+    let starts = rowStartsCache.get(i);
+    if (starts || !MM) return starts || null;
+    const n = N[i];
+    starts = new Int32Array(n.r);
+    let p = n.o;
+    for (let r = 0; r < n.r; r++) {
+      starts[r] = p;
+      p += MM[p] + 1;
+    }
+    rowStartsCache.set(i, starts);
+    return starts;
+  }
+  // Lines a modified file's hunks touch, so the lines around them can step back.
+  const changedLinesCache = new Map();
+  function changedLines(i) {
+    const n = N[i];
+    if (n.st !== 'M' && n.st !== 'R') return null;
+    let lines = changedLinesCache.get(i);
+    if (lines) return lines;
+    lines = new Uint8Array(n.tx.length);
+    for (const [ns, nl] of n.hk || []) lines.fill(1, ns - 1, ns - 1 + nl);
+    changedLinesCache.set(i, lines);
+    return lines;
+  }
+  // Rust counts columns in chars; a string with surrogate pairs is cut by code point to match.
+  const columnsOf = (line) => (/[\uD800-\uDFFF]/.test(line) ? Array.from(line) : line);
+  const columnSlice = (cols, a, b) => (typeof cols === 'string' ? cols.slice(a, b) : cols.slice(a, b).join(''));
+  // Coloured by the shape's token classes, which line up with the text column for column.
+  function drawCodeText(i, x0, y0, row0, nrows, s, rh, alpha, columnW) {
+    const n = N[i];
+    let r0 = 0,
+      r1 = nrows;
+    if (!in3D) {
+      r0 = Math.max(0, Math.floor((-cam.y / s - y0) / rh));
+      r1 = Math.min(nrows, Math.ceil(((VH - cam.y) / s - y0) / rh));
+    }
+    if (r0 >= r1) return;
+    const k = (rh * CODE_EM) / CODE_FONT_PX,
+      adv = codeAdvance(),
+      changed = changedLines(i),
+      starts = shapeRowStarts(i);
+    // One list per token class, doubled for context lines, so each colour is set once.
+    const buckets = Array.from({ length: CLS.length * 2 }, () => []);
+    const emit = (cls, context, text, col, y) => buckets[cls + (context ? CLS.length : 0)].push(text, col * adv, y);
+    for (let r = r0; r < r1; r++) {
+      const row = row0 + r,
+        line = n.tx[row];
+      if (!line) continue;
+      const cols = columnsOf(line),
+        context = !!changed && !changed[row],
+        y = ((r + 0.5) * rh) / k;
+      let col = 0;
+      if (starts) {
+        let p = starts[row];
+        const count = MM[p++];
+        for (let q = 0; q < count && col < cols.length; q++) {
+          const b = MM[p++],
+            cls = b >> 5,
+            len = (b & 31) + 1;
+          if (cls) emit(cls, context, columnSlice(cols, col, col + len), col, y);
+          col += len;
+        }
+      }
+      if (col < cols.length) emit(1, context, columnSlice(cols, col, cols.length), col, y);
+    }
+    const alphaBefore = ctx.globalAlpha;
+    ctx.save();
+    ctx.translate(x0, y0);
+    ctx.scale(columnW / adv, k);
+    ctx.font = CODE_FONT;
+    ctx.textBaseline = 'middle';
+    buckets.forEach((list, b) => {
+      if (!list.length) return;
+      const cls = b % CLS.length,
+        context = b >= CLS.length;
+      ctx.globalAlpha = alphaBefore * alpha * CLSA[cls] * (context ? CONTEXT_ALPHA : 1);
+      ctx.fillStyle = CLS[cls];
+      for (let q = 0; q < list.length; q += 3) ctx.fillText(list[q], list[q + 1], list[q + 2]);
+    });
+    ctx.restore();
+  }
+
+  // ---------- removed lines ----------
+  // Hovering a hunk on a page that reads as text shows the lines it removed, just above it, as a unified diff would.
+  let hovHunk = null,
+    peekRect = null;
+  const PEEK_PAD_PX = 6,
+    PEEK_GUTTER_PX = 22;
+  // Where file i's pages sit in the flat view: its card's first page, or every page while it's spread out.
+  function codePages(i) {
+    const n = N[i],
+      rh = rowHOf(n),
+      lpp = linesPerPage(n);
+    if (i !== sel || !multiPage(n)) return [{ x: X[i], y: Y[i] + HEAD, l0: 1, l1: Math.min(lpp, n.l), rh }];
+    const { x, y, cols, P } = spreadRect(i),
+      pages = [];
+    for (let p = 0; p < P; p++)
+      pages.push({
+        x: x + MPAD + (p % cols) * (MW + PG_GAP),
+        y: y + MPAD + HEAD + Math.floor(p / cols) * (PAGE_H + PG_LABEL + PG_GAP),
+        l0: p * lpp + 1,
+        l1: Math.min((p + 1) * lpp, n.l),
+        rh,
+      });
+    return pages;
+  }
+  // The line a hunk's removed lines sit above: its first line, or for a pure removal the line after it.
+  const peekLine = ([ns, nl]) => (nl > 0 ? ns : ns + 1);
+  function hunkAt(i, px, py) {
+    const n = N[i];
+    if (is3D() || !n.rm || !readsAsText(i)) return null;
+    const [wx, wy] = toWorld(px, py);
+    if (hovHunk && hovHunk.i === i && peekRect) {
+      const [x, y, w, h] = peekRect;
+      if (wx >= x && wx <= x + w && wy >= y && wy <= y + h) return hovHunk;
+    }
+    for (const pg of codePages(i)) {
+      if (wx < pg.x - 10 || wx > pg.x + MW || wy < pg.y || wy > pg.y + (pg.l1 - pg.l0 + 1) * pg.rh) continue;
+      const line = pg.l0 + Math.floor((wy - pg.y) / pg.rh);
+      for (let k = 0; k < n.hk.length; k++) {
+        const [ns, nl, , ol] = n.hk[k];
+        if (!ol) continue;
+        if (nl > 0 ? line >= ns && line < ns + nl : line === ns || line === ns + 1) return { i, k };
+      }
+    }
+    return null;
+  }
+  function drawPeek() {
+    peekRect = null;
+    if (!hovHunk || is3D() || !vis[hovHunk.i]) return;
+    const { i, k } = hovHunk,
+      n = N[i],
+      hunk = n.hk[k],
+      lines = n.rm[k] || [],
+      line = peekLine(hunk),
+      pg = codePages(i).find((p) => line >= p.l0 && line <= p.l1 + 1);
+    if (!pg || !lines.length) return;
+    const s = cam.s,
+      rh = pg.rh,
+      textAlpha = codeTextAlpha(n, rh, s),
+      columnW = codeColumnW(n, rh, s),
+      more = hunk[3] - lines.length,
+      rows = lines.length + (more > 0 ? 1 : 0),
+      pad = PEEK_PAD_PX / s,
+      gutter = PEEK_GUTTER_PX / s,
+      x = pg.x - gutter,
+      w = MW + gutter,
+      h = rows * rh + pad * 2,
+      y = pg.y + (line - pg.l0) * rh - h;
+    peekRect = [x, y, w, h];
+    const alphaBefore = ctx.globalAlpha;
+    ctx.globalAlpha = alphaBefore * textAlpha;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.55)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = mix(DEL, C.chrome, 0.14);
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+    ctx.fillStyle = DEL;
+    ctx.fillRect(x, y, 3 / s, h);
+    // The removed lines sit on the page's columns, so they read against the code below.
+    const fontScale = (rh * CODE_EM) / CODE_FONT_PX,
+      adv = codeAdvance();
+    ctx.save();
+    ctx.translate(pg.x, y + pad);
+    ctx.scale(columnW / adv, fontScale);
+    ctx.font = CODE_FONT;
+    ctx.textBaseline = 'middle';
+    const rowY = (r) => ((r + 0.5) * rh) / fontScale;
+    ctx.fillStyle = mix(DEL, C.text, 0.55);
+    lines.forEach((text, r) => ctx.fillText(text, 0, rowY(r)));
+    ctx.fillStyle = DEL;
+    ctx.textAlign = 'right';
+    lines.forEach((_, r) => ctx.fillText('−', -adv * 0.6, rowY(r)));
+    ctx.textAlign = 'left';
+    if (more > 0) {
+      ctx.fillStyle = C.faint;
+      ctx.fillText(`… ${fmtN(more)} more removed`, 0, rowY(lines.length));
+    }
+    ctx.restore();
+    ctx.globalAlpha = alphaBefore;
   }
 
   // ---------- pictures ----------
@@ -2000,6 +2208,17 @@
     ctx.strokeRect(px, py, pw, ph);
   }
   function drawRows(i, x0, y0, row0, nrows, s, hi, rh = ROWH) {
+    const textAlpha = codeTextAlpha(N[i], rh, s),
+      columnW = codeColumnW(N[i], rh, s);
+    if (textAlpha < 1) {
+      const alphaBefore = ctx.globalAlpha;
+      ctx.globalAlpha = alphaBefore * (1 - textAlpha);
+      drawShapeRows(i, x0, y0, row0, nrows, s, hi, rh, columnW * MMCOLS);
+      ctx.globalAlpha = alphaBefore;
+    }
+    if (textAlpha > 0) drawCodeText(i, x0, y0, row0, nrows, s, rh, textAlpha, columnW);
+  }
+  function drawShapeRows(i, x0, y0, row0, nrows, s, hi, rh, shapeW) {
     const n = N[i],
       len = nrows * rh;
     if (!MM || n.r <= 0) {
@@ -2024,7 +2243,7 @@
       sh = Math.max(1 / sc, Math.min(bmp.height - sy, nrows / sc));
     if (sh <= 0) return;
     ctx.imageSmoothingEnabled = !(hi && rh * s >= 1.5);
-    ctx.drawImage(bmp, 0, sy, bmp.width, sh, x0, y0, MW, sh * sc * rh);
+    ctx.drawImage(bmp, 0, sy, bmp.width, sh, x0, y0, shapeW, sh * sc * rh);
     if (rh * s >= 5 && !in3D) {
       const r0 = Math.max(0, Math.floor((-cam.y / s - y0) / rh)),
         r1 = Math.min(nrows, Math.ceil(((VH - cam.y) / s - y0) / rh));
@@ -2038,9 +2257,11 @@
   // green = added lines, amber = changed lines, red notch = lines removed here
   function drawHunks(n, px, py, ph, l0, l1, rh, cardPx) {
     if (!highlightsChange() || !n.st || n.st === 'D' || cardPx < 16) return;
-    const sc = n.s || 1,
-      gx = px - 7,
-      gw = 4;
+    // Past 3x zoom the gutter and removal marks stop growing, so they don't crowd text.
+    const m = Math.min(1, (3 * CW) / cardPx),
+      sc = n.s || 1,
+      gx = px - 7 * m,
+      gw = 4 * m;
     if (n.st === 'A' || !n.hk) {
       ctx.fillStyle = n.st === 'A' ? ADD : ST[n.st].c;
       ctx.fillRect(gx, py, gw, ph);
@@ -2063,12 +2284,12 @@
         const yy = py + ((ns - l0 + 1) / sc) * rh;
         ctx.fillStyle = DEL;
         ctx.beginPath();
-        ctx.moveTo(gx - 3, yy - 3.5);
+        ctx.moveTo(gx - 3 * m, yy - 3.5 * m);
         ctx.lineTo(gx + gw, yy);
-        ctx.lineTo(gx - 3, yy + 3.5);
+        ctx.lineTo(gx - 3 * m, yy + 3.5 * m);
         ctx.closePath();
         ctx.fill();
-        ctx.fillRect(px, yy - 0.6, MW, 1.2);
+        ctx.fillRect(px, yy - 0.6 * m, MW, 1.2 * m);
       }
     }
   }
@@ -2804,6 +3025,7 @@
         ctx.strokeRect(r.x - 4 / s, r.y - 4 / s, r.w + 8 / s, r.h + 8 / s);
       }
     }
+    drawPeek();
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawFrameLabels(s);
@@ -3307,8 +3529,9 @@
   cv.addEventListener('pointerup', endPtr);
   cv.addEventListener('pointercancel', endPtr);
   cv.addEventListener('pointerleave', () => {
-    if (hov >= 0) {
+    if (hov >= 0 || hovHunk) {
       hov = -1;
+      hovHunk = null;
       invalidate();
     }
     hideTip();
@@ -3356,7 +3579,13 @@
       hov = i;
       invalidate();
     }
-    if (i < 0) {
+    const hunk = i >= 0 ? hunkAt(i, px, py) : null;
+    if (hunk?.i !== hovHunk?.i || hunk?.k !== hovHunk?.k) {
+      hovHunk = hunk;
+      invalidate();
+    }
+    // Over code that reads as text, the file's summary would only cover it.
+    if (i < 0 || readsAsText(i)) {
       hideTip();
       return;
     }

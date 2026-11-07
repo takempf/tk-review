@@ -103,6 +103,31 @@ impl Row {
     }
 }
 
+/// A line as the viewer lays it out, so its text lines up with its shape: tabs as two spaces, cut at `MAX_COLUMNS`.
+pub(super) fn display_columns(raw: &str) -> Vec<char> {
+    let raw = raw.strip_suffix('\r').unwrap_or(raw);
+    let mut line: Vec<char> = Vec::with_capacity(MAX_COLUMNS + 1);
+    for c in raw.chars() {
+        if line.len() >= MAX_COLUMNS {
+            break;
+        }
+        if c == '\t' {
+            line.extend([' ', ' ']);
+        } else {
+            line.push(c);
+        }
+    }
+    line.truncate(MAX_COLUMNS);
+    while line.last().is_some_and(|c| c.is_whitespace()) {
+        line.pop();
+    }
+    line
+}
+
+pub(super) fn display_line(raw: &str) -> String {
+    display_columns(raw).into_iter().collect()
+}
+
 fn lex(text: &str, dialect: Dialect) -> Vec<Row> {
     let hash_comments = matches!(dialect, Dialect::Python | Dialect::Shell | Dialect::Yaml);
     let css = dialect == Dialect::Css;
@@ -110,22 +135,7 @@ fn lex(text: &str, dialect: Dialect) -> Vec<Row> {
     let mut rows = Vec::new();
 
     for raw in text.split('\n') {
-        let raw = raw.strip_suffix('\r').unwrap_or(raw);
-        let mut line: Vec<char> = Vec::with_capacity(MAX_COLUMNS + 1);
-        for c in raw.chars() {
-            if line.len() >= MAX_COLUMNS {
-                break;
-            }
-            if c == '\t' {
-                line.extend([' ', ' ']);
-            } else {
-                line.push(c);
-            }
-        }
-        line.truncate(MAX_COLUMNS);
-        while line.last().is_some_and(|c| c.is_whitespace()) {
-            line.pop();
-        }
+        let line = display_columns(raw);
         let n = line.len();
         let mut row = Row(Vec::new());
         let mut i = 0;

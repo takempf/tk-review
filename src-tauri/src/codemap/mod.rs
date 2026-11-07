@@ -25,7 +25,7 @@ use crate::git::run_git_text;
 use changes::{read_changes, Change, Hunk};
 use imports::{analyze, LinkKind, SourceFile};
 use resolver::Resolver;
-use shapes::encode_shape;
+use shapes::{display_line, encode_shape};
 use snapshot::{read_commit, read_worktree, SnapshotFile};
 
 /// What the viewer draws a file as.
@@ -76,6 +76,8 @@ const LOCKFILES: [&str; 7] = [
 ];
 /// Images up to this size are embedded, since the page can't load them from disk.
 const MAX_EMBEDDED_IMAGE_BYTES: u64 = 200 * 1024;
+/// Removed lines kept per hunk; the viewer counts the rest from the hunk's range.
+const MAX_REMOVED_LINES: usize = 60;
 /// How far into a file a generated-code banner is looked for.
 const BANNER_LINES: usize = 30;
 
@@ -218,6 +220,12 @@ pub struct Node {
     old_path: Option<String>,
     #[serde(rename = "hk", skip_serializing_if = "Vec::is_empty")]
     hunks: Vec<Hunk>,
+    /// Each hunk's removed lines, in `hunks`' order, as the viewer lays lines out.
+    #[serde(rename = "rm", skip_serializing_if = "Vec::is_empty")]
+    removed_lines: Vec<Vec<String>>,
+    /// A changed file's lines, one per shape row, which the viewer reads out once zoomed in.
+    #[serde(rename = "tx", skip_serializing_if = "Option::is_none")]
+    text: Option<Vec<String>>,
     #[serde(rename = "ad", skip_serializing_if = "Option::is_none")]
     lines_added: Option<usize>,
     #[serde(rename = "dl", skip_serializing_if = "Option::is_none")]
@@ -604,11 +612,37 @@ pub fn build_codemap(
         };
         let change = changes.status.get(&file.path);
         let status = status_code(change, *in_head, base_paths.contains(file.path.as_str()));
-        let hunks = if status.is_some() {
-            changes.hunks.get(&file.path).cloned().unwrap_or_default()
+        let changed_ranges = match status {
+            Some(_) => changes.hunks.get(&file.path).map_or(&[][..], Vec::as_slice),
+            None => &[],
+        };
+        let hunks: Vec<Hunk> = changed_ranges.iter().map(|hunk| hunk.range).collect();
+        let removed_lines: Vec<Vec<String>> = if changed_ranges
+            .iter()
+            .any(|hunk| !hunk.removed_lines.is_empty())
+        {
+            changed_ranges
+                .iter()
+                .map(|hunk| {
+                    let kept = hunk.removed_lines.iter().take(MAX_REMOVED_LINES);
+                    kept.map(|line| display_line(line)).collect()
+                })
+                .collect()
         } else {
             Vec::new()
         };
+        // Sampled shapes no longer have a row per line, and generated code isn't read.
+        let text = (status.is_some()
+            && file.kind != FileKind::Image
+            && !file.generated
+            && lines_per_row <= 1.0)
+            .then(|| {
+                file.text
+                    .split('\n')
+                    .take(shape_rows)
+                    .map(display_line)
+                    .collect()
+            });
         let lines_in_hunks = |side: usize| hunks.iter().map(|hunk| hunk[side] as usize).sum();
         let lines_added = status.map(|status| {
             if status == "A" && hunks.is_empty() {
@@ -643,6 +677,8 @@ pub fn build_codemap(
                 _ => None,
             },
             hunks,
+            removed_lines,
+            text,
             lines_added,
             lines_removed,
         });
@@ -823,14 +859,30 @@ mod tests {
         let app = node(&graph, "apps/web/src/App.tsx").unwrap();
         assert_eq!(app["st"], "M");
         assert_eq!(app["hk"], serde_json::json!([[1, 2, 1, 2]]));
+        assert_eq!(
+            app["tx"],
+            serde_json::json!([
+                "import { three } from './new';",
+                "export const App = () => <b>{three}</b>;"
+            ])
+        );
+        assert_eq!(
+            app["rm"],
+            serde_json::json!([[
+                "import { two } from './old';",
+                "export const App = () => <b>{two}</b>;"
+            ]])
+        );
         let renamed = node(&graph, "apps/web/src/utils.ts").unwrap();
         assert_eq!(renamed["st"], "R");
         assert_eq!(renamed["op"], "apps/web/src/util.ts");
         assert!(node(&graph, "apps/web/src/util.ts").is_none());
-        assert!(node(&graph, "packages/core/src/math.ts")
-            .unwrap()
-            .get("st")
-            .is_none());
+        let unchanged = node(&graph, "packages/core/src/math.ts").unwrap();
+        assert!(unchanged.get("st").is_none());
+        assert!(
+            unchanged.get("tx").is_none(),
+            "only changed files carry text"
+        );
 
         let through = links(&graph, "tedges");
         for expected in [
