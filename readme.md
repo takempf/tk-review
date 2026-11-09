@@ -148,6 +148,8 @@ The **Codemap** tab beside the diff draws the comparison as a map: every file in
 
 It's tk-codemap ported in: the map is built in Rust (`src-tauri/src/codemap/`, with [oxc](https://oxc.rs/) parsing TypeScript and JavaScript), from the same merge base and compare commit as the diff, and tk-codemap's viewer runs in a sandboxed frame (`src/components/Codemap/viewer/`), with the app's fonts, one toolbar of menus in place of its floating panels, and a few hooks into the app. Of the source, only each line's shape reaches the frame, apart from SVGs and small images, which it draws. It's built the first time the tab is shown, and again after the diff reloads.
 
+`BENCH_ONLY="full range" pnpm bench:codemap` compares the full zoom range in flat and 3D views with change highlighting on and off. It saves Chrome traces, per-zoom frame timings, and hardware/browser details under `dev-harness/bench/results/`. See the [issue #2 investigation and recorded traces](dev-harness/bench/evidence/issue-2/README.md).
+
 ## Rendering
 
 Diffs render through [`@pierre/diffs`](https://diffs.com/)' `CodeView`, with every file in one virtualized scroll region. There is no file-size limit, following [Pierre's take](https://pierre.computer/writing/on-rendering-diffs) that you should be able to render any diff. Long lines are the part virtualization doesn't cover, so highlighting falls back to plain text past 2,000 characters on a line or 100,000 lines in a file.

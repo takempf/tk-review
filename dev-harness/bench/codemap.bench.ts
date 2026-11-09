@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpus, platform, release, totalmem } from "node:os";
 import { join } from "node:path";
-import { type Frame, type Page, test } from "@playwright/test";
+import { gzipSync } from "node:zlib";
+import { expect, type Frame, type Page, test } from "@playwright/test";
 
 // `pnpm bench:codemap`: BENCH_LABEL names a run, BENCH_BASELINE compares with one, BENCH_FILES sizes the map.
 // With tests hidden, as the map opens, 6,800 files show about the repo it's tuned for: 6,000 files, 1.0M lines, 24,000 imports.
@@ -24,7 +26,11 @@ interface Samples {
   /** Timestamps of an independent requestAnimationFrame loop, kept while `recording`: when the frame got to paint. */
   beats: number[];
   recording: boolean;
+  /** [zoom %, script ms, frame interval ms, input-to-draw ms]. */
+  zoomFrames: number[][];
+  pendingInput: number;
   nodes?: { p: string; st?: string; l: number }[];
+  graph?: { repo: string; files: number; lines: number; imports: number };
 }
 
 type BenchWindow = Window & { codemapBench: Samples; benchRaf: typeof requestAnimationFrame };
@@ -32,14 +38,35 @@ type BenchWindow = Window & { codemapBench: Samples; benchRaf: typeof requestAni
 /** Runs in every frame before its scripts: times the viewer's frames and keeps a heartbeat beside them. */
 function instrument() {
   const raf = window.requestAnimationFrame.bind(window);
-  const samples: Samples = { draws: [], lastBusy: 0, inputs: [], beats: [], recording: false };
+  const samples: Samples = {
+    draws: [],
+    lastBusy: 0,
+    inputs: [],
+    beats: [],
+    recording: false,
+    zoomFrames: [],
+    pendingInput: 0,
+  };
+  let previous = 0;
   Object.assign(window, { codemapBench: samples, benchRaf: raf });
   window.requestAnimationFrame = (callback) =>
     raf((time) => {
       const start = performance.now();
       callback(time);
       const duration = performance.now() - start;
-      if (duration > 0.1) samples.draws.push([start, duration]);
+      if (samples.recording) {
+        const zoom = Number.parseFloat(document.querySelector("#zl")?.textContent ?? "0");
+        performance.mark(`codemap:zoom:${zoom}%`);
+        samples.zoomFrames.push([
+          zoom,
+          duration,
+          previous ? time - previous : 0,
+          samples.pendingInput ? performance.now() - samples.pendingInput : 0,
+        ]);
+        samples.pendingInput = 0;
+        previous = time;
+      } else previous = 0;
+      if (duration > 0.1 || samples.recording) samples.draws.push([start, duration]);
       if (duration > 0.3) samples.lastBusy = start;
     });
   const beat = (time: number) => {
@@ -48,7 +75,15 @@ function instrument() {
   };
   raf(beat);
   addEventListener("message", (event) => {
-    if (event.data?.type === "tk-review:codemap") samples.nodes = event.data.graph.nodes;
+    if (event.data?.type !== "tk-review:codemap") return;
+    const graph = event.data.graph;
+    samples.nodes = graph.nodes;
+    samples.graph = {
+      repo: graph.repo,
+      files: graph.nodes.length,
+      lines: graph.nodes.reduce((total: number, node: { l: number }) => total + node.l, 0),
+      imports: graph.tedges.length,
+    };
   });
 }
 
@@ -66,6 +101,7 @@ function play(gesture: Gesture) {
   const height = canvas.clientHeight;
   const send = (event: Event) => {
     const start = performance.now();
+    bench.codemapBench.pendingInput ||= start;
     canvas.dispatchEvent(event);
     bench.codemapBench.inputs.push(performance.now() - start);
   };
@@ -320,6 +356,30 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
+// Clamp to the viewer's real minimum, then cover the full zoom range to its maximum.
+// Both configurations keep exactly the same nodes, layout, target and wheel events.
+for (const view of ["3D", "Flat"]) {
+  for (const highlighted of [true, false]) {
+    SCENARIOS.push({
+      name: `${view} · full range · highlighting ${highlighted ? "on" : "off"}`,
+      snapshot: `${view.toLowerCase()}-range-${highlighted ? "on" : "off"}`,
+      setup: async (frame) => {
+        if (view === "Flat") await flat(frame);
+        if (!highlighted) {
+          await frame.click("#t-show", SKIP_STABILITY);
+          await frame.click('#m-show [data-key="highlightChange"]', SKIP_STABILITY);
+          await key(frame, "Escape");
+        }
+        await zoomInto(frame, 0.2, generatedClient);
+        // Rounding the key count can stop just above the minimum.
+        await key(frame, "-");
+        await settle(frame);
+      },
+      gesture: { kind: "zoom in", frames: 330 },
+    });
+  }
+}
+
 const quantile = (values: number[], q: number) => {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -344,6 +404,13 @@ interface Result {
   /** Viewer frames that drew something during the gesture. */
   drawn: number;
   seconds: number;
+  zoomBands: {
+    range: string;
+    frames: number;
+    drawP95: number;
+    frameP95: number;
+    latencyP95: number;
+  }[];
 }
 
 const RASTER_TASKS = new Set([
@@ -426,22 +493,36 @@ async function measure(page: Page, frame: Frame, gesture: Gesture, name: string)
   const browser = page.context().browser();
   if (!browser) throw new Error("the bench needs a browser to trace");
   // `viz` marks each frame the display draws, to split the GPU's raster time by frame.
-  await browser.startTracing(page, { categories: ["gpu", "viz"] });
+  await browser.startTracing(page, {
+    categories: [
+      "gpu",
+      "viz",
+      "devtools.timeline",
+      "blink.user_timing",
+      "disabled-by-default-v8.cpu_profiler",
+    ],
+  });
   const since = await frame.evaluate(() => {
     const samples = (window as unknown as BenchWindow).codemapBench;
     samples.inputs.length = 0;
     samples.draws.length = 0;
     samples.beats.length = 0;
+    samples.zoomFrames.length = 0;
     samples.recording = true;
     return performance.now();
   });
   const elapsed = await frame.evaluate(play, gesture);
   const samples = await frame.evaluate(() => {
-    const { draws, inputs, beats } = (window as unknown as BenchWindow).codemapBench;
+    const { draws, inputs, beats, zoomFrames } = (window as unknown as BenchWindow).codemapBench;
     (window as unknown as BenchWindow).codemapBench.recording = false;
-    return { draws, inputs, beats };
+    return { draws, inputs, beats, zoomFrames };
   });
-  const gpu = gpuRaster(await browser.stopTracing());
+  const trace = await browser.stopTracing();
+  const traceName = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  mkdirSync(join(OUT, LABEL), { recursive: true });
+  writeFileSync(join(OUT, LABEL, `${traceName}.trace.json.gz`), gzipSync(trace));
+  writeFileSync(join(OUT, LABEL, `${traceName}.frames.json`), JSON.stringify(samples.zoomFrames));
+  const gpu = gpuRaster(trace);
   const until = since + elapsed;
   const drawn = samples.draws
     .filter(([start]) => start >= since && start <= until)
@@ -459,6 +540,28 @@ async function measure(page: Page, frame: Frame, gesture: Gesture, name: string)
     frameP95: quantile(intervals, 0.95),
     drawn: drawn.length,
     seconds: elapsed / 1000,
+    zoomBands: [0.2, 4.7, 20, 37, 48, 100, 267, 520, 667, 1201]
+      .slice(0, -1)
+      .map((lower, index, bounds) => {
+        const upper = bounds[index + 1] ?? 1201;
+        const rows = samples.zoomFrames.filter(([zoom = 0]) => zoom >= lower && zoom < upper);
+        return {
+          range: `${lower.toFixed(1)}–${Math.min(1200, upper).toFixed(1)}%`,
+          frames: rows.length,
+          drawP95: quantile(
+            rows.map((row) => row[1] ?? 0),
+            0.95,
+          ),
+          frameP95: quantile(
+            rows.map((row) => row[2] ?? 0).filter((ms) => ms > 0),
+            0.95,
+          ),
+          latencyP95: quantile(
+            rows.map((row) => row[3] ?? 0).filter((ms) => ms > 0),
+            0.95,
+          ),
+        };
+      }),
   };
 }
 
@@ -556,17 +659,42 @@ test(`codemap frame times, ${FILES} files`, async ({ page }) => {
   await page.addInitScript(instrument);
   const results: Result[] = [];
   const pictures: Record<string, string> = {};
+  let environment: Record<string, unknown> | undefined;
   for (const scenario of SCENARIOS.filter((entry) =>
     ONLY.some((part) => entry.name.includes(part)),
   )) {
     const frame = await openCodemap(page);
+    environment ??= {
+      cpu: cpus()[0]?.model,
+      memoryGiB: totalmem() / 1024 ** 3,
+      os: `${platform()} ${release()}`,
+      browser: page.context().browser()?.version(),
+      ...(await frame.evaluate(() => {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const debug = gl?.getExtension("WEBGL_debug_renderer_info");
+        return {
+          graph: (window as unknown as BenchWindow).codemapBench.graph,
+          visible: document.querySelector("#stat")?.textContent,
+          userAgent: navigator.userAgent,
+          viewport: [innerWidth, innerHeight],
+          dpr: devicePixelRatio,
+          gpu: debug ? gl?.getParameter(debug.UNMASKED_RENDERER_WEBGL) : "unavailable",
+        };
+      })),
+    };
     await scenario.setup?.(frame);
+    if (scenario.name.includes("full range")) await expect(frame.locator("#zl")).toHaveText("0.2%");
     if (scenario.snapshot) pictures[scenario.snapshot] = await snapshot(frame, scenario.snapshot);
     results.push(await measure(page, frame, scenario.gesture, scenario.name));
+    if (scenario.name.includes("full range"))
+      await expect(frame.locator("#zl")).toHaveText("1200%");
   }
 
   mkdirSync(OUT, { recursive: true });
-  writeFileSync(join(OUT, `${LABEL}.json`), JSON.stringify({ files: FILES, results }, null, 2));
+  writeFileSync(
+    join(OUT, `${LABEL}.json`),
+    JSON.stringify({ files: FILES, environment, results }, null, 2),
+  );
   let baseline: Partial<Result>[] | undefined;
   const lines = [`Codemap bench "${LABEL}", ${FILES} files`];
   if (BASELINE) {
@@ -574,6 +702,21 @@ test(`codemap frame times, ${FILES} files`, async ({ page }) => {
     lines[0] += `, against "${BASELINE}"`;
   }
   lines.push("", table(results, baseline));
+  lines.push("", `Environment: ${JSON.stringify(environment)}`);
+  for (const result of results.filter((entry) => entry.name.includes("full range"))) {
+    lines.push(
+      "",
+      result.name,
+      "",
+      "| Zoom | Frames | Draw p95 ms | Frame p95 ms | Input-to-draw p95 ms |",
+      "| --- | --- | --- | --- | --- |",
+    );
+    for (const band of result.zoomBands) {
+      lines.push(
+        `| ${band.range} | ${band.frames} | ${fixed(band.drawP95, 2)} | ${fixed(band.frameP95, 1)} | ${fixed(band.latencyP95, 2)} |`,
+      );
+    }
+  }
   if (BASELINE) {
     lines.push("", "| Picture | Pixels changed |", "| --- | --- |");
     for (const [name, after] of Object.entries(pictures)) {

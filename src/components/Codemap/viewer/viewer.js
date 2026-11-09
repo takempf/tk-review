@@ -249,6 +249,7 @@
   let vis = new Uint8Array(NN),
     ids = [],
     activeE = [],
+    changedE = [[], []],
     act = new Uint8Array(0),
     fin = new Int32Array(NN),
     fout = new Int32Array(NN),
@@ -387,6 +388,13 @@
         ids = ids.filter((i) => vis[i]);
         activeE = activeE.filter((j) => vis[E[j][0]] && vis[E[j][1]]);
       }
+    }
+    // Change highlighting only draws added/removed imports. Partition after visibility and
+    // impact filtering, so a zoom frame never scans every unchanged import twice.
+    changedE = [[], []];
+    for (const j of activeE) {
+      const state = E[j][4];
+      if (state === 1 || state === 2) changedE[state - 1].push(j);
     }
     if (sel >= 0 && !vis[sel]) select(-1);
     else if (sel >= 0) computeNeighborhood();
@@ -2554,9 +2562,7 @@
         const dash = state === 2 ? [8 / s, 6 / s] : [];
         ctx.beginPath();
         let any = false;
-        for (const j of activeE) {
-          const e = E[j];
-          if (e[4] !== state) continue;
+        for (const j of changedE[state - 1]) {
           if (!edgeInView(j, v)) continue;
           if (dash.length) dashedCurvePath(dash, false);
           else curvePath(false);
