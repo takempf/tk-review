@@ -507,10 +507,16 @@
     for (const v of colH) h = Math.max(h, v);
     return { pos, w: cols * (CW + GAP) - GAP, h: Math.max(0, h - GAP) };
   }
-  const colsFor = (list, aspect) => {
+  const NO_MARGIN = { w: 0, h: 0 };
+  // Solves (width + margin.w) / (area / width + margin.h) = ASPECT, so the framed block comes out 4:3, not just its contents.
+  const widthFor = (area, margin) => {
+    const lean = ASPECT * margin.h - margin.w;
+    return (lean + Math.sqrt(lean * lean + 4 * ASPECT * area)) / 2;
+  };
+  const colsFor = (list, margin = NO_MARGIN) => {
     let a = 0;
     for (const i of list) a += (CW + GAP) * (H[i] + GAP);
-    return Math.max(1, Math.min(list.length, Math.round(Math.sqrt(a * aspect) / (CW + GAP))));
+    return Math.max(1, Math.min(list.length, Math.round(widthFor(a, margin) / (CW + GAP))));
   };
 
   // ---------- packing ----------
@@ -609,7 +615,7 @@
   }
 
   // tidy rows: the folder's own files first, then sub-folders tallest-first, top-aligned
-  function shelf(items, gap, aspect = ASPECT) {
+  function shelf(items, gap, margin) {
     if (!items.length) return { W: 0, H: 0 };
     const lead = items[0].m ? [items[0]] : [],
       rest = items.filter((it) => !lead.includes(it)).sort((a, b) => b.h - a.h || b.w - a.w),
@@ -622,7 +628,7 @@
       maxW = Math.max(maxW, it.w);
       sumW += it.w + gap;
     }
-    const ideal = Math.sqrt(area * aspect),
+    const ideal = widthFor(area, margin),
       cands = new Set([maxW, sumW - gap]);
     for (let k = 0; k <= 20; k++) cands.add(Math.max(maxW, ideal * (0.6 + k * 0.1)));
     let best = null;
@@ -654,8 +660,8 @@
         W = Math.max(W, x - gap);
       }
       const Hh = y + rowH,
-        dev = Math.log(W / Math.max(1, Hh) / aspect);
-      const score = W * Hh * (1 + (dev < 0 ? 1.4 : 0.6) * Math.abs(dev));
+        dev = Math.log((W + margin.w) / Math.max(1, Hh + margin.h) / ASPECT);
+      const score = W * Hh * (1 + 1.4 * Math.abs(dev));
       if (!best || score < best.score) best = { score, pos, W, H: Hh };
     }
     order.forEach((it, k) => {
@@ -668,8 +674,7 @@
   const SP = Math.max(0.3, Math.min(1, Math.sqrt(NN / 4000)));
   const folderGap = (depth) => (depth === 0 ? 1200 : depth === 1 ? 640 : depth === 2 ? 420 : 300) * SP;
   const folderPad = (depth) => (depth <= 1 ? 200 : 130);
-  const FLH = 100,
-    FOLDER_ASPECT = 2.6; // folders lean wide so the map reads left-to-right
+  const FLH = 100;
   // Wider than the gap between cards, so a folder's tests read as their own group.
   const TESTS_GAP = GAP * 2.5;
   // Narrower than the gap between cards, so a test reads as part of the file it tests.
@@ -678,13 +683,26 @@
   const testedStem = (name) => (/^(.+)\.(test|spec)\.[cm]?[jt]sx?$/.exec(name) || /^test_(.+)\.py$/.exec(name))?.[1];
 
   // ---------- layouts ----------
-  function folderFilesBlock(files, cmp) {
-    if (S.testPlacement === 'paired') return pairedFilesBlock(files, cmp);
+  // Masonry rounds heights unevenly, so a few column counts around the estimate are tried and the one framing nearest 4:3 kept.
+  function nearestAspect(estimate, maxCols, margin, build) {
+    let best = null;
+    for (let cols = Math.max(1, estimate - 2); cols <= Math.min(maxCols, estimate + 2); cols++) {
+      const block = build(cols),
+        miss = Math.abs(Math.log((block.w + margin.w) / Math.max(1, block.h + margin.h) / ASPECT));
+      if (!best || miss < best.miss) best = { block, miss };
+    }
+    return best.block;
+  }
+  function folderFilesBlock(files, cmp, margin) {
+    if (S.testPlacement === 'paired') return pairedFilesBlock(files, cmp, margin);
     const tests = S.testPlacement === 'aside' ? files.filter((i) => N[i].test) : [];
     if (!tests.length || tests.length === files.length)
-      return masonry(files.slice(), colsFor(files, FOLDER_ASPECT), cmp);
-    const code = files.filter((i) => !N[i].test),
-      main = masonry(code, colsFor(code, FOLDER_ASPECT), cmp),
+      return nearestAspect(colsFor(files, margin), files.length, margin, (cols) => masonry(files.slice(), cols, cmp));
+    const code = files.filter((i) => !N[i].test);
+    return nearestAspect(colsFor(code, margin), code.length, margin, (cols) => withTestsAside(code, tests, cols, cmp));
+  }
+  function withTestsAside(code, tests, codeCols, cmp) {
+    const main = masonry(code.slice(), codeCols, cmp),
       aside = testsBlock(tests, main.h, cmp),
       asideX = main.w + TESTS_GAP;
     for (let k = 0; k < aside.pos.length; k += 3)
@@ -693,7 +711,7 @@
   }
   // The fewest columns that keep the tests no taller than the code beside them, but no wider than they'd lay out alone.
   function testsBlock(tests, codeH, cmp) {
-    const widest = colsFor(tests, FOLDER_ASPECT);
+    const widest = colsFor(tests);
     for (let cols = 1; cols < widest; cols++) {
       const block = masonry(tests.slice(), cols, cmp);
       if (block.h <= codeH) return block;
@@ -718,12 +736,14 @@
     }
     return tests;
   }
-  function pairedFilesBlock(files, cmp) {
+  function pairedFilesBlock(files, cmp, margin) {
     const tests = testsBySubject(files),
       paired = new Set([...tests.values()].flat());
     const units = files.filter((i) => !paired.has(i)).map((i) => [i, ...(tests.get(i) || []).sort(cmp)]);
-    const cols = Math.max(tests.size ? 2 : 1, colsFor(files, FOLDER_ASPECT));
-    return pairedMasonry(units, cols, cmp);
+    const fewestCols = tests.size ? 2 : 1;
+    return nearestAspect(colsFor(files, margin), files.length, margin, (cols) =>
+      pairedMasonry(units, Math.max(fewestCols, cols), cmp),
+    );
   }
   // Masonry where a file's tests stack in the next column, pulled in close beside it.
   function pairedMasonry(units, cols, cmp) {
@@ -814,18 +834,19 @@
     const fc = fileCmp(false),
       dc = dirCmp();
     function lay(d, depth) {
-      const items = [];
+      const fp = depth === 0 ? 0 : folderPad(depth),
+        lh = depth === 0 ? 0 : FLH,
+        frame = { w: fp * 2, h: fp * 2 + lh },
+        items = [];
       if (d.files.length) {
-        const m = folderFilesBlock(d.files, fc);
+        const m = folderFilesBlock(d.files, fc, d.kids.size ? NO_MARGIN : frame);
         items.push({ w: m.w, h: m.h, m });
       }
       const kids = [...d.kids.values()];
       for (const c of kids) lay(c, depth + 1);
       kids.sort(dc);
       for (const c of kids) items.push({ w: c.w, h: c.h, dir: c });
-      const r = shelf(items, folderGap(depth), FOLDER_ASPECT),
-        fp = depth === 0 ? 0 : folderPad(depth),
-        lh = depth === 0 ? 0 : FLH;
+      const r = shelf(items, folderGap(depth), frame);
       d.items = items;
       d.depth = depth;
       d.fp = fp;
