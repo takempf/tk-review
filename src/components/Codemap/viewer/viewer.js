@@ -224,6 +224,7 @@
     view: '3d',
     tests: false,
     gen: false, // tests and generated code start hidden
+    testPlacement: 'aside', // 'aside' (own columns beside the folder's files), 'paired' (beside the file each tests), 'mixed'
     typeEdges: true,
     mockEdges: false,
     isolated: true,
@@ -669,8 +670,92 @@
   const folderPad = (depth) => (depth <= 1 ? 200 : 130);
   const FLH = 100,
     FOLDER_ASPECT = 2.6; // folders lean wide so the map reads left-to-right
+  // Wider than the gap between cards, so a folder's tests read as their own group.
+  const TESTS_GAP = GAP * 2.5;
+  // Narrower than the gap between cards, so a test reads as part of the file it tests.
+  const PAIRED_TEST_GAP = 14;
+  const SUBJECT_KINDS = new Set(['ts', 'tsx', 'js', 'py']);
+  const testedStem = (name) => (/^(.+)\.(test|spec)\.[cm]?[jt]sx?$/.exec(name) || /^test_(.+)\.py$/.exec(name))?.[1];
 
   // ---------- layouts ----------
+  function folderFilesBlock(files, cmp) {
+    if (S.testPlacement === 'paired') return pairedFilesBlock(files, cmp);
+    const tests = S.testPlacement === 'aside' ? files.filter((i) => N[i].test) : [];
+    if (!tests.length || tests.length === files.length)
+      return masonry(files.slice(), colsFor(files, FOLDER_ASPECT), cmp);
+    const code = files.filter((i) => !N[i].test),
+      main = masonry(code, colsFor(code, FOLDER_ASPECT), cmp),
+      aside = testsBlock(tests, main.h, cmp),
+      asideX = main.w + TESTS_GAP;
+    for (let k = 0; k < aside.pos.length; k += 3)
+      main.pos.push(aside.pos[k], asideX + aside.pos[k + 1], aside.pos[k + 2]);
+    return { pos: main.pos, w: asideX + aside.w, h: Math.max(main.h, aside.h) };
+  }
+  // The fewest columns that keep the tests no taller than the code beside them, but no wider than they'd lay out alone.
+  function testsBlock(tests, codeH, cmp) {
+    const widest = colsFor(tests, FOLDER_ASPECT);
+    for (let cols = 1; cols < widest; cols++) {
+      const block = masonry(tests.slice(), cols, cmp);
+      if (block.h <= codeH) return block;
+    }
+    return masonry(tests, widest, cmp);
+  }
+  // Tests keyed by the file in their folder they're named for: Button.test.tsx tests Button.tsx, test_api.py tests api.py.
+  function testsBySubject(files) {
+    const byStem = new Map();
+    for (const i of files) {
+      if (N[i].test) continue;
+      const stem = N[i].name.replace(/\.[^.]+$/, ''),
+        had = byStem.get(stem);
+      if (had === undefined || (!SUBJECT_KINDS.has(N[had].k) && SUBJECT_KINDS.has(N[i].k))) byStem.set(stem, i);
+    }
+    const tests = new Map();
+    for (const i of files) {
+      const subject = N[i].test ? byStem.get(testedStem(N[i].name)) : undefined;
+      if (subject === undefined) continue;
+      if (!tests.has(subject)) tests.set(subject, []);
+      tests.get(subject).push(i);
+    }
+    return tests;
+  }
+  function pairedFilesBlock(files, cmp) {
+    const tests = testsBySubject(files),
+      paired = new Set([...tests.values()].flat());
+    const units = files.filter((i) => !paired.has(i)).map((i) => [i, ...(tests.get(i) || []).sort(cmp)]);
+    const cols = Math.max(tests.size ? 2 : 1, colsFor(files, FOLDER_ASPECT));
+    return pairedMasonry(units, cols, cmp);
+  }
+  // Masonry where a file's tests stack in the next column, pulled in close beside it.
+  function pairedMasonry(units, cols, cmp) {
+    units.sort((a, b) => cmp(a[0], b[0]));
+    const colH = new Float64Array(cols),
+      pos = [];
+    for (const [file, ...tests] of units) {
+      const span = tests.length ? 2 : 1;
+      let c = 0,
+        top = Infinity;
+      for (let k = 0; k + span <= cols; k++) {
+        const y = span === 2 ? Math.max(colH[k], colH[k + 1]) : colH[k];
+        if (y < top - 0.5) {
+          top = y;
+          c = k;
+        }
+      }
+      const x = c * (CW + GAP);
+      pos.push(file, x, top);
+      colH[c] = top + H[file] + GAP;
+      if (!tests.length) continue;
+      let testY = top;
+      for (const test of tests) {
+        pos.push(test, x + CW + PAIRED_TEST_GAP, testY);
+        testY += H[test] + GAP;
+      }
+      colH[c + 1] = testY;
+    }
+    let h = 0;
+    for (const v of colH) h = Math.max(h, v);
+    return { pos, w: cols * (CW + GAP) - GAP, h: Math.max(0, h - GAP) };
+  }
   function layoutFolders() {
     const root = { name: REPO, path: '', kids: new Map(), files: [] };
     for (const i of ids) {
@@ -731,7 +816,7 @@
     function lay(d, depth) {
       const items = [];
       if (d.files.length) {
-        const m = masonry(d.files.slice(), colsFor(d.files, FOLDER_ASPECT), fc);
+        const m = folderFilesBlock(d.files, fc);
         items.push({ w: m.w, h: m.h, m });
       }
       const kids = [...d.kids.values()];
@@ -4583,6 +4668,11 @@
     ['fout', 'Imports (most)'],
     ['type', 'File type'],
   ];
+  const TEST_PLACEMENTS = [
+    ['aside', 'Grouped to the side', 'Each folder’s tests in their own columns, a little apart from its other files'],
+    ['paired', 'Next to the file they test', 'Button.test.tsx beside Button.tsx, test_api.py beside api.py'],
+    ['mixed', 'Mixed in', 'Tests sorted in with the other files'],
+  ];
   defineMenu('arrange', () => [
     { group: 'Layout' },
     ...[
@@ -4613,6 +4703,23 @@
         fitAll(true);
       },
     })),
+    ...(testCount
+      ? [
+          { separator: true },
+          { group: 'Tests' },
+          ...TEST_PLACEMENTS.map(([value, text, title]) => ({
+            key: `testPlacement:${value}`,
+            text,
+            title,
+            radio: true,
+            checked: S.testPlacement === value,
+            pick: () => {
+              S.testPlacement = value;
+              recompute(true);
+            },
+          })),
+        ]
+      : []),
     { separator: true },
     {
       key: 'svgCode',
