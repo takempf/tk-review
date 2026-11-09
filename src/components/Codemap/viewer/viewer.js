@@ -1583,17 +1583,18 @@
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
-  // The toolbar's folder glyph, on the design system's 16-unit icon grid.
+  // Outline glyphs on the design system's 16-unit icon grid.
   const FOLDER_GLYPH = new Path2D('M2.25 3.75h4.25l1.5 1.5h5.75v7H2.25z');
+  const TEST_GLYPH = new Path2D('M6 2.75h4M6.75 2.75V6.5l-3.9 6.75h10.3L9.25 6.5V2.75M4.58 10.25h6.84');
   const isFolder = (f) => !f.tier && !f.band;
-  function drawFolderIcon(x, y, size, color) {
+  function drawGlyph(glyph, x, y, size, color) {
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(size / 16, size / 16);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.4;
     ctx.lineJoin = 'round';
-    ctx.stroke(FOLDER_GLYPH);
+    ctx.stroke(glyph);
     ctx.restore();
   }
   function drawIcon(n, x, y, S2) {
@@ -1751,22 +1752,7 @@
     }
     const bx = x + S2 - 1,
       by = y + S2 - 1;
-    if (n.test) {
-      ctx.fillStyle = C.chrome;
-      ctx.beginPath();
-      ctx.arc(bx, by, 5, 0, 7);
-      ctx.fill();
-      ctx.fillStyle = C.green;
-      ctx.beginPath();
-      ctx.moveTo(bx - 1.3, by - 3.6);
-      ctx.lineTo(bx + 1.3, by - 3.6);
-      ctx.lineTo(bx + 1.3, by - 1);
-      ctx.lineTo(bx + 3.4, by + 3);
-      ctx.lineTo(bx - 3.4, by + 3);
-      ctx.lineTo(bx - 1.3, by - 1);
-      ctx.closePath();
-      ctx.fill();
-    } else if (n.story) {
+    if (n.story) {
       ctx.fillStyle = C.chrome;
       ctx.beginPath();
       ctx.arc(bx, by, 5, 0, 7);
@@ -1812,6 +1798,10 @@
           : String(l);
   const fmtB = (b) =>
     b >= 1048576 ? (b / 1048576).toFixed(1) + 'M' : b >= 1024 ? Math.round(b / 1024) + 'K' : b + 'B';
+  // A test's name pill ends in a flask: a 12-unit glyph and the gap before it.
+  const TEST_MARK_W = 16;
+  const testMarkW = (i) => (N[i].test ? TEST_MARK_W : 0);
+  const pillWidth = (i) => Math.min(CW, truncName(i)[1] + 36 + testMarkW(i));
   let truncCache = new Map();
   function truncName(i) {
     // -> [text, width]
@@ -1820,7 +1810,7 @@
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.font = NAME_FONT;
-    const max = CW - 34;
+    const max = CW - 34 - testMarkW(i);
     let s = N[i].name;
     if (ctx.measureText(s).width > max) {
       let lo = 1,
@@ -2118,7 +2108,7 @@
       return;
     }
     const [t, tw] = truncName(i),
-      pw = Math.min(CW, tw + 36),
+      pw = pillWidth(i),
       dc = highlightsChange() && (n.st || DD[i] > 0) ? blockCol[i] : null;
     rr(x, y, pw, NAME_H, NAME_H / 2);
     ctx.fillStyle = dc ? mix(dc, PILL, 0.16) : PILL;
@@ -2145,6 +2135,7 @@
     ctx.scale(16 / 18, 16 / 18);
     drawIcon(n, 0, 0, 18);
     ctx.restore();
+    if (n.test) drawGlyph(TEST_GLYPH, x + pw - 21, y + 5, 12, C.green);
     if (cardPx > 70) {
       ctx.font = NAME_FONT;
       ctx.fillStyle = C.text;
@@ -2408,7 +2399,7 @@
           ctx.fill();
           lx += fs * 0.85;
         } else if (isFolder(f)) {
-          drawFolderIcon(lx - fs * 0.15, ty - fs * 0.92, fs * 1.2, C.dim);
+          drawGlyph(FOLDER_GLYPH, lx - fs * 0.15, ty - fs * 0.92, fs * 1.2, C.dim);
           lx += fs * 1.15;
         }
         const nameRoom = f.w - FP * 2 - (lx - x0);
@@ -2705,7 +2696,7 @@
       ctx.globalAlpha = fade >= UNRELATED_FADE ? 0.45 : 1;
       const top = [(t[0][0] + t[1][0]) / 2, Math.min(t[0][1], t[1][1])],
         [name, tw] = truncName(i),
-        w = tw + 30,
+        w = tw + 30 + testMarkW(i),
         x = top[0] - w / 2,
         y = top[1] - 30;
       rr(x, y, w, 20, 10);
@@ -2719,6 +2710,7 @@
       ctx.scale(14 / 18, 14 / 18);
       drawIcon(n, 0, 0, 18);
       ctx.restore();
+      if (n.test) drawGlyph(TEST_GLYPH, x + w - 18, y + 4.5, 11, C.green);
       ctx.font = NAME_FONT;
       ctx.fillStyle = C.text;
       ctx.fillText(name, x + 23, y + 14);
@@ -3000,7 +2992,7 @@
         if (fade) {
           ctx.fillStyle = hexA(C.canvas, fade);
           if (dim) {
-            rr(x, y, cardPx < 40 ? CW * 0.8 : Math.min(CW, truncName(i)[1] + 36), NAME_H, NAME_H / 2);
+            rr(x, y, cardPx < 40 ? CW * 0.8 : pillWidth(i), NAME_H, NAME_H / 2);
             ctx.fill();
           }
           ctx.fillRect(x, y + HEAD, CW, h - HEAD - FOOT);
@@ -3137,12 +3129,11 @@
     ctx.fill();
     drawName(i, ox, oy, cardPx);
     if (cardPx > 70) {
-      const [, tw] = truncName(i);
       ctx.font = '600 10px "Geist Mono Variable", monospace';
       ctx.fillStyle = C.dim;
       ctx.fillText(
         `${n.l.toLocaleString()} lines · ${P} pages${n.s > 2 ? ` of ~${lpp.toLocaleString()} lines (sampled)` : ''}`,
-        ox + Math.min(CW, tw + 36) + 10,
+        ox + pillWidth(i) + 10,
         oy + 15,
       );
     }
@@ -3294,7 +3285,7 @@
         ctx.beginPath();
         ctx.arc(lx + 10, ly + 10, 4, 0, 7);
         ctx.fill();
-      } else if (mark) drawFolderIcon(lx + 5, ly + 4.5, 12, C.dim);
+      } else if (mark) drawGlyph(FOLDER_GLYPH, lx + 5, ly + 4.5, 12, C.dim);
       ctx.fillStyle = f.depth <= 1 ? C.text : C.dim;
       ctx.save();
       ctx.beginPath();
