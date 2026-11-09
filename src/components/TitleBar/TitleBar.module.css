@@ -217,7 +217,7 @@
 
 .repoPath {
   margin-left: var(--tk-space-2);
-  font-family: var(--tk-font-mono);
+  font-family: var(--tk-font-sans);
   font-size: var(--tk-text-xs);
   color: var(--tk-fg-subtle);
 

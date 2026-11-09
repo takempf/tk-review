@@ -35,15 +35,15 @@ const NODES: FixtureNode[] = [
   { p: "migrations/0007_add_reviews_table.sql", k: "sql", l: 30, st: "M", hk: [[27, 4, 26, 0]] },
 ];
 
-/** From, to, import kind, barrel passed (-1 for none), and 0 kept, 1 added, 2 removed. */
-const LINKS: [string, string, number, number, number][] = [
-  ["src/main.tsx", "src/App.tsx", 0, -1, 0],
-  ["src/App.tsx", "src/components/FileList/FileList.tsx", 0, -1, 0],
-  ["src/App.tsx", "src/components/DiffViewer/DiffViewer.tsx", 0, -1, 0],
-  ["src/components/DiffViewer/DiffViewer.tsx", "src/ipc/git.ts", 1, -1, 1],
-  ["src/components/DiffViewer/DiffViewer.tsx", "src/lib/fileChange.ts", 0, -1, 0],
-  ["src/components/FileList/FileList.tsx", "src/lib/fileChange.ts", 0, -1, 0],
-  ["src/App.tsx", "src/legacy/OldViewer.tsx", 0, -1, 2],
+/** From, to, kind, barrel, change, import line, export line. */
+const LINKS: [string, string, number, number, number, number, number][] = [
+  ["src/main.tsx", "src/App.tsx", 0, -1, 0, 3, 210],
+  ["src/App.tsx", "src/components/FileList/FileList.tsx", 0, -1, 0, 7, 30],
+  ["src/App.tsx", "src/components/DiffViewer/DiffViewer.tsx", 0, -1, 0, 190, 20],
+  ["src/components/DiffViewer/DiffViewer.tsx", "src/ipc/git.ts", 1, -1, 1, 4, 12],
+  ["src/components/DiffViewer/DiffViewer.tsx", "src/lib/fileChange.ts", 0, -1, 0, 8, 33],
+  ["src/components/FileList/FileList.tsx", "src/lib/fileChange.ts", 0, -1, 0, 6, 33],
+  ["src/App.tsx", "src/legacy/OldViewer.tsx", 0, -1, 2, 15, 4],
 ];
 
 /** A row per line: some indent, then a run of identifier, in the viewer's shape encoding. */
@@ -77,12 +77,14 @@ export async function codemapFixture(): Promise<Codemap> {
       : {};
     return { ...node, ...changed, b: node.l * 32, x: [], o: offset, r: node.l, s: 1 };
   });
-  const links = LINKS.map(([from, to, kind, via, change]) => [
+  const links = LINKS.map(([from, to, kind, via, change, importLine, exportLine]) => [
     index.get(from),
     index.get(to),
     kind,
     via,
     change,
+    importLine,
+    exportLine,
   ]);
   const ref = (label: string, short: string) => ({
     ref: label,

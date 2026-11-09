@@ -51,6 +51,7 @@
   // In diff mode every node may carry st (A added, M modified, R renamed, D deleted), op (old path),
   // hk (hunks: [newStart, newLines, oldStart, oldLines]), ad / dl (lines added / removed).
   // Every link carries a state in e[4]: 0 in both, 1 added, 2 removed.
+  // e[5] / e[6] are the importing / exporting source lines (one-based, zero if unknown).
   const DIFF = !!raw.diff;
   const ST = {
     A: { c: C.added, name: 'Added' },
@@ -124,6 +125,8 @@
     COUNT_H = 14,
     FOOT = 7 + COUNT_H;
   const MPAD = 12,
+    PG_GAP = 14,
+    PG_LABEL = 14,
     GAP = 46,
     ASPECT = 4 / 3;
   const LH = 58,
@@ -165,8 +168,45 @@
     H[i] = HEAD + bodyH(n) + FOOT;
   });
 
+  const PAGE_COLS = new Uint32Array(NN),
+    SPREAD_W = new Float32Array(NN),
+    SPREAD_H = new Float32Array(NN);
+  N.forEach((n, i) => {
+    const pages = pagesOf(n),
+      cols = Math.min(pages, Math.max(2, Math.ceil(Math.sqrt(pages * 2 * ASPECT))));
+    PAGE_COLS[i] = cols;
+    SPREAD_W[i] = Math.max(CW, cols * (MW + PG_GAP) - PG_GAP);
+    SPREAD_H[i] = HEAD + Math.ceil(pages / cols) * (PAGE_H + PG_LABEL + PG_GAP) - PG_GAP;
+  });
+  // Per endpoint: collapsed-page y, unfolded-page x/y. Source positions are resolved once,
+  // not while panning, zooming or drawing every import. Legacy graphs without lines use the top edge.
+  function buildEdgeAnchors(edges) {
+    const offsets = new Float32Array(edges.length * 6);
+    for (let j = 0; j < edges.length; j++) {
+      const e = edges[j];
+      for (let end = 0; end < 2; end++) {
+        const i = e[end], n = N[i],
+          row = e[5 + end] > 0 ? Math.floor((e[5 + end] - 1) / n.s) + 0.5 : 0,
+          rh = rowHOf(n),
+          height = hasPic(n) ? n.box : Math.max(3 * ROWH, Math.min(n.r, rpp(n)) * rh),
+          page = Math.min(pagesOf(n) - 1, Math.floor(row / rpp(n))),
+          at = j * 6 + end * 3;
+        offsets[at] = HEAD + Math.min(height, row * rh);
+        offsets[at + 1] = (page % PAGE_COLS[i]) * (MW + PG_GAP);
+        offsets[at + 2] = HEAD + Math.floor(page / PAGE_COLS[i]) * (PAGE_H + PG_LABEL + PG_GAP)
+          + Math.min(PAGE_H, Math.max(0, row - Math.round(page * rpp(n))) * rh);
+      }
+    }
+    return offsets;
+  }
+  const RE_ANCHORS = buildEdgeAnchors(RE),
+    TE_ANCHORS = TE === RE ? RE_ANCHORS : buildEdgeAnchors(TE);
+  let edgeOffsets = TE_ANCHORS,
+    spreadNode = -1;
+
   let outE, inE;
   function rebuildAdj() {
+    edgeOffsets = E === RE ? RE_ANCHORS : TE_ANCHORS;
     outE = Array.from({ length: NN }, () => []);
     inE = Array.from({ length: NN }, () => []);
     E.forEach((e, j) => {
@@ -1512,8 +1552,6 @@
   const isCodeCard = (n) => !hasPic(n) || codeView(n);
   const multiPage = (n) => !hasPic(n) && pagesOf(n) > 1;
   // selected multi-page files spread their pages out in a 4:3 grid on top of the canvas
-  const PG_GAP = 14,
-    PG_LABEL = 14;
   function spreadRect(i) {
     const n = N[i];
     if (!multiPage(n)) return { x: X[i], y: Y[i], w: CW, h: H[i], cols: 1, P: 1 };
@@ -1763,7 +1801,7 @@
   }
 
   // ---------- text helpers ----------
-  const NAME_FONT = '600 11.5px "Geist Mono Variable", ui-monospace, monospace';
+  const NAME_FONT = '600 11.5px "Geist Variable", system-ui, sans-serif';
   const fmtL = (l) =>
     l >= 1e6
       ? (l / 1e6).toFixed(1) + 'M'
@@ -1879,70 +1917,43 @@
   }
   // An import's curve as its ends, two handles and direction, in one shared buffer: x0 y0 h1 h2 x1 y1 ox oy.
   const CURVE = new Float64Array(10);
-  function edgeCurve(a, b) {
-    const c = CURVE;
-    if (imp) {
-      const down = Y[b] > Y[a];
-      const x0 = X[a] + CW / 2,
-        y0 = down ? Y[a] + H[a] : Y[a],
-        x1 = X[b] + CW / 2,
-        y1 = down ? Y[b] : Y[b] + H[b];
-      const dy = Math.max(80, Math.abs(y1 - y0) * 0.45) * (down ? 1 : -1);
-      c[0] = c[2] = x0;
-      c[1] = y0;
-      c[3] = y0 + dy;
-      c[4] = c[6] = x1;
-      c[5] = y1 - dy;
-      c[7] = y1;
-      c[8] = 0;
-      c[9] = down ? 1 : -1;
-      return c;
-    }
-    const ax = X[a] + CW / 2,
-      ay = Y[a] + H[a] / 2,
-      bx = X[b] + CW / 2,
-      by = Y[b] + H[b] / 2;
-    const dx = bx - ax,
-      dy = by - ay;
-    let x0, y0, x1, y1, ox, oy;
-    if (Math.abs(dx) > CW * 0.75) {
-      const sx = Math.sign(dx);
-      x0 = ax + (sx * CW) / 2;
-      y0 = Y[a] + HEAD / 2;
-      x1 = bx - (sx * CW) / 2;
-      y1 = Y[b] + HEAD / 2;
-      ox = sx;
-      oy = 0;
-    } else if (dy > 0) {
-      x0 = ax;
-      y0 = Y[a] + H[a];
-      x1 = bx;
-      y1 = Y[b];
-      ox = 0;
-      oy = 1;
-    } else {
-      x0 = ax;
-      y0 = Y[a];
-      x1 = bx;
-      y1 = Y[b] + H[b];
-      ox = 0;
-      oy = -1;
-    }
+  // One shared endpoint buffer: x/y/outward side for each end. Nearby columns bow
+  // out on the same side instead of running through the code between two lines.
+  const EDGE_POINTS = new Float64Array(6);
+  function edgePoints(j) {
+    const e = E[j],
+      a = e[0], b = e[1], at = j * 6,
+      sa = a === spreadNode, sb = b === spreadNode,
+      ax = X[a] + (sa ? edgeOffsets[at + 1] : 0),
+      bx = X[b] + (sb ? edgeOffsets[at + 4] : 0),
+      dx = bx - ax, sx = dx < 0 ? -1 : 1,
+      tx = Math.abs(dx) > MW * 0.75 ? -sx : sx;
+    EDGE_POINTS[0] = ax + (sx > 0 ? MW : 0);
+    EDGE_POINTS[1] = Y[a] + edgeOffsets[at + (sa ? 2 : 0)];
+    EDGE_POINTS[2] = sx;
+    EDGE_POINTS[3] = bx + (tx > 0 ? MW : 0);
+    EDGE_POINTS[4] = Y[b] + edgeOffsets[at + (sb ? 5 : 3)];
+    EDGE_POINTS[5] = tx;
+    return EDGE_POINTS;
+  }
+  function edgeCurve(j) {
+    const c = CURVE, p = edgePoints(j),
+      x0 = p[0], y0 = p[1], x1 = p[3], y1 = p[4], ox = p[2];
     const d = Math.min(400, Math.hypot(x1 - x0, y1 - y0) * 0.4 + 20);
     c[0] = x0;
     c[1] = y0;
     c[2] = x0 + ox * d;
-    c[3] = y0 + oy * d;
-    c[4] = x1 - ox * d;
-    c[5] = y1 - oy * d;
+    c[3] = y0;
+    c[4] = x1 + p[5] * d;
+    c[5] = y1;
     c[6] = x1;
     c[7] = y1;
     c[8] = ox;
-    c[9] = oy;
+    c[9] = 0;
     return c;
   }
-  function edgeGeom(a, b) {
-    edgeCurve(a, b);
+  function edgeGeom(j) {
+    edgeCurve(j);
     return curvePath();
   }
   // The arrowhead sits on the importing file, pointing the way the imported code flows.
@@ -1951,14 +1962,14 @@
     return [c[0], c[1], -c[8], -c[9]];
   }
   // The curve last worked out, onto the current path.
-  function curvePath() {
+  function curvePath(head = true) {
     const c = CURVE;
     ctx.moveTo(c[0], c[1]);
     ctx.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
-    return curveHead();
+    if (head) return curveHead();
   }
   // Dashes are laid along a stroke's whole length, on screen or off, so a dashed curve adds only its stretch in view.
-  function dashedCurvePath(dash) {
+  function dashedCurvePath(dash, head = true) {
     const c = CURVE,
       onScreen = curveOnScreen(c),
       t0 = viewBound(onScreen, 0, 1, false);
@@ -1969,7 +1980,7 @@
       ctx.moveTo(p[0], p[1]);
       ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
     }
-    return curveHead();
+    if (head) return curveHead();
   }
   // The ground turns and tilts linearly, so a curve's control points on screen are those of the curve on screen.
   function curveOnScreen(c) {
@@ -2058,17 +2069,19 @@
   // An import's stroke and arrowhead reach this far past its curve, in screen pixels.
   const EDGE_PAD = 12;
   // A curve stays within its control points, so their box, padded for its stroke and arrowhead, says whether it can show; it leaves them in CURVE.
-  function edgeInView(a, b, v) {
-    const s = cam.s,
-      reach = EDGE_REACH + EDGE_PAD / s;
+  function edgeInView(j, v) {
+    const e = E[j], a = e[0], b = e[1], s = cam.s,
+      reach = EDGE_REACH + EDGE_PAD / s,
+      sa = a === spreadNode,
+      sb = b === spreadNode;
     if (
       Math.min(X[a], X[b]) - reach > v[2] ||
-      Math.max(X[a], X[b]) + CW + reach < v[0] ||
+      Math.max(X[a] + (sa ? SPREAD_W[a] : CW), X[b] + (sb ? SPREAD_W[b] : CW)) + reach < v[0] ||
       Math.min(Y[a], Y[b]) - reach > v[3] ||
-      Math.max(Y[a] + H[a], Y[b] + H[b]) + reach < v[1]
+      Math.max(Y[a] + (sa ? SPREAD_H[a] : H[a]), Y[b] + (sb ? SPREAD_H[b] : H[b])) + reach < v[1]
     )
       return false;
-    const c = edgeCurve(a, b);
+    const c = edgeCurve(j);
     if (!in3D) {
       const pad = EDGE_PAD / s;
       return !(
@@ -2424,10 +2437,8 @@
       for (const j of activeE) {
         const e = E[j];
         if (gone(e) || (e[4] && highlightsChange())) continue; // highlighted new and removed links get their own pass below
-        const a = e[0],
-          b = e[1];
-        if (!edgeInView(a, b, v)) continue;
-        curvePath();
+        if (!edgeInView(j, v)) continue;
+        curvePath(false);
         if (++c % 300 === 0) {
           ctx.stroke();
           ctx.beginPath();
@@ -2449,9 +2460,9 @@
         for (const j of activeE) {
           const e = E[j];
           if (e[4] !== state) continue;
-          if (!edgeInView(e[0], e[1], v)) continue;
-          if (dash.length) dashedCurvePath(dash);
-          else curvePath();
+          if (!edgeInView(j, v)) continue;
+          if (dash.length) dashedCurvePath(dash, false);
+          else curvePath(false);
           any = true;
         }
         if (!any) continue;
@@ -2770,7 +2781,6 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const f = sel >= 0 ? sel : hov;
     if (S.edges !== 'none' && f >= 0 && vis[f]) {
-      const topC = (i) => proj(X[i] + MW / 2, Y[i] + HEAD + towerTop(N[i]) / 2, towerZ(N[i]));
       for (const [list, other, color] of [
         [outE[f], 1, C.imports],
         [inE[f], 0, C.importedBy],
@@ -2781,8 +2791,9 @@
           if (!act[j]) continue;
           const e = E[j];
           if (!vis[e[0]] || !vis[e[1]]) continue;
-          const a = topC(e[0]),
-            c = topC(e[1]);
+          const p = edgePoints(j),
+            a = proj(p[0], p[1], towerZ(N[e[0]])),
+            c = proj(p[3], p[4], towerZ(N[e[1]]));
           ctx.moveTo(a[0], a[1]);
           const mx = (a[0] + c[0]) / 2,
             my = Math.min(a[1], c[1]) - Math.hypot(c[0] - a[0], c[1] - a[1]) * 0.18;
@@ -2880,6 +2891,7 @@
       invalidate();
     }
     const s = cam.s;
+    spreadNode = !is3D() && CW * s >= 7 && sel >= 0 && multiPage(N[sel]) ? sel : -1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, VW, VH);
@@ -3010,11 +3022,6 @@
       ctx.globalAlpha = 1;
     }
 
-    // hovered / selected links go on top of the files
-    const focusNode = sel >= 0 ? sel : hov;
-    if (S.edges !== 'none' && focusNode >= 0 && vis[focusNode]) drawFocusEdges(focusNode, s, focusNode === sel, v);
-    if ((imp || highlightsChange()) && S.edges !== 'none') drawChain(s, v);
-
     // the selected file unfolds to its full length, on top of everything, at one row per line
     if (sel >= 0 && vis[sel] && cardPx >= 7) drawSpread(sel, s, cardPx, v);
     else if (sel >= 0 && vis[sel]) {
@@ -3025,6 +3032,11 @@
         ctx.strokeRect(r.x - 4 / s, r.y - 4 / s, r.w + 8 / s, r.h + 8 / s);
       }
     }
+    // hovered / selected links go on top of the files
+    const focusNode = sel >= 0 ? sel : hov;
+    if (S.edges !== 'none' && focusNode >= 0 && vis[focusNode]) drawFocusEdges(focusNode, s, focusNode === sel, v);
+    if ((imp || highlightsChange()) && S.edges !== 'none') drawChain(s, v);
+
     drawPeek();
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3183,12 +3195,12 @@
     const t = hov >= 0 && vis[hov] ? hov : sel >= 0 && vis[sel] ? sel : -1;
     if (t < 0 || (imp && t === imp.root)) return;
     const ch = (imp ? chainOf(t) : diffChainOf(t)).filter(
-      (j) => vis[E[j][0]] && vis[E[j][1]] && edgeInView(E[j][0], E[j][1], v),
+      (j) => vis[E[j][0]] && vis[E[j][1]] && edgeInView(j, v),
     );
     if (!ch.length) return;
     ctx.beginPath();
     const heads = [];
-    for (const j of ch) heads.push(edgeGeom(E[j][0], E[j][1]));
+    for (const j of ch) heads.push(edgeGeom(j));
     ctx.strokeStyle = 'rgba(0,0,0,.6)';
     ctx.lineWidth = 6 / s;
     ctx.stroke();
@@ -3236,7 +3248,7 @@
         const heads = [];
         for (const j of g.list) {
           const e = E[j];
-          if ((g.state === 2 || e[2] === 1) !== dashed || !edgeInView(e[0], e[1], v)) continue;
+          if ((g.state === 2 || e[2] === 1) !== dashed || !edgeInView(j, v)) continue;
           heads.push(dashed ? dashedCurvePath(dash) : curvePath());
         }
         if (!heads.length) continue;

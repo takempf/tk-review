@@ -94,7 +94,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-family: var(--tk-font-mono);
+  font-family: var(--tk-font-sans);
   font-size: var(--tk-text-xs);
   color: var(--text-faint);
   text-overflow: ellipsis;

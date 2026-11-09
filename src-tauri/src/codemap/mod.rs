@@ -241,7 +241,7 @@ enum LinkChange {
     Removed = 2,
 }
 
-/// An import between two nodes, which the viewer reads as `[from, to, kind, via, change]`.
+/// `[from, to, kind, via, change, import_line, export_line]`; lines are one-based, or zero if unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GraphLink {
     from: usize,
@@ -249,16 +249,20 @@ pub struct GraphLink {
     kind: LinkKind,
     via: Option<usize>,
     change: LinkChange,
+    from_line: u32,
+    to_line: u32,
 }
 
 impl Serialize for GraphLink {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut tuple = serializer.serialize_tuple(5)?;
+        let mut tuple = serializer.serialize_tuple(7)?;
         tuple.serialize_element(&self.from)?;
         tuple.serialize_element(&self.to)?;
         tuple.serialize_element(&(self.kind as u8))?;
         tuple.serialize_element(&self.via.map_or(-1, |via| via as i64))?;
         tuple.serialize_element(&(self.change as u8))?;
+        tuple.serialize_element(&self.from_line)?;
+        tuple.serialize_element(&self.to_line)?;
         tuple.end()
     }
 }
@@ -307,6 +311,8 @@ struct PathLink {
     to: String,
     kind: LinkKind,
     via: Option<String>,
+    from_line: u32,
+    to_line: u32,
 }
 
 struct Scan {
@@ -427,6 +433,8 @@ fn scan(files: Vec<SnapshotFile>) -> Scan {
                 to: paths[link.to].clone(),
                 kind: link.kind,
                 via: link.via.map(|via| paths[via].clone()),
+                from_line: link.from_line,
+                to_line: link.to_line,
             })
             .collect()
     };
@@ -446,6 +454,7 @@ fn merge_links(
     base: &[PathLink],
     renamed_from: &HashMap<String, String>,
     index: &HashMap<&str, usize>,
+    hunks: &HashMap<String, Vec<changes::ChangedRange>>,
 ) -> Vec<GraphLink> {
     let rename = |path: &str| -> String {
         renamed_from
@@ -467,6 +476,8 @@ fn merge_links(
                 to: link.to.clone(),
                 kind: link.kind,
                 via: link.via.clone(),
+                from_line: link.from_line,
+                to_line: link.to_line,
             },
             LinkChange::Added,
         ));
@@ -483,6 +494,8 @@ fn merge_links(
                         to: key.1,
                         kind: link.kind,
                         via: link.via.as_deref().map(rename),
+                        from_line: project_line(link.from_line, hunks.get(&rename(&link.from))),
+                        to_line: project_line(link.to_line, hunks.get(&rename(&link.to))),
                     },
                     LinkChange::Removed,
                 ));
@@ -498,9 +511,34 @@ fn merge_links(
                 kind: link.kind,
                 via: link.via.and_then(|via| index.get(via.as_str()).copied()),
                 change,
+                from_line: link.from_line,
+                to_line: link.to_line,
             })
         })
         .collect()
+}
+
+/// Removed links use base coordinates; cards for surviving files show the head's lines.
+fn project_line(line: u32, hunks: Option<&Vec<changes::ChangedRange>>) -> u32 {
+    if line == 0 {
+        return 0;
+    }
+    let mut delta = 0i64;
+    for hunk in hunks.into_iter().flatten() {
+        let [new_start, new_lines, old_start, old_lines] = hunk.range;
+        if line < old_start || (old_lines == 0 && line == old_start) {
+            break;
+        }
+        if line < old_start + old_lines {
+            return if new_lines == 0 {
+                new_start + 1
+            } else {
+                new_start + (line - old_start).min(new_lines - 1)
+            };
+        }
+        delta += new_lines as i64 - old_lines as i64;
+    }
+    (line as i64 + delta).max(1) as u32
 }
 
 fn describe_commit(
@@ -701,12 +739,19 @@ pub fn build_codemap(
         },
         diff: true,
         containers: head.containers.clone(),
-        edges: merge_links(&head.links, &base.links, &renamed_from, &index),
+        edges: merge_links(
+            &head.links,
+            &base.links,
+            &renamed_from,
+            &index,
+            &changes.hunks,
+        ),
         tedges: merge_links(
             &head.through_links,
             &base.through_links,
             &renamed_from,
             &index,
+            &changes.hunks,
         ),
         ext: head.packages.clone(),
         nodes,
@@ -902,6 +947,49 @@ mod tests {
             raw.contains(&"apps/web/src/new.ts -> packages/core/src/index.ts [1]".to_owned()),
             "{raw:#?}"
         );
+        let new_file = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|node| node["p"] == "apps/web/src/new.ts")
+            .unwrap();
+        for field in ["edges", "tedges"] {
+            let link = graph[field]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|link| link[0] == new_file)
+                .unwrap();
+            assert_eq!(link.as_array().unwrap().len(), 7);
+            assert_eq!((link[5].as_u64(), link[6].as_u64()), (Some(1), Some(1)));
+        }
+    }
+
+    #[test]
+    fn positions_removed_links_on_the_surviving_files_lines() {
+        let ranges = vec![
+            changes::ChangedRange {
+                range: [3, 2, 2, 0],
+                removed_lines: vec![],
+            },
+            changes::ChangedRange {
+                range: [6, 0, 5, 2],
+                removed_lines: vec![],
+            },
+            changes::ChangedRange {
+                range: [10, 1, 10, 3],
+                removed_lines: vec![],
+            },
+        ];
+        assert_eq!(project_line(0, Some(&ranges)), 0);
+        assert_eq!(project_line(2, Some(&ranges)), 2);
+        assert_eq!(project_line(3, Some(&ranges)), 5);
+        assert_eq!(project_line(5, Some(&ranges)), 7);
+        assert_eq!(project_line(6, Some(&ranges)), 7);
+        assert_eq!(project_line(7, Some(&ranges)), 7);
+        assert_eq!(project_line(12, Some(&ranges)), 10);
+        assert_eq!(project_line(14, Some(&ranges)), 12);
+        assert_eq!(project_line(14, None), 14);
     }
 
     #[test]

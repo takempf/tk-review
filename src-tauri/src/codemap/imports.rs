@@ -10,7 +10,7 @@ use oxc_ast::ast::{
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use regex::Regex;
 
 use super::posix_path::{dirname, join, normalize};
@@ -53,6 +53,9 @@ pub(super) struct Link {
     pub kind: LinkKind,
     /// The barrel a through link passed, when it passed one.
     pub via: Option<usize>,
+    /// One-based source positions; zero when no particular export is known.
+    pub from_line: u32,
+    pub to_line: u32,
 }
 
 pub(super) struct SourceFile<'a> {
@@ -110,14 +113,45 @@ static RELATIVE_ASSET: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Where an exported name comes from.
 enum ExportSource {
-    Local,
-    Reexported { file: String, name: String },
+    Local(u32),
+    Reexported {
+        file: String,
+        name: String,
+        line: u32,
+    },
 }
 
 #[derive(Default)]
 struct Exports {
     named: HashMap<String, ExportSource>,
-    stars: Vec<String>,
+    stars: Vec<(String, u32)>,
+}
+
+#[derive(Clone)]
+struct Definition {
+    file: String,
+    line: u32,
+}
+
+/// Build once per source, then resolve AST/regex byte offsets without rescanning it per link.
+struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    fn new(text: &str) -> Self {
+        Self(
+            std::iter::once(0)
+                .chain(
+                    text.bytes()
+                        .enumerate()
+                        .filter_map(|(at, byte)| (byte == b'\n').then_some(at + 1)),
+                )
+                .collect(),
+        )
+    }
+
+    fn line(&self, offset: usize) -> u32 {
+        self.0.partition_point(|&start| start <= offset) as u32
+    }
 }
 
 struct Import {
@@ -126,6 +160,7 @@ struct Import {
     /// The names imported and how; `None` for an import of the whole module.
     names: Option<Vec<(String, LinkKind)>>,
     kind: LinkKind,
+    line: u32,
 }
 
 struct ImportedName {
@@ -169,14 +204,14 @@ enum ModuleStatement {
 }
 
 struct ModuleFacts {
-    statements: Vec<ModuleStatement>,
+    statements: Vec<(u32, ModuleStatement)>,
     /// `import()`, `require()` and `.mock()` calls anywhere in the file.
-    calls: Vec<(String, LinkKind)>,
+    calls: Vec<(String, LinkKind, u32)>,
 }
 
 #[derive(Default)]
 struct CallCollector {
-    calls: Vec<(String, LinkKind)>,
+    calls: Vec<(String, LinkKind, u32)>,
 }
 
 fn literal_text(expression: &Expression) -> Option<String> {
@@ -193,7 +228,7 @@ fn literal_text(expression: &Expression) -> Option<String> {
 impl<'a> Visit<'a> for CallCollector {
     fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
         if let Some(spec) = literal_text(&it.source) {
-            self.calls.push((spec, LinkKind::Dynamic));
+            self.calls.push((spec, LinkKind::Dynamic, it.span.start));
         }
         walk::walk_import_expression(self, it);
     }
@@ -207,12 +242,12 @@ impl<'a> Visit<'a> for CallCollector {
         if let Some(spec) = spec {
             match &it.callee {
                 Expression::Identifier(callee) if callee.name == "require" => {
-                    self.calls.push((spec, LinkKind::Dynamic));
+                    self.calls.push((spec, LinkKind::Dynamic, it.span.start));
                 }
                 Expression::StaticMemberExpression(callee)
                     if callee.property.name == "mock" || callee.property.name == "doMock" =>
                 {
-                    self.calls.push((spec, LinkKind::Mock));
+                    self.calls.push((spec, LinkKind::Mock, it.span.start));
                 }
                 _ => {}
             }
@@ -311,7 +346,12 @@ fn module_statement(statement: &Statement) -> Option<ModuleStatement> {
 }
 
 /// Parses a script, retrying with JSX flipped: plenty of `.js` holds JSX.
-fn read_module(allocator: &mut Allocator, kind: FileKind, text: &str) -> ModuleFacts {
+fn read_module(
+    allocator: &mut Allocator,
+    kind: FileKind,
+    text: &str,
+    lines: &LineIndex,
+) -> ModuleFacts {
     let source_type = match kind {
         FileKind::Tsx => SourceType::tsx(),
         FileKind::Js => SourceType::jsx(),
@@ -331,9 +371,18 @@ fn read_module(allocator: &mut Allocator, kind: FileKind, text: &str) -> ModuleF
                 .program
                 .body
                 .iter()
-                .filter_map(module_statement)
+                .filter_map(|statement| {
+                    Some((
+                        lines.line(statement.span().start as usize),
+                        module_statement(statement)?,
+                    ))
+                })
                 .collect(),
-            calls: collector.calls,
+            calls: collector
+                .calls
+                .into_iter()
+                .map(|(spec, kind, offset)| (spec, kind, lines.line(offset as usize)))
+                .collect(),
         };
     }
     ModuleFacts {
@@ -353,7 +402,6 @@ struct Analysis<'a> {
     files: &'a [SourceFile<'a>],
     index: HashMap<&'a str, usize>,
     resolver: &'a Resolver,
-    links: Vec<Link>,
     imports: Vec<Import>,
     exports: HashMap<String, Exports>,
     package_counts: Vec<(String, usize)>,
@@ -451,6 +499,7 @@ impl<'a> Analysis<'a> {
         target: Option<&str>,
         kind: LinkKind,
         names: Option<Vec<(String, LinkKind)>>,
+        line: u32,
     ) {
         let Some(target) = target else {
             return;
@@ -461,17 +510,12 @@ impl<'a> Analysis<'a> {
         if to == from {
             return;
         }
-        self.links.push(Link {
-            from,
-            to,
-            kind,
-            via: None,
-        });
         self.imports.push(Import {
             from,
             file: target.to_owned(),
             names,
             kind,
+            line,
         });
     }
 
@@ -511,14 +555,14 @@ impl<'a> Analysis<'a> {
         None
     }
 
-    fn scan_script(&mut self, from: usize, allocator: &mut Allocator) {
+    fn scan_script(&mut self, from: usize, allocator: &mut Allocator, lines: &LineIndex) {
         let file = &self.files[from];
-        let facts = read_module(allocator, file.kind, file.text);
+        let facts = read_module(allocator, file.kind, file.text, lines);
         let mut exports = Exports::default();
         // Local name -> the file and name it was imported as.
         let mut bindings: HashMap<String, (String, String)> = HashMap::new();
 
-        for statement in facts.statements {
+        for (line, statement) in facts.statements {
             match statement {
                 ModuleStatement::Import {
                     source,
@@ -534,7 +578,7 @@ impl<'a> Analysis<'a> {
                         LinkKind::Import
                     };
                     let Some(names) = names else {
-                        self.link(from, Some(&target), kind, None);
+                        self.link(from, Some(&target), kind, None, line);
                         continue;
                     };
                     let mut imported = Vec::new();
@@ -547,7 +591,7 @@ impl<'a> Analysis<'a> {
                         imported.push((name.imported.clone(), name_kind));
                         bindings.insert(name.local, (target.clone(), name.imported));
                     }
-                    self.link(from, Some(&target), kind, Some(imported));
+                    self.link(from, Some(&target), kind, Some(imported), line);
                 }
                 ModuleStatement::ExportAll {
                     source,
@@ -559,13 +603,13 @@ impl<'a> Analysis<'a> {
                     };
                     match namespace {
                         None => {
-                            exports.stars.push(target.clone());
+                            exports.stars.push((target.clone(), line));
                             let kind = if type_only {
                                 LinkKind::TypeOnly
                             } else {
                                 LinkKind::ReExport
                             };
-                            self.link(from, Some(&target), kind, None);
+                            self.link(from, Some(&target), kind, None, line);
                         }
                         Some(namespace) => {
                             exports.named.insert(
@@ -573,6 +617,7 @@ impl<'a> Analysis<'a> {
                                 ExportSource::Reexported {
                                     file: target.clone(),
                                     name: "*".into(),
+                                    line,
                                 },
                             );
                             let name_kind = if type_only {
@@ -585,6 +630,7 @@ impl<'a> Analysis<'a> {
                                 Some(&target),
                                 LinkKind::ReExport,
                                 Some(vec![("*".into(), name_kind)]),
+                                line,
                             );
                         }
                     }
@@ -604,6 +650,7 @@ impl<'a> Analysis<'a> {
                             ExportSource::Reexported {
                                 file: target.clone(),
                                 name: name.original.clone(),
+                                line,
                             },
                         );
                         let kind = if type_only || name.type_only {
@@ -613,7 +660,13 @@ impl<'a> Analysis<'a> {
                         };
                         reexported.push((name.original, kind));
                     }
-                    self.link(from, Some(&target), LinkKind::ReExport, Some(reexported));
+                    self.link(
+                        from,
+                        Some(&target),
+                        LinkKind::ReExport,
+                        Some(reexported),
+                        line,
+                    );
                 }
                 ModuleStatement::ExportLocal { names } => {
                     for name in names {
@@ -621,15 +674,16 @@ impl<'a> Analysis<'a> {
                             Some((file, imported)) => ExportSource::Reexported {
                                 file: file.clone(),
                                 name: imported.clone(),
+                                line,
                             },
-                            None => ExportSource::Local,
+                            None => ExportSource::Local(line),
                         };
                         exports.named.insert(name.exported, source);
                     }
                 }
                 ModuleStatement::Declare { names } => {
                     for name in names {
-                        exports.named.insert(name, ExportSource::Local);
+                        exports.named.insert(name, ExportSource::Local(line));
                     }
                 }
             }
@@ -637,24 +691,29 @@ impl<'a> Analysis<'a> {
         self.exports
             .insert(self.files[from].path.to_owned(), exports);
 
-        for (spec, kind) in facts.calls {
+        for (spec, kind, line) in facts.calls {
             let target = self.spec(from, &spec);
-            self.link(from, target.as_deref(), kind, None);
+            self.link(from, target.as_deref(), kind, None, line);
         }
     }
 
-    fn scan_css(&mut self, from: usize) {
+    fn scan_css(&mut self, from: usize, lines: &LineIndex) {
         let files = self.files;
         let file = &files[from];
-        let targets: Vec<Option<String>> = CSS_IMPORT
+        let targets: Vec<(Option<String>, u32)> = CSS_IMPORT
             .captures_iter(file.text)
-            .map(|captures| match self.resolve(file.path, &captures[1]) {
-                Resolved::File(target) => Some(target),
-                _ => None,
+            .map(|captures| {
+                (
+                    match self.resolve(file.path, &captures[1]) {
+                        Resolved::File(target) => Some(target),
+                        _ => None,
+                    },
+                    lines.line(captures.get(0).unwrap().start()),
+                )
             })
             .collect();
-        for target in targets {
-            self.link(from, target.as_deref(), LinkKind::Import, None);
+        for (target, line) in targets {
+            self.link(from, target.as_deref(), LinkKind::Import, None, line);
         }
     }
 
@@ -662,23 +721,27 @@ impl<'a> Analysis<'a> {
         let files = self.files;
         let file = &files[from];
         let mut targets = Vec::new();
-        for line in file.text.lines() {
+        for (at, line) in file.text.lines().enumerate() {
+            let source_line = at as u32 + 1;
             if let Some(captures) = PYTHON_FROM.captures(line) {
                 let level = captures[1].len();
                 let module = &captures[2];
                 match self.resolve_python(file.path, module, level) {
-                    Some(target) => targets.push(Ok(target)),
+                    Some(target) => targets.push((Ok(target), source_line)),
                     // `from . import a, b` imports modules, not names.
                     None if level > 0 && module.is_empty() => {
                         for name in captures[3].replace(['(', ')'], "").split(',') {
                             let name = name.trim().split(' ').next().unwrap_or_default();
                             if let Some(target) = self.resolve_python(file.path, name, level) {
-                                targets.push(Ok(target));
+                                targets.push((Ok(target), source_line));
                             }
                         }
                     }
                     None if level == 0 => {
-                        targets.push(Err(module.split('.').next().unwrap_or_default().to_owned()));
+                        targets.push((
+                            Err(module.split('.').next().unwrap_or_default().to_owned()),
+                            source_line,
+                        ));
                     }
                     None => {}
                 }
@@ -687,36 +750,43 @@ impl<'a> Analysis<'a> {
             if let Some(captures) = PYTHON_IMPORT.captures(line) {
                 let module = &captures[1];
                 match self.resolve_python(file.path, module, 0) {
-                    Some(target) => targets.push(Ok(target)),
-                    None => {
-                        targets.push(Err(module.split('.').next().unwrap_or_default().to_owned()))
-                    }
+                    Some(target) => targets.push((Ok(target), source_line)),
+                    None => targets.push((
+                        Err(module.split('.').next().unwrap_or_default().to_owned()),
+                        source_line,
+                    )),
                 }
             }
         }
-        for target in targets {
+        for (target, line) in targets {
             match target {
-                Ok(target) => self.link(from, Some(&target), LinkKind::Import, None),
+                Ok(target) => self.link(from, Some(&target), LinkKind::Import, None, line),
                 Err(package) if !package.is_empty() => self.add_package(from, package),
                 Err(_) => {}
             }
         }
     }
 
-    fn scan_asset_urls(&mut self, from: usize) {
+    fn scan_asset_urls(&mut self, from: usize, lines: &LineIndex) {
         let files = self.files;
         let file = &files[from];
         let mut targets = Vec::new();
         for captures in PUBLIC_ASSET.captures_iter(file.text) {
             for folder in &self.resolver.public_dirs {
-                targets.push(format!("{folder}{}", &captures[1]));
+                targets.push((
+                    format!("{folder}{}", &captures[1]),
+                    lines.line(captures.get(0).unwrap().start()),
+                ));
             }
         }
         for captures in RELATIVE_ASSET.captures_iter(file.text) {
-            targets.push(normalize(&join(&[dirname(file.path), &captures[1]])));
+            targets.push((
+                normalize(&join(&[dirname(file.path), &captures[1]])),
+                lines.line(captures.get(0).unwrap().start()),
+            ));
         }
-        for target in targets {
-            self.link(from, Some(&target), LinkKind::AssetUrl, None);
+        for (target, line) in targets {
+            self.link(from, Some(&target), LinkKind::AssetUrl, None, line);
         }
     }
 
@@ -726,16 +796,20 @@ impl<'a> Analysis<'a> {
         file: &str,
         name: &str,
         depth: usize,
-        memo: &mut HashMap<(String, String), Option<String>>,
-    ) -> Option<String> {
+        memo: &mut HashMap<(String, String), Option<Definition>>,
+    ) -> Option<Definition> {
+        let fallback = || Definition {
+            file: file.to_owned(),
+            line: 0,
+        };
         if name == "*" {
-            return Some(file.to_owned());
+            return Some(fallback());
         }
         let Some(exports) = self.exports.get(file) else {
-            return Some(file.to_owned());
+            return Some(fallback());
         };
         if depth > MAX_REEXPORT_DEPTH {
-            return Some(file.to_owned());
+            return Some(fallback());
         }
         let key = (file.to_owned(), name.to_owned());
         if let Some(known) = memo.get(&key) {
@@ -744,15 +818,23 @@ impl<'a> Analysis<'a> {
         // Marked first, so a cycle of re-exports ends instead of recursing.
         memo.insert(key.clone(), None);
         let found = match exports.named.get(name) {
-            Some(ExportSource::Local) => Some(file.to_owned()),
-            Some(ExportSource::Reexported { file: source, name }) => self
-                .definer(source, name, depth + 1, memo)
-                .or_else(|| Some(source.clone())),
+            Some(ExportSource::Local(line)) => Some(Definition {
+                file: file.to_owned(),
+                line: *line,
+            }),
+            Some(ExportSource::Reexported {
+                file: source, name, ..
+            }) => self.definer(source, name, depth + 1, memo).or_else(|| {
+                Some(Definition {
+                    file: source.clone(),
+                    line: 0,
+                })
+            }),
             None if name != "default" => exports
                 .stars
                 .iter()
-                .filter(|star| self.exports.contains_key(star.as_str()))
-                .find_map(|star| self.definer(star, name, depth + 1, memo)),
+                .filter(|(star, _)| self.exports.contains_key(star.as_str()))
+                .find_map(|(star, _)| self.definer(star, name, depth + 1, memo)),
             None => None,
         };
         memo.insert(key, found.clone());
@@ -770,34 +852,88 @@ impl<'a> Analysis<'a> {
                     to,
                     kind: import.kind,
                     via: None,
+                    from_line: import.line,
+                    to_line: 0,
                 });
                 continue;
             };
             // Each defining file once, by the strongest way any name reached it.
-            let mut targets: Vec<(String, LinkKind)> = Vec::new();
+            let mut targets: Vec<(Definition, LinkKind)> = Vec::new();
             for (name, kind) in names {
                 let definer = self
                     .definer(&import.file, name, 0, &mut memo)
-                    .unwrap_or_else(|| import.file.clone());
-                match targets.iter_mut().find(|(file, _)| *file == definer) {
-                    Some((_, existing)) if (*kind as u8) < (*existing as u8) => *existing = *kind,
+                    .unwrap_or_else(|| Definition {
+                        file: import.file.clone(),
+                        line: self.export_line(&import.file, name, &mut memo),
+                    });
+                match targets
+                    .iter_mut()
+                    .find(|(target, _)| target.file == definer.file)
+                {
+                    Some((target, existing)) if kind.rank() < existing.rank() => {
+                        *target = definer;
+                        *existing = *kind;
+                    }
                     Some(_) => {}
                     None => targets.push((definer, *kind)),
                 }
             }
             for (definer, kind) in targets {
-                if definer == self.files[import.from].path {
+                if definer.file == self.files[import.from].path {
                     continue;
                 }
                 through.push(Link {
                     from: import.from,
-                    to: self.index[definer.as_str()],
+                    to: self.index[definer.file.as_str()],
                     kind,
-                    via: (definer != import.file).then_some(to),
+                    via: (definer.file != import.file).then_some(to),
+                    from_line: import.line,
+                    to_line: definer.line,
                 });
             }
         }
         through
+    }
+
+    fn export_line(
+        &self,
+        file: &str,
+        name: &str,
+        memo: &mut HashMap<(String, String), Option<Definition>>,
+    ) -> u32 {
+        let Some(exports) = self.exports.get(file) else {
+            return 0;
+        };
+        match exports.named.get(name) {
+            Some(ExportSource::Local(line) | ExportSource::Reexported { line, .. }) => *line,
+            None if name != "default" && name != "*" => exports
+                .stars
+                .iter()
+                .find(|(star, _)| self.definer(star, name, 0, memo).is_some())
+                .map_or(0, |(_, line)| *line),
+            None => 0,
+        }
+    }
+
+    fn direct_links(&self) -> Vec<Link> {
+        let mut memo = HashMap::new();
+        self.imports
+            .iter()
+            .map(|import| Link {
+                from: import.from,
+                to: self.index[import.file.as_str()],
+                kind: import.kind,
+                via: None,
+                from_line: import.line,
+                to_line: import
+                    .names
+                    .as_ref()
+                    .and_then(|names| names.first())
+                    .map_or(0, |(name, _)| {
+                        self.export_line(&import.file, name, &mut memo)
+                    }),
+            })
+            .collect()
     }
 }
 
@@ -830,7 +966,6 @@ pub(super) fn analyze(files: &[SourceFile], resolver: &Resolver) -> ImportGraph 
             .map(|(at, file)| (file.path, at))
             .collect(),
         resolver,
-        links: Vec::new(),
         imports: Vec::new(),
         exports: HashMap::new(),
         package_counts: Vec::new(),
@@ -839,11 +974,12 @@ pub(super) fn analyze(files: &[SourceFile], resolver: &Resolver) -> ImportGraph 
     let mut allocator = Allocator::default();
 
     for (at, file) in files.iter().enumerate() {
+        let lines = LineIndex::new(file.text);
         match file.kind {
             FileKind::Ts | FileKind::Tsx | FileKind::Js | FileKind::Dts => {
-                analysis.scan_script(at, &mut allocator);
+                analysis.scan_script(at, &mut allocator, &lines);
             }
-            FileKind::Css => analysis.scan_css(at),
+            FileKind::Css => analysis.scan_css(at, &lines),
             FileKind::Py => analysis.scan_python(at),
             _ => {}
         }
@@ -851,18 +987,134 @@ pub(super) fn analyze(files: &[SourceFile], resolver: &Resolver) -> ImportGraph 
             file.kind,
             FileKind::Ts | FileKind::Tsx | FileKind::Js | FileKind::Css | FileKind::Json
         ) {
-            analysis.scan_asset_urls(at);
+            analysis.scan_asset_urls(at, &lines);
         }
     }
 
     let through_links = dedupe(analysis.through_links());
+    let links = dedupe(analysis.direct_links());
     let mut packages = analysis.package_counts;
     packages.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     packages.truncate(MAX_PACKAGES);
     ImportGraph {
-        links: dedupe(analysis.links),
+        links,
         through_links,
         packages,
         file_packages: analysis.file_packages,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph(files: &[(&str, FileKind, &str)]) -> ImportGraph {
+        let paths = files
+            .iter()
+            .map(|(path, _, _)| path.to_string())
+            .collect::<Vec<_>>();
+        let sources = files
+            .iter()
+            .map(|(path, kind, text)| SourceFile {
+                path,
+                kind: *kind,
+                text,
+            })
+            .collect::<Vec<_>>();
+        let resolver = Resolver::new(&paths, |path| {
+            files.iter().find(|file| file.0 == path).map(|file| file.2)
+        });
+        analyze(&sources, &resolver)
+    }
+
+    #[test]
+    fn follows_named_exports_with_positions_through_barrels() {
+        let graph = graph(&[
+            ("app.ts", FileKind::Ts, "// 😀 CRLF and multiline imports\r\n\r\nimport {\r\n run as go\r\n} from './barrel';\r\n"),
+            ("barrel.ts", FileKind::Ts, "export * from './empty';\n\nexport { internal as run } from './leaf';\n"),
+            ("leaf.ts", FileKind::Ts, "// implementation\n\nexport const internal = () => 1;\n"),
+            ("empty.ts", FileKind::Ts, "export const unrelated = 0;\n"),
+        ]);
+        let direct = graph.links.iter().find(|link| link.from == 0).unwrap();
+        assert_eq!((direct.to, direct.from_line, direct.to_line), (1, 3, 3));
+        let through = graph
+            .through_links
+            .iter()
+            .find(|link| link.from == 0)
+            .unwrap();
+        assert_eq!(
+            (through.to, through.via, through.from_line, through.to_line),
+            (2, Some(1), 3, 3)
+        );
+    }
+
+    #[test]
+    fn selects_the_matching_star_and_keeps_the_strongest_imports_position() {
+        let graph = graph(&[
+            (
+                "app.ts",
+                FileKind::Ts,
+                "import type { Value } from './barrel';\n\n\nimport { value } from './barrel';\n",
+            ),
+            (
+                "barrel.ts",
+                FileKind::Ts,
+                "export * from './empty';\n\nexport * from './leaf';\n",
+            ),
+            (
+                "leaf.ts",
+                FileKind::Ts,
+                "\nexport type Value = number;\n\nexport const value = 1;\n",
+            ),
+            ("empty.ts", FileKind::Ts, "export const unrelated = 0;\n"),
+        ]);
+        let direct = graph.links.iter().find(|link| link.from == 0).unwrap();
+        assert_eq!((direct.from_line, direct.to_line), (4, 3));
+        let through = graph
+            .through_links
+            .iter()
+            .find(|link| link.from == 0)
+            .unwrap();
+        assert_eq!(
+            (through.kind, through.from_line, through.to_line),
+            (LinkKind::Import, 4, 4)
+        );
+    }
+
+    #[test]
+    fn positions_default_local_dynamic_css_and_python_imports() {
+        let graph = graph(&[
+            ("app.ts", FileKind::Ts, "\nimport value from './local';\n"),
+            (
+                "local.ts",
+                FileKind::Ts,
+                "const value = 1;\n\nexport { value as default };\n",
+            ),
+            (
+                "dynamic.ts",
+                FileKind::Ts,
+                "async function load() {\n\n return import('./local');\n}\n",
+            ),
+            (
+                "styles.css",
+                FileKind::Css,
+                "/* theme */\n\n@import './theme.css';\n",
+            ),
+            ("theme.css", FileKind::Css, "body {}"),
+            (
+                "app.py",
+                FileKind::Py,
+                "# imports\n\nfrom . import helper\n",
+            ),
+            ("helper.py", FileKind::Py, "value = 1\n"),
+        ]);
+        let position = |from| {
+            let link = graph.links.iter().find(|link| link.from == from).unwrap();
+            (link.from_line, link.to_line)
+        };
+        assert_eq!(position(0), (2, 3));
+        assert_eq!(position(2), (3, 0));
+        assert_eq!(position(3), (3, 0));
+        assert_eq!(position(5), (3, 0));
     }
 }

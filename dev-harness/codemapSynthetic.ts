@@ -312,6 +312,13 @@ export async function syntheticCodemap(files: number): Promise<Codemap> {
 
   addGeneratedClient(files, nodes, edges, bytes, byProject);
 
+  // Stable positions without changing the random graph: exercise first-page and off-page endpoints.
+  const positionedEdges = edges.map((edge) => [
+    ...edge,
+    1 + ((edge[0] * 17 + edge[1]) % Math.max(1, Math.min(nodes[edge[0]]?.l ?? 1, 400))),
+    1 + ((edge[1] * 31 + edge[0]) % Math.max(1, nodes[edge[1]]?.l ?? 1)),
+  ]);
+
   const svgs: Record<string, string> = {};
   for (const node of nodes) if (node.k === "svg") svgs[node.p] = SVG;
 
@@ -331,8 +338,8 @@ export async function syntheticCodemap(files: number): Promise<Codemap> {
       diff: true,
       containers: ["apps", "packages", "services"],
       nodes,
-      edges,
-      tedges: edges,
+      edges: positionedEdges,
+      tedges: positionedEdges,
       ext: [],
     },
     shapes: await gzipBase64(bytes),
