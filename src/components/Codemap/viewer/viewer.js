@@ -674,7 +674,9 @@
   const SP = Math.max(0.3, Math.min(1, Math.sqrt(NN / 4000)));
   const folderGap = (depth) => (depth === 0 ? 1200 : depth === 1 ? 640 : depth === 2 ? 420 : 300) * SP;
   const folderPad = (depth) => (depth <= 1 ? 200 : 130);
-  const FLH = 100;
+  const FLH = 112,
+    TAB_PAD = 16,
+    TAB_SLOPE = 24;
   // Wider than the gap between cards, so a folder's tests read as their own group.
   const TESTS_GAP = GAP * 2.5;
   // Narrower than the gap between cards, so a test reads as part of the file it tests.
@@ -851,7 +853,8 @@
       d.depth = depth;
       d.fp = fp;
       d.lh = lh;
-      d.w = r.W + fp * 2;
+      d.tabWidth = depth === 0 ? 0 : folderTabWidth(d.label || d.name, d.count, d.lines);
+      d.w = Math.max(r.W + fp * 2, d.tabWidth + TAB_SLOPE + FP);
       d.h = r.H + fp * 2 + lh;
     }
     lay(root, 0);
@@ -862,6 +865,7 @@
         y: oy,
         w: d.w,
         h: d.h,
+        tabWidth: d.tabWidth,
         name: d.depth === 0 ? REPO : d.label || d.name,
         path: d.path,
         depth: d.unit ? 1 : d.depth,
@@ -903,7 +907,12 @@
         if (c.files.length) pseudo(c.name, c.files, 2);
       } else units.push(c);
     }
-    for (const u of units) u.unit = true;
+    for (const u of units) {
+      u.unit = true;
+      // Container prefixes become part of a unit's label, so include them in its tab and packing width.
+      u.tabWidth = folderTabWidth(u.label || u.name, u.count, u.lines);
+      u.w = Math.max(u.w, u.tabWidth + TAB_SLOPE + FP);
+    }
     const U = units.length,
       uOf = new Int32Array(NN).fill(-1);
     units.forEach((u, k) => {
@@ -2440,7 +2449,7 @@
   // Frame labels are sized to the zoom, but set at their largest size and scaled: a new font size every frame misses the browser's text-shaping cache.
   const TIER_TYPE = { font: '700 150px "Geist Variable", system-ui, sans-serif', px: 150 },
     TIER_META_TYPE = { font: '400 63px "Geist Mono Variable", monospace', px: 63 },
-    FOLDER_TYPE = { font: '600 34px "Geist Variable", system-ui, sans-serif', px: 34 },
+    FOLDER_TYPE = { font: '600 52px "Geist Variable", system-ui, sans-serif', px: 52 },
     FOLDER_META_TYPE = { font: '400 16px "Geist Mono Variable", monospace', px: 16 };
   function labelText(type, text, x, y, px, maxWidth) {
     const k = px / type.px;
@@ -2453,6 +2462,35 @@
     ctx.restore();
   }
   const labelWidth = (type, text, px) => (textWidth(type.font, text) * px) / type.px;
+  const folderMeta = (count, lines) => `${fmtN(count)} files · ${fmtL(lines)} lines`;
+  function folderTabWidth(name, count, lines) {
+    return TAB_PAD * 2 + FOLDER_TYPE.px * 1.15 + Math.max(
+      labelWidth(FOLDER_TYPE, name, FOLDER_TYPE.px),
+      labelWidth(FOLDER_META_TYPE, folderMeta(count, lines), FOLDER_META_TYPE.px),
+    );
+  }
+  // The tab lives inside the frame's layout bounds, above its body and away from its files.
+  function folderPath(g, f) {
+    g.beginPath();
+    g.moveTo(f.x, f.y);
+    g.lineTo(f.x + f.tabWidth, f.y);
+    g.lineTo(f.x + f.tabWidth + TAB_SLOPE, f.y + FLH);
+    g.lineTo(f.x + f.w, f.y + FLH);
+    g.lineTo(f.x + f.w, f.y + f.h);
+    g.lineTo(f.x, f.y + f.h);
+    g.closePath();
+  }
+  function drawFolderLabel(f, s) {
+    const fs = Math.min(f.depth <= 1 ? 52 : 42, 24 / s),
+      ms = Math.min(16, 11.5 / s),
+      x = f.x + TAB_PAD,
+      y = f.y + TAB_PAD + fs;
+    drawGlyph(FOLDER_GLYPH, x - fs * 0.15, y - fs * 0.92, fs * 1.2, C.dim);
+    ctx.fillStyle = C.text;
+    labelText(FOLDER_TYPE, f.name, x + fs * 1.15, y, fs);
+    ctx.fillStyle = C.faint;
+    labelText(FOLDER_META_TYPE, folderMeta(f.count, f.lines), x + fs * 1.15, y + 10 + ms, ms);
+  }
   function drawFrames(s, v, fAlpha) {
     // frames
     ctx.globalAlpha = fAlpha;
@@ -2487,9 +2525,16 @@
         : f.band
           ? hexA(C.text, 0.035)
           : hexA(C.text, f.depth === 0 ? 0.015 : 0.03);
-      ctx.fillRect(f.x, f.y, f.w, f.h);
       ctx.strokeStyle = f.color ? hexA(f.color, 0.45) : f.depth <= 1 ? sheet(0.16) : sheet(0.11);
       ctx.lineWidth = (f.color ? 1.5 : 1) / s;
+      if (isFolder(f)) {
+        folderPath(ctx, f);
+        ctx.fill();
+        ctx.stroke();
+        if (22 * s >= 7 && f.w * s > 60) drawFolderLabel(f, s);
+        continue;
+      }
+      ctx.fillRect(f.x, f.y, f.w, f.h);
       ctx.strokeRect(f.x, f.y, f.w, f.h);
       if (22 * s >= 7 && f.w * s > 60) {
         const band = !imp ? FLH : LH,
@@ -2504,9 +2549,6 @@
           ctx.arc(lx + fs * 0.3, ty - fs * 0.32, fs * 0.3, 0, 7);
           ctx.fill();
           lx += fs * 0.85;
-        } else if (isFolder(f)) {
-          drawGlyph(FOLDER_GLYPH, lx - fs * 0.15, ty - fs * 0.92, fs * 1.2, C.dim);
-          lx += fs * 1.15;
         }
         const nameRoom = f.w - FP * 2 - (lx - x0);
         ctx.fillStyle = C.text;
@@ -3378,8 +3420,8 @@
         dot = f.color ? 12 : 0,
         mark = dot || (isFolder(f) ? 14 : 0);
       const tw = f.tier ? ctx.measureText(label).width + 14 : Math.min(ctx.measureText(label).width + 14 + mark, sw - 6),
-        lx = f.tier ? Math.max(4, sx - tw - 16) : Math.max(sx + 4, 4),
-        ly = f.tier ? (is3D() ? proj(f.x, f.y + 440)[1] : sy + 440 * s) - 10 : Math.max(sy + 4, 4);
+        lx = f.tier ? Math.max(4, sx - tw - 16) : isFolder(f) ? sx : Math.max(sx + 4, 4),
+        ly = f.tier ? (is3D() ? proj(f.x, f.y + 440)[1] : sy + 440 * s) - 10 : isFolder(f) ? sy : Math.max(sy + 4, 4);
       const r = [lx, ly, lx + tw, ly + 20];
       if (placed.some((p) => !(r[2] < p[0] || r[0] > p[2] || r[3] < p[1] || r[1] > p[3]))) continue;
       placed.push(r);
@@ -3436,8 +3478,18 @@
     for (const f of frames)
       if (f.depth === 1) {
         g.strokeStyle = f.color ? hexA(f.color, 0.6) : sheet(0.15);
-        g.lineWidth = 1;
-        g.strokeRect(f.x * s + ox, f.y * s + oy, f.w * s, f.h * s);
+        if (isFolder(f)) {
+          g.save();
+          g.translate(ox, oy);
+          g.scale(s, s);
+          g.lineWidth = 1 / s;
+          folderPath(g, f);
+          g.stroke();
+          g.restore();
+        } else {
+          g.lineWidth = 1;
+          g.strokeRect(f.x * s + ox, f.y * s + oy, f.w * s, f.h * s);
+        }
       }
     for (const i of ids) {
       g.fillStyle = blockCol[i];
@@ -3529,8 +3581,11 @@
   function hitFrame(px, py) {
     const [wx, wy] = toWorld(px, py);
     let best = null;
-    for (const f of frames)
-      if (wx >= f.x && wx <= f.x + f.w && wy >= f.y && wy <= f.y + f.h && (!best || f.depth > best.depth)) best = f;
+    for (const f of frames) {
+      if (wx < f.x || wx > f.x + f.w || wy < f.y || wy > f.y + f.h) continue;
+      if (isFolder(f) && wy < f.y + FLH && wx > f.x + f.tabWidth + TAB_SLOPE * (wy - f.y) / FLH) continue;
+      if (!best || f.depth > best.depth) best = f;
+    }
     return best;
   }
   function hitToggle(i, px, py) {
@@ -4831,7 +4886,7 @@
     document.fonts.ready.then(() => {
       truncCache = new Map();
       widthMemo = new Map();
-      invalidate();
+      layout(true);
     });
   // A file chosen in the review's file list is found here; one filtered out of view can't be.
   addEventListener('message', (event) => {
